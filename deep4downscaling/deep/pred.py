@@ -15,6 +15,7 @@ import xarray as xr
 
 import deep4downscaling.trans as trans
 
+
 def _predict(model: torch.nn.Module, device: str,
              batch_size: int=None, **data: np.ndarray,) -> np.ndarray:
 
@@ -85,6 +86,8 @@ def _predict(model: torch.nn.Module, device: str,
 
     if isinstance(y_pred, tuple): # Handle DL models returning multiple tensors
         y_pred = (x.cpu().numpy() for x in y_pred)
+    elif isinstance(y_pred, dict): # Handle DL models returning dictionaries (e.g., DeepESDDualOutput)
+        y_pred = {key: tensor.cpu().numpy() for key, tensor in y_pred.items()}
     else:
         y_pred = y_pred.cpu().numpy()
 
@@ -556,5 +559,120 @@ def compute_preds_ber_gamma(x_data: xr.Dataset, model: torch.nn.Module, threshol
         data_final = data_pred[0]
     else:
         data_final = xr.concat(data_pred, dim='member')
+
+    return data_final
+
+def compute_preds_dual_output(x_data: xr.Dataset, model: torch.nn.Module, threshold: float,
+                              device: str, var_target: str, mask: xr.Dataset,
+                              ensemble_size: int=None,
+                              batch_size: int=None,
+                              classification_threshold: float=0.5,
+                              spatial_dims: tuple[str, str]=('lat', 'lon')) -> xr.Dataset:
+
+    """
+    Given some xr.Dataset with predictor data, this function returns the prediction
+    of the DL model (in the proper format) given x_data as input. This function
+    tailors the prediction of DeepESDDualOutput models that output both classification
+    probabilities and amount predictions.
+
+    Notes
+    -----
+    For this function the mask is key, as it allows to convert the raw output of
+    the model to the proper xr.Dataset representation.
+
+    Parameters
+    ----------
+    x_data : xr.Dataset
+        Predictors to pass as input to the DL model. They must have a spatial
+        (e.g., lat and lon) and temporal dimension.
+
+    model : torch.nn.Module
+        Pytorch model to use (should be DeepESDDualOutput).
+
+    threshold : float
+        The value used as threshold for dry/wet day classification during training.
+        This is used for consistency but doesn't affect the prediction since the
+        model already learned the threshold.
+
+    device : str
+        Device used to run the inference (cuda or cpu).
+
+    var_target : str
+        Target variable.
+
+    mask : xr.Dataset
+        Mask with no temporal dimension formed by ones/zeros for (spatial)
+        positions to introduce data_pred/np.nans values.
+
+    ensemble_size : int, optional
+        If provided, it indicates the number of samples computed by running
+        the model ensemble_size times. These are saved as a new dimension in
+        the xr.Dataset (member).
+
+    batch_size : int, optional
+        If provided the predictions are computed in batches of size
+        batch_size. This is useful when facing OOM errors.
+    
+    classification_threshold : float, optional
+        Threshold for converting classification probabilities to binary predictions.
+        Default is 0.5.
+
+    spatial_dims : tuple[str, str], optional
+        Names of the spatial dimensions, defaults to ('lat', 'lon').
+
+    Returns
+    -------
+    xr.Dataset
+        The final prediction
+    """
+
+    print('*************************************')
+    print(f'classification_threshold: {classification_threshold}')
+    print(f'threshold: {threshold}')
+    print('*************************************')
+
+    if not ensemble_size:
+        ensemble_size = 1
+
+    x_data_arr = trans.xarray_to_numpy(x_data)
+    time_pred = x_data['time'].values
+
+    # Compute predictions
+    data_pred = _predict(model=model, device=device, x_data=x_data_arr,
+                         batch_size=batch_size)
+
+    # Free some memory
+    del x_data_arr; gc.collect()
+
+    # Handle model output
+    classification_pred = data_pred[:, :data_pred.shape[1]//2]
+    amount_pred = data_pred[:, data_pred.shape[1]//2:]
+
+    # Iterate over ensemble members
+    final_predictions = []
+    for _ in range(ensemble_size):
+
+        # Convert classification probabilities to binary predictions
+        is_wet = (classification_pred >= classification_threshold).astype(np.float32)
+        
+        # Combine classification and amount predictions
+        final_pred = (amount_pred + threshold) * is_wet
+
+        # Convert to xarray
+        data_aux = _pred_to_xarray(data_pred=final_pred, time_pred=time_pred,
+                                   var_target=var_target, mask=mask,
+                                   spatial_dims=spatial_dims)
+
+        final_predictions.append(data_aux)
+
+    # Free some memory
+    del classification_pred; del amount_pred; del is_wet
+    gc.collect()
+
+    # Return the Dataset
+    if ensemble_size == 1:
+        data_final = final_predictions[0]
+    else:
+        data_final = xr.concat(final_predictions, dim='member')
 
     return data_final

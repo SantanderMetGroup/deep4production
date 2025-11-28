@@ -904,3 +904,143 @@ class BernoulliFocalLoss(nn.Module):
         loss = -alpha_t * focal_weight * torch.log(pt + 1e-8)
 
         return loss.mean()
+class PriceLoss(nn.Module):
+
+    """
+    L = |y - y'| ⊙ (y + 1)
+    where y' is the predicted output, y is the target, and ⊙ represents
+    elementwise multiplication across space.
+
+    Parameters
+    ----------
+    ignore_nans : bool
+        Whether to allow the loss function to ignore nans in the
+        target domain.
+
+    target : torch.Tensor
+        Target/ground-truth data
+
+    output : torch.Tensor
+        Predicted data (model's output)
+    """
+
+    def __init__(self, ignore_nans: bool) -> None:
+        super(PriceLoss, self).__init__()
+        self.ignore_nans = ignore_nans
+
+    def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+
+        if target.ndim > 2:
+            target = target.reshape(target.shape[0], -1)
+            output = output.reshape(output.shape[0], -1)
+
+        if self.ignore_nans:
+            nans_idx = torch.isnan(target)
+            output = output[~nans_idx]
+            target = target[~nans_idx]
+
+        loss = torch.mean(torch.abs(target - output) * (target + 1))
+        return loss
+
+class DualOutputLoss(nn.Module):
+
+    """
+    Combined loss function for DeepESDDualOutput model.
+    
+    This loss function combines:
+    - Binary Cross Entropy for dry/wet day classification
+    - Loss for precipitation amount prediction
+    
+    The target data is split based on a threshold (similar to BerGamma loss):
+    - Classification target: 1 if precipitation > threshold, 0 otherwise
+    - Amount target: original precipitation values (only used where classification = 1)
+    
+    Parameters
+    ----------
+    ignore_nans : bool
+        Whether to allow the loss function to ignore nans in the
+        target domain.
+        
+    threshold : float
+        Threshold for dry/wet day classification. Values above this threshold
+        are considered wet days.
+        
+    classification_weight : float, optional
+        Weight for the classification loss component. Default is 1.0.
+        
+    amount_weight : float, optional
+        Weight for the amount loss component. Default is 1.0.
+    """
+
+    def __init__(self, ignore_nans: bool, threshold: float = 0.0, 
+                 classification_weight: float = 1.0, amount_weight: float = 1.0) -> None:
+        super(DualOutputLoss, self).__init__()
+        self.ignore_nans = ignore_nans
+        self.threshold = threshold
+        self.classification_weight = classification_weight
+        self.amount_weight = amount_weight
+        
+        # Initialize BCE loss
+        self.bce_loss = nn.BCELoss(reduction='none')
+        
+        # Pre-allocate tensors to avoid memory allocation during forward pass
+        self._zero_tensor = None
+
+    def forward(self, target: torch.Tensor, output: dict) -> torch.Tensor:
+
+        # Extract outputs from the dual-output model
+        classification_pred = output[:, :output.shape[1]//2]
+        amount_pred = output[:, output.shape[1]//2:]
+            
+        # Create classification target (1 if > threshold, 0 otherwise)
+        classification_target = (target > self.threshold).float()
+        
+        # Handle NaNs if needed
+        if self.ignore_nans:
+            nans_idx = torch.isnan(target)
+            classification_pred = classification_pred[~nans_idx]
+            classification_target = classification_target[~nans_idx]
+            amount_pred = amount_pred[~nans_idx]
+            target = target[~nans_idx]
+        
+        # Classification loss (Binary Cross Entropy)
+        bce_losses = self.bce_loss(classification_pred, classification_target)
+        classification_loss = torch.mean(bce_losses)
+
+        # Amount loss (only for wet days)
+        wet_mask = (classification_target == 1)
+        
+        # Check if there are any wet days without creating intermediate tensors
+        num_wet_days = wet_mask.sum()
+        
+        if num_wet_days > 0:  # If there are any wet days
+            ############################################
+            # Price loss formula
+            # diff = torch.abs(target - amount_pred)
+            # weighted_diff = diff * (target + 1)
+            ############################################
+
+            ############################################
+            # Non-parametric asymmetric loss formula
+            # diff = torch.abs(target - amount_pred)
+            # weighted_diff = diff * torch.max(torch.tensor(1.0), target - amount_pred)
+            
+            # Only compute mean for wet days
+            # amount_loss = weighted_diff[wet_mask].mean()
+            ############################################
+
+            ############################################
+            diff = ((target ** 0.3) - (amount_pred)) ** 2
+            amount_loss = diff[wet_mask].mean()
+            ############################################
+        else:
+            # If no wet days, amount loss is 0
+            if self._zero_tensor is None or self._zero_tensor.device != target.device:
+                self._zero_tensor = torch.tensor(0.0, device=target.device, requires_grad=True)
+            amount_loss = self._zero_tensor
+        
+        # Combine losses
+        total_loss = (self.classification_weight * classification_loss + 
+                      self.amount_weight * amount_loss)
+        
+        return total_loss
