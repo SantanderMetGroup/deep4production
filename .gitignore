@@ -12,4 +12,4 @@ __pycache__/
 *$py.class
 .ipynb_checkpoints/
 ._*
-*.egg-info/
+*.egg-info
