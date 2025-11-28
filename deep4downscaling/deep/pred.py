@@ -165,6 +165,9 @@ def _pred_to_xarray(data_pred: np.ndarray, time_pred: np.ndarray,
         else:
             mask[var].values[one_indices] = data_pred_v.flatten()
         
+        print(var)
+        print(mask[var].values.shape)
+        print(one_indices.shape)
         mask[var].values[~one_indices] = np.nan
 
     # Unstack and return

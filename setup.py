@@ -8,7 +8,7 @@ setup(
     entry_points={
         'console_scripts': [
             'd4d-train = deep4downscaling.console.main_train:main',
-            'd4d-predict = deep4downscaling.console.main_predict:main',
+            'd4d-downscale = deep4downscaling.console.main_downscale:main',
             'd4d-datasets-inspect = deep4downscaling.console.main_inspect:main',
             'd4d-datasets-create = deep4downscaling.console.main_create:main'
         ]

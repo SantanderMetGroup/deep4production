@@ -106,6 +106,8 @@ def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: 
         # Iterate over batches
         model.train()
         for x, y in train_data:
+            # print(f"x_shape: {x.shape}")
+            # print(f"y_shape: {y.shape}")
 
             x = x.to(device)
             y = y.to(device)
@@ -121,7 +123,9 @@ def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: 
                 scaler.update()
             else:
                 output = model(x)
+                # print(f"pred_shape: {output.shape}")
                 loss = loss_function(target=y, output=output)
+                # print(f"loss: {loss}")
                 loss.backward()               
                 optimizer.step()
 
@@ -208,3 +212,15 @@ def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: 
         return epoch_train_loss, epoch_valid_loss
     else:
         return epoch_train_loss, None
+
+
+# -------------------------------------------------------------------------
+def update_params(optimizer, lr, scheduler = None):
+        # --- Update optimizer --- 
+        optimizer.step()
+        # --- Update scheduler --- 
+        if scheduler is not None:
+            scheduler.step()
+            lr = scheduler.get_last_lr()[0]
+        # --- Return ---
+        return lr  

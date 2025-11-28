@@ -9,7 +9,6 @@ import xarray as xr
 import numpy as np
 from typing import Union, List, Tuple
 
-
 def from_xr_grid_to_vector(y):
  
      ## Compute mask to identify NaNs in the output field
@@ -464,3 +463,92 @@ def replicate_across_time(data: xr.Dataset, ref: xr.Dataset) -> xr.Dataset:
     data_rep = data_rep.to_dataset(name=var_name)
 
     return data_rep
+
+
+# def from_pred_to_xarray(data_pred, time_pred, var_target, template):
+#     # Convert template to a set of NaNs and 1s, and remove time dimension.
+#     mask = compute_valid_mask(template)
+#     # Expand the mask in the time dimension of the final prediction
+#     mask = mask.expand_dims(time=np.atleast_1d(time_pred))
+#     mask = mask.ffill(dim='time')
+#     # Replace values
+#     var_mask = list(mask.data_vars.keys())[0]
+#     mask = mask.rename({var_mask: var_target})
+#     mask[var_target] = mask[var_target].astype('float32')
+#     mask[var_target].values = data_pred
+#     # Return
+#     return mask
+
+
+
+def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H=None, W=None):
+    """
+    Convert numpy predictions into an xarray.Dataset with OR without a template.
+
+    Parameters
+    ----------
+    data_pred : np.ndarray
+        Shape (B, C, G) or (B, C, H, W).
+    time_pred : str or list-like
+        Time stamps for each sample (length B).
+    vars : list of str
+        Names of output channels (length C).
+    lats, lons : np.ndarray
+        Flattened lat/lon for "point" dimension when template is None.
+    template : xr.Dataset or None
+        When provided, spatial mask & coordinates will be taken from template.
+
+    Returns
+    -------
+    xr.Dataset
+    """
+
+    # Temporal info
+    time = np.atleast_1d(time_pred)
+    # Spatial info
+    if data_pred.ndim == 4:
+        B, C, H, W = data_pred.shape
+    elif data_pred.ndim == 3:
+        B, C, G = data_pred.shape
+    else:
+        raise ValueError(f"data_pred must be (B,C,G) or (B,C,H,W). Got {data_pred.shape}")
+    # ----------------------------------------------------------
+    # CASE 1 — Using template
+    # ----------------------------------------------------------
+    if template is not None:
+        if data_pred.ndim == 3:
+            data_pred = data_pred.reshape(B, C, H, W) # Ensure shape is (B, C, H, W). B, C, G → B, C, H, W
+        ds_list = []
+        # Build spatial mask once
+        mask = compute_valid_mask(template)
+        mask = mask.expand_dims(time=time)
+        mask = mask.ffill("time")
+        var_mask_name = list(mask.data_vars)[0]
+        # Loop over variables
+        for c, var_name in enumerate(vars):
+            ds_var = mask.rename({var_mask_name: var_name}).copy()
+            ds_var[var_name].values = data_pred[:, c, :].astype("float32")
+            ds_list.append(ds_var)
+        # Merge variables in a single object
+        ds = xr.merge(ds_list)
+    # ----------------------------------------------------------
+    # CASE 2 — No template → Construct directly
+    # ----------------------------------------------------------
+    else:
+        if data_pred.ndim == 4:
+            data_pred = data_pred.reshape(B, C, H * W) # Ensure shape is (B, C, G). B, C, H, W → B, C, G
+        ds = xr.Dataset()
+        # Loop over variables
+        for c, var_name in enumerate(vars):
+            ds[var_name] = xr.DataArray(
+                data_pred[:, c, :],
+                dims=("time", "point"),
+                coords={
+                    "time": time,
+                    "point": np.arange(data_pred.shape[-1]),
+                    "lat": ("point", lats),
+                    "lon": ("point", lons),
+                },
+            )
+    ### Return
+    return ds
