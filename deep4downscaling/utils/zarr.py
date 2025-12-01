@@ -27,6 +27,7 @@ def zarr_inspect(
 
     variables = zarr_store.attrs.get('variables', [])
     num_variables = len(variables)
+    units = zarr_store.attrs.get("units", {})
     means = zarr_store.attrs.get('mean', [])
     stds = zarr_store.attrs.get('std', [])
     mins = zarr_store.attrs.get('min', [])
@@ -57,11 +58,11 @@ def zarr_inspect(
     print()
     print()
 
-    print("-" * 170)
+    print("-" * 160)
     print("Variables Summary 📊📉📈")
-    print("-" * 170)
-    print(f"{'Variable':22} | {'Mean':>10} | {'Std':>10} | {'Min':>10} | {'Max':>10} | {'Fixed NaNs (Number of gridpoints)':>10} | {'Dynamic NaNs (Number of samples)':>10}")
-    print("-" * 170)
+    print("-" * 160)
+    print(f"{'Variable':22} | {'Mean':>10} | {'Std':>10} | {'Min':>10} | {'Max':>10} | {'Fixed NaNs (Number of gridpoints)':>33} | {'Dynamic NaNs (Number of samples)':>33} | {'Units':>10}")
+    print("-" * 160)
     
     for var, idx in variables.items():
         m = f"{means[var]:.4f}" 
@@ -70,9 +71,10 @@ def zarr_inspect(
         mx = f"{maxs[var]:.4f}" 
         nf = f"{len(idx_fixed_nan[var]):.0f}" 
         nd = f"{len(idx_dynamic_nan[var]):.0f}" 
-        print(f"{var:22} | {m:>10} | {s:>10} | {mn:>10} | {mx:>10} | {nf:>33} | {nd:>33} ")
+        unts = units.get(var, "N/A")
+        print(f"{var:22} | {m:>10} | {s:>10} | {mn:>10} | {mx:>10} | {nf:>33} | {nd:>33} | {unts:>10} ")
     
-    print("-" * 170)
+    print("-" * 160)
     
 
 

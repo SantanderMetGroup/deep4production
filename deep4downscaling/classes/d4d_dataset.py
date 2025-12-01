@@ -1,6 +1,7 @@
 import os
 import glob
 import numcodecs
+import cftime
 import numpy as np
 import pandas as pd
 import xarray as xr 
@@ -57,7 +58,6 @@ class d4d_dataset(Dataset):
     # --- SPATIAL INFORMATION ------
     with xr.open_dataset(self.source_files[0]) as temp:
         self.spatial_dims, self.is_regular = self.get_spatial_dims(temp)
-        print(temp)
         if self.is_regular:
             # Store dimensions
             self.H = len(temp[self.spatial_dims[0]].values)
@@ -78,16 +78,19 @@ class d4d_dataset(Dataset):
   # ---------------------------------------------------------------
   def get_spatial_dims(self, dataset):
     # Detect grid type and spatial dims
-    spatial_dims = ["lat", "lon"]
     if {"x", "y"}.issubset(dataset.dims):
         spatial_dims = ["y", "x"]
+    elif {"lat", "lon"}.issubset(dataset.dims):
+        spatial_dims = ["lat", "lon"]
+    else: 
+        spatial_dims = ["point"]
     # Check regularity
     grid_type = is_grid_regular(dataset)
-    # Change order of spatial dimensions 
-    var_name = list(dataset.data_vars.keys())[0]
-    # get the coordinates associated with that variable
-    var_coords = list(dataset[var_name].dims)[1:]
-    return var_coords, grid_type
+    # # Change order of spatial dimensions 
+    # var_name = list(dataset.data_vars.keys())[0]
+    # # get the coordinates associated with that variable
+    # var_coords = list(dataset[var_name].dims)[1:]
+    return spatial_dims, grid_type
 
   # ---------------------------------------------------------------
   def get_available_dates_in_sources(self, paths):
@@ -224,6 +227,7 @@ class d4d_dataset(Dataset):
     zarr_store.attrs['num_samples_yaml'] = self.num_samples_yaml
     zarr_store.attrs['temporal_freq'] = self.freq
     zarr_store.attrs['variables'] = {var: idx  for idx, var in enumerate(self.variables)}
+    zarr_store.attrs['units'] = {}
     zarr_store.attrs['name_dims'] = ["time", "variable", "gridpoint"] 
     zarr_store.attrs['shape'] = [len(self.dates), self.num_vars, self.number_gridpoints]
     zarr_store.attrs['lats'] = [lat for lat in self.lat]
@@ -246,23 +250,37 @@ class d4d_dataset(Dataset):
                 # Load data
                 x_ = x[[var]]
 
+                # Units
+                units = x_[var].attrs.get("units", None)
+                if units is not None:
+                    zarr_store.attrs["units"].update({var: units})
+                else:
+                    zarr_store.attrs["units"].update({var: "-"})
+                    print(f"Warning: no units attribute found for variable '{var}'")
+
                 # Temporal intersection
                 avail_dates_in_source = x_.time.values.astype('datetime64[ns]')
                 matching_dates = np.intersect1d(self.dates, avail_dates_in_source)
-                idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
-                x_ = x_.sel(time=matching_dates)
-                
-                # Flatten spatial dimension
-                if self.is_regular:
-                    x_ = x_.stack(point=self.spatial_dims)
+                if len(matching_dates) != 0:
+                    idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
+                    if isinstance(x_.time.values[0], cftime.DatetimeNoLeap): # If using cftime calendar, convert the time to standard gregorian calendar in datetime64 format
+                        x_ = x_.convert_calendar("standard")
+                    x_ = x_.sel(time=matching_dates)
+                    
+                    # Flatten spatial dimension
+                    if self.is_regular:
+                        x_ = x_.stack(point=self.spatial_dims)
 
-                # From xarray to numpy
-                xdata = xarray_to_numpy(x_).astype(np.float32)
-                del x_
+                    # From xarray to numpy
+                    xdata = xarray_to_numpy(x_).astype(np.float32)
+                    x_.close()
+                    del x_
 
-                # Write data block
-                for i, t_idx in enumerate(idx_samples):
-                    zarr_store[t_idx, idx_var, :] = xdata[i]
+                    # Write data block
+                    for i, t_idx in enumerate(idx_samples):
+                        zarr_store[t_idx, idx_var, :] = xdata[i]
+                else:
+                    print(f"⚠️ No dates in source requested. Skipping..")
             else:
                 print(f"⚠️ Skipping variable {var} in {source} not in target variable list.")
         
@@ -296,4 +314,3 @@ class d4d_dataset(Dataset):
 
     # Save to disk
     return f"Saved to disk...: {zarr_path}"
-
