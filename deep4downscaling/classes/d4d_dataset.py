@@ -7,8 +7,9 @@ import pandas as pd
 import xarray as xr 
 import zarr
 import yaml
-
 from torch.utils.data import Dataset
+
+from deep4downscaling.utils.forcings import *
 from deep4downscaling.utils.trans import xarray_to_numpy
 from deep4downscaling.utils.general import is_grid_regular
 from deep4downscaling.utils.imputers import d4dimputers
@@ -74,7 +75,7 @@ class d4d_dataset(Dataset):
 
     # --- IMPUTE NANS (if any) ------
     self.imputer = data.get("imputer", None)
-
+        
   # ---------------------------------------------------------------
   def get_spatial_dims(self, dataset):
     # Detect grid type and spatial dims
@@ -103,7 +104,7 @@ class d4d_dataset(Dataset):
                 times_str = [str(t) for t in times]
                 available_dates.append(times_str)
         except Exception as e:
-            print(f"Warning: Could not read {p}: {e}")
+            print(f"⚠️ Warning: Could not read {p}: {e}")
     return np.array( np.concat(available_dates), dtype='datetime64[ns]')
 
   # ---------------------------------------------------------------
@@ -151,59 +152,73 @@ class d4d_dataset(Dataset):
 
   # ---------------------------------------------------------------
   def count_nans(self, zarr_path):
-    z = zarr.open(zarr_path, mode='r')[:]
+    z = zarr.open(zarr_path, mode='r')
     S, C, G = z.shape
-    z = z.astype(np.float64) # (S, C, G=H*W)
-    nan_mask = np.isnan(z)
-    nan_count = np.sum(nan_mask, axis=0)  # Count NaNs per (variable, grid point). shape: (C, G)
-    nan_fixed_dict = {}
-    nan_dynamic_dict = {}
-    for v, var in enumerate(self.variables):
-        # --- Fixed NaNs: always NaN across all samples ---
-        idx_fixed_nan = np.where(nan_count[v] == S)[0]
-        nan_fixed_dict[var] = None if len(idx_fixed_nan) == 0 else idx_fixed_nan
-        # --- Dynamic NaNs: NaN sometimes, valid sometimes ---
-        dynamic_nan_list = []
-        for s in range(self.num_samples):
-            idxs_dynamic_nan = np.where(nan_mask[s,v,:])[0] # Includes both fixed and dynamic
-            idxs_dynamic_nan = [
-                i for i in idxs_dynamic_nan 
-                if i not in set(nan_fixed_dict.get(var, []))
-            ] # Subset only dynamic NaNs
-            if len(idxs_dynamic_nan) > 0: 
-                for idx_dynamic_nan in idxs_dynamic_nan:
-                    dynamic_nan_list.append([s, idx_dynamic_nan])
-        nan_dynamic_dict[var] = None if len(dynamic_nan_list) == 0 else dynamic_nan_list
-        # --- Print ---
-        # print(f"{var}: fixed NaNs={len(idx_fixed_nan)}, dynamic NaNs={len(idx_dynamic_nan)}")
-    # --- Return ---
-    return nan_fixed_dict, nan_dynamic_dict
+    # Track NaN count per (channel, gridpoint)
+    nan_count = np.zeros((C, G), dtype=np.int64)
+    # Track dynamic nan indices: {var: [[s, g], ...]}
+    dynamic_nan = {c: [] for c in range(C)}
+    # First pass: count NaNs + record dynamic ones
+    for s in range(S):
+        x = z[s]  # (C, G)
+        nan_mask = np.isnan(x)
+        # Count NaNs
+        nan_count += nan_mask.astype(np.int64)
+        # Collect dynamic NaNs
+        for c in range(C):
+            gp_idx = np.where(nan_mask[c])[0]
+            for g in gp_idx:
+                dynamic_nan[c].append([s, int(g)])
+
+    # Fixed NaNs
+    fixed_nan = {c: np.where(nan_count[c] == S)[0] for c in range(C)}
+    # Remove fixed NaNs from dynamic lists
+    for c in range(C):
+        fixed_set = set(fixed_nan[c])
+        dynamic_nan[c] = [pair for pair in dynamic_nan[c] if pair[1] not in fixed_set]
+    # Return
+    return fixed_nan, dynamic_nan
 
   # ---------------------------------------------------------------
   def impute_nans(self, data, zarr_attrs, lats, lons):
     for var in self.variables:
-        # Get idx of variable in zarr object
-        idx_var = data.attrs['variables'][var] 
-        # Get imputer
-        imputer_default = self.imputer.get("default", None)
+        # Get the channel index for this variable
+        idx_var = data.attrs['variables'][var]
+        # Pick imputer
+        imputer_default  = self.imputer.get("default")
         imputer_selected = self.imputer.get(var, imputer_default)
-        imputer_func_str = imputer_selected["name"]
-        if self.idx_dynamic_nan[var] is not None:
-            # Get kwargs
-            kwargs_imputer = {k: v for k, v in imputer_selected.items() if k != "name"}
-            num_dates_nan_dynamic = len(self.idx_dynamic_nan[var])
-            for s in range(num_dates_nan_dynamic):
-                idx_t = self.idx_dynamic_nan[var][s][0]
-                idx_gp = self.idx_dynamic_nan[var][s][1]
-                print(f"🔧 [{var}] Using imputer: {imputer_func_str} to replace date: {idx_t}:{self.dates[idx_t]} at gridpoint: {idx_gp}")
-                imp = d4dimputers(data=data[s,idx_var,:], lat_gp=lats[idx_gp], lon_gp=lons[idx_gp], lats_ref=lats, lons_ref=lons)
-                imputer_func = getattr(imp, imputer_func_str)
-                data[idx_t,idx_var,idx_gp] = imputer_func(**kwargs_imputer)   
+        imputer_name     = imputer_selected["name"]
+        kwargs_imputer   = {k: v for k, v in imputer_selected.items() if k != "name"}
+        # Dynamic NaN list for this variable
+        dyn_list = self.idx_dynamic_nan.get(var, [])
+        if dyn_list and len(dyn_list) > 0:
+            print(f"🔧 [{var}] Starting dynamic NaN imputation using '{imputer_name}'")
+            # Loop directly over the list of [t, gp] pairs
+            for (t, gp) in dyn_list:
+                print(f"   → Imputing at timestep {t} ({self.dates[t]}) gridpoint {gp}")
+                # Build imputer instance for the specific timestep t
+                imp = d4dimputers(
+                    data=data[t, idx_var, :],
+                    lat_gp=lats[gp],
+                    lon_gp=lons[gp],
+                    lats_ref=lats,
+                    lons_ref=lons,
+                )
+                imputer_func = getattr(imp, imputer_name)
+                data[t, idx_var, gp] = imputer_func(**kwargs_imputer)
+            # Store an empty list in zarr attrs (as in your original code)
             zarr_attrs[var] = []
         else:
-            print(f"⚠️  [{var}] Imputer {imputer_func_str} selected, but there are no dynamic NaNs in the dataset. Skipping.")
+            print(f"⚠️  [{var}] No dynamic NaNs found → skipping imputation.")
     # Return
     return data, zarr_attrs
+
+  # ---------------------------------------------------------------        
+  def get_units(self, ds, var):
+      units = ds[var].attrs.get("units", "N/A")
+      if units == "N/A":
+          print(f"⚠️ Warning: no units attribute found for variable '{var}'")
+      return units
 
   # ---------------------------------------------------------------
   def to_disk(self, zarr_path):
@@ -240,9 +255,7 @@ class d4d_dataset(Dataset):
     sources = self.source_files
     for source in sources:
         x = xr.open_dataset(source)      
-        vars_source = x.data_vars
-
-        for var in vars_source:
+        for var in x.data_vars:
             if var in self.variables:
                 print(f"✅ Variable {var} from {source} matches target variables.")
                 idx_var = zarr_store.attrs['variables'][var]
@@ -251,22 +264,37 @@ class d4d_dataset(Dataset):
                 x_ = x[[var]]
 
                 # Units
-                units = x_[var].attrs.get("units", None)
-                if units is not None:
-                    zarr_store.attrs["units"].update({var: units})
-                else:
-                    zarr_store.attrs["units"].update({var: "-"})
-                    print(f"Warning: no units attribute found for variable '{var}'")
+                units = self.get_units(ds=x_, var=var)
+                zarr_store.attrs['units'][var] = units
+                
+                if "time" in x_.dims:
 
-                # Temporal intersection
-                avail_dates_in_source = x_.time.values.astype('datetime64[ns]')
-                matching_dates = np.intersect1d(self.dates, avail_dates_in_source)
-                if len(matching_dates) != 0:
-                    idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
-                    if isinstance(x_.time.values[0], cftime.DatetimeNoLeap): # If using cftime calendar, convert the time to standard gregorian calendar in datetime64 format
-                        x_ = x_.convert_calendar("standard")
-                    x_ = x_.sel(time=matching_dates)
-                    
+                    # Temporal intersection
+                    avail_dates_in_source = x_.time.values.astype('datetime64[ns]')
+                    matching_dates = np.intersect1d(self.dates, avail_dates_in_source)
+
+                    if len(matching_dates) != 0:
+                        idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
+                        if isinstance(x_.time.values[0], cftime.DatetimeNoLeap): # If using cftime calendar, convert the time to standard gregorian calendar in datetime64 format
+                            x_ = x_.convert_calendar("standard")
+                        x_ = x_.sel(time=matching_dates)
+                        
+                        # Flatten spatial dimension
+                        if self.is_regular:
+                            x_ = x_.stack(point=self.spatial_dims)
+
+                        # From xarray to numpy
+                        xdata = xarray_to_numpy(x_).astype(np.float32)
+                        x_.close()
+                        del x_
+
+                        # Write data block
+                        for i, t_idx in enumerate(idx_samples):
+                            zarr_store[t_idx, idx_var, :] = xdata[i]
+                    else:
+                        print(f"⚠️ No dates in source requested. Skipping..")
+
+                else: # e.g., orography
                     # Flatten spatial dimension
                     if self.is_regular:
                         x_ = x_.stack(point=self.spatial_dims)
@@ -275,36 +303,70 @@ class d4d_dataset(Dataset):
                     xdata = xarray_to_numpy(x_).astype(np.float32)
                     x_.close()
                     del x_
+                    # print(f"xdata: {xdata.shape}")
+                    zarr_store[:, idx_var, :] = np.tile(xdata, (self.num_samples, 1))
 
-                    # Write data block
-                    for i, t_idx in enumerate(idx_samples):
-                        zarr_store[t_idx, idx_var, :] = xdata[i]
-                else:
-                    print(f"⚠️ No dates in source requested. Skipping..")
             else:
                 print(f"⚠️ Skipping variable {var} in {source} not in target variable list.")
-        
+        # Close files
         x.close()        
         del x
 
+    # --- Forcings (not from source) ---------------------------------
+    for var in self.variables:
+        idx_var = zarr_store.attrs['variables'][var]
+        log = False
+        if var == "sin_lat":
+            out = compute_sincos_coords(self.lat, type="sin", samples=self.num_samples)
+            # print(f"sin_lats: {out.shape}")
+            log = True
+        if var == "cos_lat":
+            out = compute_sincos_coords(self.lat, type="cos", samples=self.num_samples)
+            # print(f"cos_lats: {out.shape}")
+            log = True
+        if var == "sin_lon":
+            out = compute_sincos_coords(self.lon, type="sin", samples=self.num_samples)
+            # print(f"sin_lons: {out.shape}")
+            log = True
+        if var == "cos_lon":
+            out = compute_sincos_coords(self.lon, type="cos", samples=self.num_samples)
+            # print(f"cos_lons: {out.shape}")
+            log = True
+        if var == "sin_julian_day":
+            out = compute_julian_day(dates=pd.to_datetime(self.dates), type="sin", points=self.number_gridpoints) 
+            # print(f"sinj: {out.shape}")
+            log = True
+        if var == "cos_julian_day":
+            out = compute_julian_day(dates=pd.to_datetime(self.dates), type="cos", points=self.number_gridpoints)
+            # print(f"cosj: {out.shape}")
+            log = True
+        if var == "toa_solar_radiation":
+            out = compute_toa_solar_radiation(dates=pd.to_datetime(self.dates), lats=self.lat)
+            # print(f"toa: {out.shape}") 
+            log = True
+        if log:
+            zarr_store[:, idx_var, :] = out[:,0,:]
+            print(f"✅ Forcing {var} READY.")
 
-    # Count nans 
+    # --- Stats and NaNs ---------------------------------
+    ## Count nans 
+    print(f"🕒 Counting NaNs..")
     idx_fixed_nan, self.idx_dynamic_nan = self.count_nans(zarr_path)
     zarr_store.attrs['idx_fixed_nan'] = {
-        var: [] if v is None else [int(n) for n in v] for var, v in idx_fixed_nan.items()
+        var: idx_fixed_nan[c].tolist() for c, var in enumerate(self.variables)
     }
-    # print(zarr_store.attrs['idx_fixed_nan'])
+    print(zarr_store.attrs['idx_fixed_nan'])
     zarr_store.attrs['idx_dynamic_nan'] = {
-       var: [] if v is None else [[int(s), int(g)] for s, g in v]
-       for var, v in self.idx_dynamic_nan.items()
+        var: self.idx_dynamic_nan[c] for c, var in enumerate(self.variables)
     }
-    # print(zarr_store.attrs['idx_dynamic_nan'])
+    print(zarr_store.attrs['idx_dynamic_nan'])
 
-    # Impute NaNs?
+    ## Impute NaNs?
     if self.imputer is not None:
         zarr_store, zarr_store.attrs['idx_dynamic_nan'] = self.impute_nans(data=zarr_store, zarr_attrs=zarr_store.attrs['idx_dynamic_nan'], lats=zarr_store.attrs['lats'], lons=zarr_store.attrs['lons'])
 
-    # Compute mean/std, min/max
+    ## Compute mean/std, min/max
+    print(f"🕒 Computing stats..")
     m, s = self.compute_mean_std_per_channel(zarr_path)
     zarr_store.attrs['mean'] = m
     zarr_store.attrs['std'] = s
@@ -312,5 +374,6 @@ class d4d_dataset(Dataset):
     zarr_store.attrs['min'] = mn
     zarr_store.attrs['max'] = mx
 
-    # Save to disk
-    return f"Saved to disk...: {zarr_path}"
+
+    # --- Save to disk ---------------------------------
+    return f"⭐ Saved to disk...: {zarr_path}"

@@ -16,7 +16,7 @@ class d4d_pydataset(Dataset):
   def __init__(self, predictors: dict, predictands: dict, temporal_period: list, load_in_memory: bool = True): 
     # --- Parameters (X, Y) --- 
     path_predictors, path_predictands = predictors["paths"], predictands["paths"]
-    variables_predictors, variables_predictands = predictors.get("variables", None), predictands.get("variables", None)
+    variables_predictors, variables_predictands, variables_forcings = predictors.get("variables", None), predictands.get("variables", None), predictands.get("forcings", None)
     normalizer_predictors, normalizer_predictands = predictors.get("normalizer", None), predictands.get("normalizer", None)
     operator_predictors, operator_predictands = predictors.get("operator", None), predictands.get("operator", None)
     self.transform_to_2D_x, self.transform_to_2D_y = predictors.get("transform_to_2D", False), predictands.get("transform_to_2D", False)
@@ -25,6 +25,11 @@ class d4d_pydataset(Dataset):
     # --- Load metadata ---
     self.x, self.vars_x, self.idx_vars_x, self.normalizer_x, self.operator_x, self.H_x, self.W_x, self.G_x = self.get_data_info(path_predictors, variables_predictors, normalizer_predictors, operator_predictors)
     self.y, self.vars_y, self.idx_vars_y, self.normalizer_y, self.operator_y, self.H_y, self.W_y, self.G_y = self.get_data_info(path_predictands, variables_predictands, normalizer_predictands, operator_predictands)
+    if variables_forcings is not None:
+      _0, self.vars_f, self.idx_vars_f, self.normalizer_f, self.operator_f, _1, _2, _3 = self.get_data_info(path_predictands, variables_forcings, normalizer_predictands, operator_predictands)
+    else:
+      self.vars_f = self.idx_vars_f = self.normalizer_f = self.operator_f = None
+
 
     # --- Temporal information (intersect X and Y and get indexing info)--- 
     freq = self.x[0].attrs.get("temporal_freq")
@@ -210,9 +215,15 @@ class d4d_pydataset(Dataset):
         x = torch.stack(x)
     else:
         x = self.preprocess(target_date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map_x, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x)
+    # print(f"x shape: {x.shape}")      
     # ---
     y = self.preprocess(target_date, self.data["y"], self.vars_y, self.idx_vars_y, self.sample_map_y, operator=self.operator_y, normalizer=self.normalizer_y, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y)
+    # print(f"y shape: {y.shape}")
     # --- Forcings (f) ---
-    f = "N/A"  # Placeholder
+    if self.vars_f is not None:
+      f = self.preprocess(target_date, self.data["y"], self.vars_f, self.idx_vars_f, self.sample_map_y, operator=self.operator_f, normalizer=self.normalizer_f, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y)
+      print(f"f shape: {f.shape}")
+    else:
+      f = "N/A"
     # --- Return ---
     return x, y, f

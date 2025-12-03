@@ -381,6 +381,26 @@ def bias(target, prediction, index, spatial=False):
         return bias
     return bias.mean().values
 
+# --- Bias Absolute ------------------------------------------------------------
+def biasAbs(target, prediction, index, spatial=False):
+    index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
+    t = index_fn(target, spatial=True)
+    p = index_fn(prediction, spatial=True)
+    biasAbs = abs(t - p)
+    if spatial:
+        return biasAbs
+    return biasAbs.mean().values
+
+# --- Relative Bias Absolute ------------------------------------------------------------
+def relbiasAbs(target, prediction, index, spatial=False):
+    index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
+    t = index_fn(target, spatial=True)
+    p = index_fn(prediction, spatial=True)
+    relbiasAbs = abs(t - p) / t
+    if spatial:
+        return relbiasAbs
+    return relbiasAbs.mean().values
+
 # --- Relative Bias ------------------------------------------------------------
 def relbias(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
@@ -390,7 +410,6 @@ def relbias(target, prediction, index, spatial=False):
     if spatial:
         return relbias
     return relbias.mean().values
-
 
 # --- wasserstein distance ------------------------------------------------------------
 def wasserstein_dist(
