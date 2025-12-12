@@ -19,8 +19,9 @@ from mlflow.models import infer_signature
 ## Deep4downscaling
 from deep4downscaling.deep.train import update_params
 from deep4downscaling.deep.utils import EMA
-from deep4downscaling.deep.utils import save_model, resume_model
+from deep4downscaling.deep.utils import save_model, resume_model, load_model
 from deep4downscaling.utils.general import get_func_from_string
+from deep4downscaling.utils.mlflow import *
 ##################################################################################################################################
 class d4d_trainer:
     def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None):
@@ -53,21 +54,25 @@ class d4d_trainer:
 
         # --- BUILD GRAPH ---------------------------------------
         self.kwargs_training = self.training_params.get("kwargs", {})
+        self.graph_loc = {}
         if graph is not None:
             edge_index = get_func_from_string(module_string=graph["module"],func_string=graph["name"], kwargs=graph.get("kwargs", None))
             self.kwargs_training.update({"edge_index": edge_index})
-            torch.save(edge_index, f"{self.aux_dir}/edge_index.pt")
-            print(f"📦 GRAPH READY: function {graph["name"]} from {graph["module"]}")
+            self.graph_loc["path"] = "edge_index.pt"
+            torch.save(edge_index, f"{self.aux_dir}/{self.graph_loc["path"]}")
+            print(f"📦 GRAPH READY: function {graph['name']} from {graph['module']}")
+        else:
+            self.graph_loc = None
         
         # --- LOSS FUNCTION ---------------------------------------
         self.loss_function = get_func_from_string(module_string=self.loss_params["module"],func_string=self.loss_params["name"], kwargs=self.loss_params.get("kwargs", None))
-        print(f"📦 LOSS READY: {self.loss_params["name"]} from {self.loss_params["module"]}")
+        print(f"📦 LOSS READY: {self.loss_params['name']} from {self.loss_params['module']}")
 
         # --- MODEL ---------------------------------------
         self.model_save_name = model_info["saving_params"]["model_save_name"]
         self.model = get_func_from_string(module_string=self.model_params["module"], func_string=self.model_params["name"], kwargs=self.model_params.get("kwargs", None))
         self.model_path = f"{self.model_dir}/{self.model_save_name}.pt"
-        print(f"📦 MODEL READY: {self.model_params["name"]} from {self.model_params["module"]}")
+        print(f"📦 MODEL READY: {self.model_params['name']} from {self.model_params['module']}")
 
         # --- CREATE AND SAVE METADATA ---------------------------------------
         self.metadata_dict = self.build_metadata()
@@ -90,9 +95,14 @@ class d4d_trainer:
             self.Mlflow_save_checkpoint_every_n_epochs = Mlflow.get("save_checkpoint_every_n_epochs", None)
             if self.Mlflow_diagnostics is not None:
                 ## Get d4d_downscaler function
-                d4dp_name = "d4d_downscaler"
-                self.d4dp_func = get_func_from_string(module_string="deep4downscaling.classes.d4d_downscaler", func_string=d4dp_name)
+                d4dp_name = Mlflow.get("func_name", "d4d_downscaler")
+                d4dp_module = Mlflow.get("func_module", "deep4downscaling.classes.d4d_downscaler")
+                self.d4dp_func = get_func_from_string(module_string=d4dp_module, func_string=d4dp_name)
                 self.input_data = {"paths": data["predictors"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
+                if data.get("forcings", None) is not None:
+                    self.forcing_data = {"paths": data["predictands"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
+                else:
+                    self.forcing_data = None
 
                 
     # -------------------------------------------------------------------------
@@ -134,13 +144,15 @@ class d4d_trainer:
             self.metadata_dict["operator_x"] = pydataset.get_operator_info(predictands=False)
         if self.data["predictands"].get("operator", None) is not None:
             self.metadata_dict["operator_y"] = pydataset.get_operator_info(predictands=True)
+        ### Forcings
+        self.metadata_dict["vars_f"], self.metadata_dict["idx_vars_f"], self.metadata_dict["normalizer_f"], self.metadata_dict["operator_f"] = pydataset.get_forcings_info()
         ### Return
         return self.metadata_dict
 
     # -------------------------------------------------------------------------
     def get_pydatasets(self):
         ## Create pydatasets
-        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True)}
+        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "forcings": self.data.get("forcings", {}), "load_in_memory": self.data.get("load_in_memory", True)}
         kwargs_pydataset.update(**self.d4dpy)
         train_dataset = self.d4d_pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
         valid_dataset = None
@@ -187,8 +199,14 @@ class d4d_trainer:
         x = x.to(device)
         y = y.to(device)
 
+        if f[0] != "N/A":
+            f = f.to(device)
+        else:
+            B, Cy, *spatial = y.shape
+            f = torch.zeros(B, Cy, *spatial, device=device)
+
         # --- Feed features to the denoiser deep learning model ---
-        prediction = model(x)
+        prediction = model(x, f)
 
         # --- Compute loss ---
         optimizer.zero_grad()
@@ -390,6 +408,7 @@ class d4d_trainer:
                 path_save_final = f"{self.model_path[:-3]}_best.pt"
                 save_model(path=os.path.expanduser(path_save_final), **kwargs_save)
                 log_msg += " | 💾 Model saved (best)"
+                epoch_best = epoch
 
             # --- Save model also every n epochs? ----------------------------------
             if saving_params.get("save_every_n_epochs", None) is not None:
@@ -425,119 +444,61 @@ class d4d_trainer:
             # --- Compute diagnostics (mlflow)? ----------------------------------
             if self.Mlflow is not None:
                 if self.Mlflow_compute_diagnostics_every_n_epochs is not None:
+
                     ## Init d4d_downscaler
                     if epoch == 0:
                         path_save_mlflow = f"{self.model_dir}/modelPlaceholder_mlflow.pt"
                         save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save) # Save a model that contains all the metadata necessary to init properly d4d_downscaler
-                        d4dp = self.d4dp_func(id_dir=self.id_dir, input_data=self.input_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph) # Run init
+                        d4dp = self.d4dp_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph_loc) # Run init
                         # print("🌐 (Mlflow) D4D DOWNSCALER READY ")
+
                     ## Determine if diagnostics are computed in this epoch
                     mlflow_diagnostic_epoch_interval = epoch - epoch_ref_mlflow_diagnostic
                     if mlflow_diagnostic_epoch_interval >= self.Mlflow_compute_diagnostics_every_n_epochs:
+
                         ## Predict and postprocess prediction
                         model.eval()
-                        prd_mlflow = d4dp.downscale(model=model, return_pred=True, display=False)
+                        prd_mlflow = d4dp.downscale(model=model, return_pred=True, verbose=False)
                         # print(f"Pred (mlflow): {prd_mlflow}")
                         # print(f"Target (mlflow): {self.tgt_mlflow}")
-                        diagnostic_module = "deep4downscaling.utils.diagnostics"
+                       
                         ## Log scalars ------------------------------------------------------------------------------
                         Mlflow_scalars = self.Mlflow_diagnostics.get("scalars", None)
                         if Mlflow_scalars is not None:
-                            for var in self.metadata_dict["vars_y"]:
-                                kwargs = {"target": self.tgt_mlflow[var], "prediction": prd_mlflow[var]}
-                                diagnostics_to_run_scalars = []
-                                # Get diagnostics for this variable: "default"
-                                if "default" in Mlflow_scalars:
-                                    diagnostics_to_run_scalars.extend(Mlflow_scalars["default"])
-                                # Get diagnostics for this variable: "variable-specific" (if available)
-                                if var in Mlflow_scalars:
-                                    diagnostics_to_run_scalars.extend(Mlflow_scalars[var])
-                                for diagnostic in diagnostics_to_run_scalars:
-                                    diagnostic_name = diagnostic
-                                    if len(diagnostic) == 2:
-                                        diagnostic_name = f"{diagnostic[0]}_{diagnostic[1]}"
-                                        kwargs.update({"index": diagnostic[0]})
-                                        diagnostic = diagnostic[1]
-                                    value = get_func_from_string(diagnostic_module, diagnostic, kwargs = kwargs)
-                                    mlflow.log_metric(f"{diagnostic_name}_{var}", float(value), step=int(epoch))
-                                print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
-                                    f"  --> The following SCALARS were LOGGED: {diagnostics_to_run_scalars}")
+                            mlflow_scalars_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info=Mlflow_scalars, epoch=epoch)
+
                         ## Log figures ------------------------------------------------------------------------------
                         Mlflow_figures = self.Mlflow_diagnostics.get("figures", None)
                         if Mlflow_figures is not None:
-                            for var in self.metadata_dict["vars_y"]:
-                                # collect all diagnostics for this variable
-                                diagnostics_to_run_figures = {}
-                                # add default diagnostics
-                                if "default" in Mlflow_figures:
-                                    diagnostics_to_run_figures.update(Mlflow_figures["default"])
-                                # add variable-specific diagnostics
-                                if var in Mlflow_figures:
-                                    diagnostics_to_run_figures.update(Mlflow_figures[var])
-                                logged = []  # track logged figures
-                                for diag_name, diag_cfg in diagnostics_to_run_figures.items():
-                                    ## 1. Load diagnostic figure function   
-                                    diag_func = get_func_from_string(diag_cfg["module"], diag_cfg["name"])
-                                    # kwargs passed directly to the diagnostic plotting function
-                                    fig_kwargs = diag_cfg.get("kwargs", {}).copy()
-                                    ## 2. If an index function is defined, compute index first
-                                    if "index" in diag_cfg:
-                                        idx_cfg = diag_cfg["index"]
-                                        index_func = get_func_from_string(idx_cfg["module"], idx_cfg["name"])
-                                        index_kwargs = idx_cfg.get("kwargs", {})
-                                        # compute index 
-                                        index_target = index_func(self.tgt_mlflow[var], **index_kwargs)
-                                        index_prediction = index_func(prd_mlflow[var], **index_kwargs)
-                                        # the diagnostic function expects the index under key "index"
-                                        fig_kwargs["data"] = [index_target, index_prediction]
-                                    else:
-                                        fig_kwargs.update({"data": [self.tgt_mlflow[var], prd_mlflow[var]]})
-                                    ## 3. Compute the figure
-                                    fig = diag_func(**fig_kwargs)
-                                    ## 4. Log the figure in MLflow
-                                    mlflow.log_figure(
-                                        fig,
-                                        f"figures/{var}/{diag_name}_epoch_{epoch:04d}.png"
-                                    )
-                                    logged.append(diag_name)
-                                print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
-                                    f"  --> The following FIGURES were LOGGED: {logged}")
-                                            ## Log scalars
+                            if not Mlflow_figures.get("on_best", False):
+                                mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info=Mlflow_figures, epoch=epoch)
+
                         ## Log scalars (xai) ------------------------------------------------------------------------------
                         Mlflow_scalars_xai = self.Mlflow_diagnostics.get("xai_scalars", None)
                         if Mlflow_scalars_xai is not None:
-                            x_mlflow = torch.cat([v[0] for v in valid_data], dim=0)
-                            for i, var in enumerate(self.metadata_dict["vars_y"]):
-                                kwargs_xai = {"x": x_mlflow.to(self.device), "model": self.model}
-                                diagnostics_to_run_xai = {}
-                                # Get diagnostics for this variable: "default"
-                                if "default" in Mlflow_scalars_xai:
-                                    diagnostics_to_run_xai.update(Mlflow_scalars_xai["default"])
-                                # Get diagnostics for this variable: "variable-specific" (if available)
-                                if var in Mlflow_scalars_xai:
-                                    diagnostics_to_run_xai.update(Mlflow_scalars_xai[var])
-                                for diag_name, diag_xai in diagnostics_to_run_xai.items():
-                                    kwargs_xai.update(**diag_xai.get("kwargs", None))
-                                    value = get_func_from_string(diag_xai["module"], diag_xai["name"], kwargs = kwargs_xai)
-                                    for c, var_x_name in enumerate(self.metadata_dict["vars_x"]):
-                                        mlflow.log_metric(
-                                            f"{diag_name}_{var}_{var_x_name}",     # label is here
-                                            float(value[c]),
-                                            step=int(epoch)
-                                    )
-                                    # mlflow.log_metric(f"{diag_name}_{var}", float(value), step=int(epoch))
-                                print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
-                                    f"  --> The following XAI-SCALARS were LOGGED: {diagnostics_to_run_xai}")
+                            # mlflow_scalars_xai_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info=Mlflow_scalars_xai, epoch=epoch)
+                            print("XAI SCALARS LOGS not implemented ...")
+    
                         ## Update epoch ref
                         epoch_ref_mlflow_diagnostic = epoch
 
             # --- Print the log -----------------------------------------------------
             print(log_msg)
 
-        # --- Save best model to Mlflow ---
+        # --- Save best model to Mlflow and log figures (optional) ---
         if self.Mlflow is not None:
+            ## Save best model ---
             if self.Mlflow.get("save_best", False):
                 mlflow.log_artifact(path_save_final, artifact_path="checkpoints")   
+            ## Log figures ---
+            Mlflow_figures = self.Mlflow_diagnostics.get("figures", None)
+            if Mlflow_figures is not None:
+                if Mlflow_figures.get("on_best", False):
+                    # Predict
+                    d4dp = self.d4dp_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file=f"{self.model_save_name}_best.pt", graph=self.graph_loc) # Run init
+                    prd_mlflow = d4dp.downscale(return_pred=True, verbose=False)
+                    # Log figures
+                    mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info = Mlflow_figures, epoch=epoch_best)
             
         # --- Return losses ---
         print("✅ Training completed successfully!")

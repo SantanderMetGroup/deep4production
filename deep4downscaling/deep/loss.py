@@ -1044,3 +1044,121 @@ class DualOutputLoss(nn.Module):
                       self.amount_weight * amount_loss)
         
         return total_loss
+
+
+# ------------------------------------------------------------------------------------------------------------------------
+class CRPSSpectralLoss(nn.Module):
+    """
+    CRPS + Spectral CRPS loss for statistical downscaling.
+
+    Supports:
+        target: (B, C, G) or (B, C, H, W)
+        output: (B, M, C, G) or (B, M, C, H, W)
+    
+     Loss:
+        L = CRPS_point(output, target) 
+            + lambda_freq * CRPS_point( FFT(output), FFT(target) )
+    """
+
+    def __init__(self, lambda_freq=0.1, lowpass_ratio=0.25, H=None, W=None):
+        super().__init__()
+        self.lambda_freq = lambda_freq
+        self.eps_ratio = 0.05 
+        self.lowpass_ratio = lowpass_ratio
+        self.H = H
+        self.W = W
+
+
+    # ---------------------------------------------------------
+    def _crps_pointwise(self, pred, target):
+        """
+        pred:   (B, M, C, G)
+        target: (B, C, G)
+        """
+        B, M, C, G = pred.shape
+        eps = self.eps_ratio / M  # epsilon = 0.05 / M
+
+        # Expand target across ensemble dimension
+        target_exp = target.unsqueeze(1)  # (B, 1, C, G)
+
+        # ---- Term 1: MAE between ensemble member & truth ----
+        mae = torch.abs(pred - target_exp).mean(dim=1)  # (B, C, G)
+        term1 = mae.mean()
+
+        # ---- Term 2: ensemble spread ----
+        pred_i = pred.unsqueeze(2)  # (B, M, 1, C, G)
+        pred_j = pred.unsqueeze(1)  # (B, 1, M, C, G)
+        pairwise = torch.abs(pred_i - pred_j)  # (B, M, M, C, G)
+
+        # Remove diagonal safely
+        diag = torch.eye(M, device=pred.device).bool().view(1, M, M, 1, 1)
+        pairwise = pairwise.masked_fill(diag, 0.0)  # zero out diagonal
+        spread = pairwise.sum(dim=2) / (M - 1)      # mean over other members
+        term2 = spread.mean() * (1 - eps)
+
+        return term1 - 0.5 * term2
+
+    # ---------------------------------------------------------
+    def _lowpass_fft(self, x):
+        """
+        Apply 2D rFFT over spatial dimensions (H, W) with low-pass filtering.
+
+        x: (B, M, C, G) or (B, M, C, H, W)
+        - If G, assumes self.H and self.W are set and G = H*W
+        Returns: (B, M, C, H_freq, W_freq) filtered FFT
+        """
+
+        # --- Reshape flattened G to (H, W) if needed ---
+        if x.ndim == 4:  # (B, M, C, G)
+            B, M, C, G = x.shape
+            assert G == self.H * self.W, "G must equal H*W"
+            x = x.reshape(B, M, C, self.H, self.W)
+
+        # --- Compute 2D rFFT along spatial dims ---
+        X = torch.fft.rfft2(x, dim=(-2, -1))  # shape: (B, M, C, H, W_freq)
+        H, W_freq = X.shape[-2], X.shape[-1]
+
+        # --- Build low-pass mask ---
+        cut_h = max(int(H * self.lowpass_ratio), 1)
+        cut_w = max(int(W_freq * self.lowpass_ratio), 1)
+        mask = torch.zeros_like(X, dtype=torch.bool)
+        mask[..., :cut_h, :cut_w] = True
+
+        # --- Apply mask ---
+        X_filtered = X * mask
+        return X_filtered
+
+    # ---------------------------------------------------------
+    def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        target: (B, C, G) or (B, C, H, W)
+        output: (B, M, C, G) or (B, M, C, H, W)
+        """
+
+        # --- Handle both spatial (H, W) and flattened (GP) shapes ---
+        if target.ndim > 3: # stack spatial dimensions
+            B, C, H, W = target.shape
+            target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+        if output.ndim > 3: # stack spatial dimensions
+            B, M, C, H, W = output.shape
+            output = output.reshape(B, M, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+        
+        # # --- Remove Nans if present ---
+        # if self.ignore_nans:
+        #     nans_idx = torch.isnan(target)
+        #     output = output[~nans_idx]
+        #     target = target[~nans_idx]
+        
+        # ---------------- Pointwise CRPS ----------------
+        crps_p = self._crps_pointwise(output, target) # (B, C, G) → scalar
+
+        # ---------------- Spectral CRPS -----------------
+        output_fft = self._lowpass_fft(output).reshape(B, M, C, -1)
+        # print(output_fft.shape)
+        target_fft = self._lowpass_fft(target.unsqueeze(1)).reshape(B, C, -1)  # (B, M, C, G)
+        # print(target_fft.shape)
+        crps_f = self._crps_pointwise(output_fft.abs(), target_fft.abs())
+
+        # ---------------- Total Loss --------------------
+        loss = crps_p + self.lambda_freq * crps_f
+        return loss

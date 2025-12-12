@@ -1,0 +1,415 @@
+import zarr
+import torch
+import numpy as np
+import torch
+import torch.nn as nn
+from torch_geometric.nn import GraphConv
+from sklearn.neighbors import NearestNeighbors
+from deep4downscaling.utils.general import latlon_to_xyz
+
+
+# -------------------------------------------------------------------------------------------------------------------
+def build_coords_latent(coords_ref, degree_spacing=1.0):
+    """
+    Build a regular lat-lon grid of latent node coordinates.
+
+    Args:
+        coords_ref: array of shape (N, 2), columns = [lat, lon]
+        degree_spacing: float, grid spacing in degrees
+
+    Returns:
+        coords_latent: array (N_latent, 2) of [lat, lon]
+    """
+
+    lats = coords_ref[:, 0]
+    lons = coords_ref[:, 1]
+
+    # --- Normalize lon range if necessary ---
+    # If data spans > 300° it's probably a 0..360 grid
+    if (lons.max() - lons.min()) > 300:
+        # Convert to 0..360
+        lons = (lons + 360) % 360
+
+    lat_min, lat_max = lats.min(), lats.max()
+    lon_min, lon_max = lons.min(), lons.max()
+
+    # --- Create regularly spaced grid ---
+    lat_grid = np.arange(lat_min + degree_spacing, lat_max, degree_spacing)
+    lon_grid = np.arange(lon_min + degree_spacing, lon_max, degree_spacing)
+
+    # Mesh
+    LON, LAT = np.meshgrid(lon_grid, lat_grid)
+    
+    coords_latent = np.stack([LAT.ravel(), LON.ravel()], axis=1)
+
+    return coords_latent
+
+
+# -------------------------------------------------------------------------------------------------------------------
+def build_low_latent_high_graph(
+    data_high: str,
+    data_low: str,
+    k_low_to_latent: int = 4,
+    k_latent_to_high: int = 4,
+    k_latent_to_latent: int = 8,
+    degree_spacing_latent: float=1,
+):
+    """
+    Build edges for a low -> latent -> high GNN using k-NN.
+    
+    Node types:
+        - low
+        - latent
+        - high
+    
+    Edge types:
+        - low -> latent
+        - latent -> high
+        - high -> high
+        - latent -> latent (optional)
+    
+    Returns:
+        dict of edge_index tensors for each edge type
+    """
+    edges = {}
+
+    # ------------------------------------------------------------
+    # 1. Load coordinates from Zarr metadata
+    # ------------------------------------------------------------
+z_high = zarr.open(data_high, mode="r")
+lat_high = np.array(z_high.attrs["lats"])
+lon_high = np.array(z_high.attrs["lons"])
+N_high = len(lat_high)
+coords_high_latlon = np.stack([lat_high, lon_high], axis=1)
+
+z_low = zarr.open(data_low, mode="r")
+lat_low = np.array(z_low.attrs["lats"])
+lon_low = np.array(z_low.attrs["lons"])
+N_low = len(lat_low)
+coords_low_latlon = np.stack([lat_low, lon_low], axis=1)
+
+coords_latent_latlon = build_coords_latent(coords_ref=coords_low_latlon, degree_spacing=degree_spacing_latent)
+
+    # --- Convert from Euclidean to 3D Cartesian space ---
+    coords_high = latlon_to_xyz(lat=coords_high_latlon[:,0], lon=coords_high_latlon[:,1])
+    coords_low = latlon_to_xyz(lat=coords_low_latlon[:,0], lon=coords_low_latlon[:,1])
+    coords_latent = latlon_to_xyz(lat=coords_latent_latlon[:,0], lon=coords_latent_latlon[:,1])
+
+    # ------------------------------
+    # 2. Low -> Latent edges
+    # ------------------------------
+    nn_low_to_latent = NearestNeighbors(n_neighbors=k_low_to_latent).fit(coords_low)
+    _, idx_low_to_latent = nn_low_to_latent.kneighbors(coords_latent)  # latent nodes query nearest low nodes
+
+    low_to_latent_edges = []
+    for i_latent in range(N_latent):
+        for j_low in idx_low_to_latent[i_latent]:
+            low_to_latent_edges.append((j_low, i_latent))  # directed: low -> latent
+    edges['low_to_latent'] = torch.tensor(low_to_latent_edges, dtype=torch.long).t().contiguous()
+
+    # ------------------------------
+    # 3. Latent -> High edges
+    # ------------------------------
+    nn_latent_to_high = NearestNeighbors(n_neighbors=k_latent_to_high).fit(coords_latent)
+    _, idx_latent_to_high = nn_latent_to_high.kneighbors(coords_high)  # high nodes query nearest latent nodes
+
+    latent_to_high_edges = []
+    for i_high in range(N_high):
+        for j_latent in idx_latent_to_high[i_high]:
+            latent_to_high_edges.append((j_latent, i_high))  # directed: latent -> high
+    edges['latent_to_high'] = torch.tensor(latent_to_high_edges, dtype=torch.long).t().contiguous()
+
+    # ------------------------------
+    # 4. Latent -> Latent edges (optional)
+    # ------------------------------
+    nn_latent = NearestNeighbors(n_neighbors=k_latent_to_latent).fit(coords_latent)
+    _, idx_latent_to_latent = nn_latent.kneighbors(coords_latent)
+
+    latent_edges = []
+    for i in range(N_latent):
+        for j in idx_latent_to_latent[i]:
+            latent_edges.append((i, j))
+    edges['latent_to_latent'] = torch.tensor(latent_edges, dtype=torch.long).t().contiguous()
+
+    # ------------------------------
+    # 5. Positional forcings (latent space)
+    # ------------------------------
+    forcings_latent = np.concatenate(
+        [np.sin(coords_latent_latlon[:,0])[:,None],
+         np.cos(coords_latent_latlon[:,0])[:,None],
+         np.sin(coords_latent_latlon[:,1])[:,None],
+         np.cos(coords_latent_latlon[:,1])[:,None]],
+        axis=1
+    )
+
+    # --- Return edges ---
+    return edges, coords_latent
+
+
+# -------------------------------------------------------------------------------------------------------------------
+class Encoder(nn.Module):
+    """
+    Low -> Latent projection with GraphConv, BatchNorm, and ReLU.
+    """
+    def __init__(self, in_channels, latent_dim):
+        super().__init__()
+        self.conv = GraphConv(in_channels, latent_dim)
+        self.bn = BatchNorm(latent_dim)
+        self.relu = nn.ReLU()
+
+    def forward(self, x, edge_index):
+        x = self.conv(x, edge_index)  # low -> latent aggregation
+        x = self.bn(x)
+        x = self.relu(x)
+        return x
+
+
+class Processor(nn.Module):
+    """
+    Processor for latent nodes: applies multiple GraphConv + BatchNorm + ReLU blocks.
+
+    Parameters
+    ----------
+    base_channels : int
+        Base number of channels for latent features.
+    latent_blocks : list[int]
+        Each entry specifies a multiplier of base_channels for a GraphConv block.
+        Example: [1,2,1] -> layers with channels [base, 2*base, base].
+    """
+    def __init__(self, base_channels: int, latent_blocks=[1,1,1]):
+        super().__init__()
+
+        self.blocks = nn.ModuleList()
+        in_channels = base_channels
+        for multiplier in latent_blocks:
+            out_channels = base_channels * multiplier
+            block = nn.ModuleDict({
+                "conv": GraphConv(in_channels, out_channels),
+                "bn": BatchNorm(out_channels),
+                "relu": nn.ReLU()
+            })
+            self.blocks.append(block)
+            in_channels = out_channels  # output channels become input for next block
+
+    def forward(self, x, edge_index, f_latent=None):
+        """
+        x : [N_latent, in_channels] latent node features
+        edge_index : [2, E] edge connectivity tensor
+        """
+        h = torch.cat([x, f_latent], dim=1)
+        for block in self.blocks:
+            h = block["conv"](h, edge_index)
+            h = block["bn"](h)
+            h = block["relu"](h)
+        return h
+
+class Decoder(nn.Module):
+    """
+    Decoder from latent to high-res nodes.
+
+    Applies:
+      - 1 GraphConv + BatchNorm + ReLU block
+      - Final GraphConv mapping latent_dim -> num_output_vars
+    """
+    def __init__(self, latent_dim: int, num_output_vars: int):
+        super().__init__()
+        self.block = nn.ModuleDict({
+            "conv": GraphConv(latent_dim, latent_dim),
+            "bn": BatchNorm(latent_dim),
+            "relu": nn.ReLU()
+        })
+        # Final projection to output variables
+        self.out_conv = GraphConv(latent_dim, num_output_vars)
+
+    def forward(self, x, edge_index):
+        """
+        x: [N_latent, latent_dim] latent node features
+        edge_index: edges between latent nodes and high nodes
+        """
+        h = self.block["conv"](x, edge_index)
+        h = self.block["bn"](h)
+        h = self.block["relu"](h)
+
+        out = self.out_conv(h, edge_index)  # project to output dim
+        return out
+
+class HighResForcingPostprocessing(nn.Module):
+    """
+    High-res forcing postprocessing block:
+    2 Conv1x1 (Linear) layers with intermediate latent_dim,
+    each followed by BatchNorm and ReLU.
+    """
+    def __init__(self, high_res_forcing_dim, latent_dim, num_output_vars):
+        super().__init__()
+        self.block1 = nn.Sequential(
+            nn.Linear(high_res_forcing_dim, latent_dim),
+            nn.BatchNorm1d(latent_dim),
+            nn.ReLU()
+        )
+        self.block2 = nn.Sequential(
+            nn.Linear(latent_dim, num_output_vars),
+            nn.BatchNorm1d(num_output_vars),
+            nn.ReLU()
+        )
+
+    def forward(self, x):
+        """
+        x: [N_high, high_res_forcing_dim]
+        returns: [N_high, num_output_vars]
+        """
+        h = self.block1(x)
+        out = self.block2(h)
+        return out
+        
+class DeepESG(nn.Module):
+    """
+    Low -> Latent -> High GNN with optional latent->latent and high->high message passing.
+    """
+    def __init__(self,
+                 num_input_vars,
+                 num_output_vars,
+                 high_res_forcing_dim=0,
+                 latent_dim=128,
+                 latent_blocks=[1,1,1],
+                 output_activation=None):
+        super().__init__()
+
+        self.latent_dim = latent_dim
+        self.num_output_vars = num_output_vars
+
+        # --- Encoder: Low -> Latent ---
+        self.encoder = Encoder(in_channels=num_input_vars, latent_dim=latent_dim)
+
+        # --- Latent message passing ---
+        self.processor = Processor(base_channels=latent_dim, latent_blocks=[1,2,1])
+
+        # --- Decoder: Latent -> High ---
+        self.decoder = LatentToHighDecoder(latent_dim=latent_dim, num_output_vars=num_output_vars)
+
+        # --- High-res forcing postprocessing ---
+        if high_res_forcing_dim > 0:
+            self.forcings_mapping = HighResForcingPostprocessing(
+                high_res_forcing_dim=high_res_forcing_dim,
+                latent_dim=latent_dim,
+                num_output_vars=num_output_vars
+            )
+        else:
+            self.forcings_mapping = None
+
+        # --- Optional per-variable activation ---
+        self.output_activation = nn.ModuleDict()
+        self._activation_map = {i: nn.Identity() for i in range(num_output_vars)}
+        if output_activation:
+            for var_name, spec in output_activation.items():
+                idx = spec["idx"]
+                act_class = spec.get("module", nn)
+                act = getattr(act_class, spec["name"], nn.Identity)()
+                self.output_activation[var_name] = act
+                self._activation_map[idx] = act
+
+    def forward(self, 
+                x,
+                edge_index_low_to_latent,
+                edge_index_latent_to_high,
+                f_latent=None,
+                edge_index_latent_to_latent=None):
+        """
+        Forward pass:
+        - x_low: low-res node features [N_low, C_in]
+        - edge_index_low_to_latent: edges low -> latent
+        - x_latent: initial latent features [N_latent, latent_dim] or None
+        - edge_index_latent_to_high: edges latent -> high
+        - edge_index_latent_to_latent: edges latent -> latent (optional)
+        - x_high: initial high-res features (optional)
+        - edge_index_high_to_high: edges high -> high (optional)
+        """
+
+        # --- Encoder: Low -> Latent ---
+        h_latent = self.encoder(x_low, edge_index_low_to_latent)  # [N_latent, latent_dim]
+
+        # --- Processor: Latent -> Latent message passing (optional) ---
+        if edge_index_latent_to_latent is not None:
+            h_latent = self.processor(h_latent, edge_index_latent_to_latent, f_latent)
+
+        # --- Decoder: Latent -> High ---
+        out = self.decoder(h_latent, edge_index_latent_to_high)
+
+        # --- Decoder: add high-res forcings ---
+        if (self.forcings_mapping is not None) and (f is not None):
+            out += self.forcings_mapping(f)
+
+        # --- Apply per-variable activation ---
+        activated = []
+        for idx in range(self.num_output_vars):
+            act = self._activation_map.get(idx, nn.Identity())
+            activated.append(act(out[:, idx:idx+1]))
+        out = torch.cat(activated, dim=1)
+
+        # --- Return ---
+        return out
+
+
+
+
+
+# ----------------------------------------------------------------------------------------------------------------
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+def plot_coords(coords_low, coords_high, coords_latent):
+    fig = plt.figure(figsize=(12, 7))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+
+    # --- Plot the grid points ---
+    ax.scatter(coords_low[:,1], coords_low[:,0],
+               s=10, label="LOW", alpha=0.7, color="green",
+               transform=ccrs.PlateCarree())
+
+    ax.scatter(coords_high[:,1], coords_high[:,0],
+               s=4, label="HIGH", alpha=0.7, color="orange", marker="x",
+               transform=ccrs.PlateCarree())
+
+    ax.scatter(coords_latent[:,1], coords_latent[:,0],
+               s=0.5, label="LATENT", alpha=0.7, color="purple",
+               transform=ccrs.PlateCarree())
+
+    # --- Coastlines ---
+    ax.coastlines(resolution="110m", linewidth=0.8)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3)
+
+    # --- Formatting ---
+    ax.set_title("Grid Coordinates: Low, Latent, High")
+    ax.legend(loc="upper right")
+    ax.gridlines(draw_labels=True, linestyle="--", alpha=0.4)
+
+    # --- Save ---
+    plt.savefig("DeepESG_graph.png", dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+## RUN EXAMPLE
+data_low = "/gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/data/zarrs/files/UPSRCM_1961-1980.zarr"
+data_high  = "/gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/data/zarrs/files/RCM_1961-1980.zarr"
+k_low_to_latent = 4
+k_latent_to_high = 4
+k_latent_to_latent = 8
+degree_spacing_latent = 1
+
+z_high = zarr.open(data_high, mode="r")
+lat_high = np.array(z_high.attrs["lats"])
+lon_high = np.array(z_high.attrs["lons"])
+N_high = len(lat_high)
+coords_high_latlon = np.stack([lat_high, lon_high], axis=1)
+
+z_low = zarr.open(data_low, mode="r")
+lat_low = np.array(z_low.attrs["lats"])
+lon_low = np.array(z_low.attrs["lons"])
+N_low = len(lat_low)
+coords_low_latlon = np.stack([lat_low, lon_low], axis=1)
+
+coords_latent_latlon = build_coords_latent(coords_ref=coords_low_latlon, degree_spacing=degree_spacing_latent)
+
+plot_coords(coords_low_latlon, coords_high_latlon, coords_latent_latlon)
+
+# edges = build_low_latent_high_graph(data_high, data_low, k_low_to_latent, k_latent_to_high, k_latent_to_latent)

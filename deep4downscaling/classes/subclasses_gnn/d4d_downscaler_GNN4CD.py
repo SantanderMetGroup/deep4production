@@ -5,7 +5,7 @@ from torch_geometric.data import HeteroData
 from deep4downscaling.classes.d4d_downscaler import d4d_downscaler
 ##################################################################################################################################
 class d4d_downscaler_custom(d4d_downscaler):
-    def __init__(self, id_dir, input_data, model_file, saving_info, ensemble_size=1, graph=None):
+    def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
         Initializes D4D GNN4CD's downscaler.
         """
@@ -16,7 +16,8 @@ class d4d_downscaler_custom(d4d_downscaler):
             model_file=model_file,
             saving_info=saving_info,
             ensemble_size=ensemble_size,
-            graph=graph
+            graph=graph,
+            forcing_data=forcing_data
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
@@ -30,5 +31,6 @@ class d4d_downscaler_custom(d4d_downscaler):
             data_graph['high'].x = torch.zeros(self.G_y, 1, device=self.device) # shape: (N_high, c_high)
         else: 
             data_graph['high'].x = f[0].to(self.device) # permute to shape: (N_high, c_high)
-        return data_graph
+        pred = model(data_graph).unsqueeze(0).cpu().numpy()
+        return pred
 

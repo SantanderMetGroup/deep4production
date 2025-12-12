@@ -8,27 +8,32 @@ from torch import from_numpy
 from torch.utils.data import Dataset
 import torch
 from deep4downscaling.utils.trans import from_pred_to_xarray
+from deep4downscaling.utils.normalizers import d4dnormalizers
 from deep4downscaling.utils.general import get_func_from_string
 from deep4downscaling.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 ########################################################################################################
 ########################################################################################################
 class d4d_pydataset(Dataset):
-  def __init__(self, predictors: dict, predictands: dict, temporal_period: list, load_in_memory: bool = True): 
+  def __init__(self, predictors: dict, predictands: dict, temporal_period: list, load_in_memory: bool = True, forcings={}): 
     # --- Parameters (X, Y) --- 
     path_predictors, path_predictands = predictors["paths"], predictands["paths"]
-    variables_predictors, variables_predictands, variables_forcings = predictors.get("variables", None), predictands.get("variables", None), predictands.get("forcings", None)
-    normalizer_predictors, normalizer_predictands = predictors.get("normalizer", None), predictands.get("normalizer", None)
-    operator_predictors, operator_predictands = predictors.get("operator", None), predictands.get("operator", None)
+    variables_predictors, variables_predictands, variables_forcings = predictors.get("variables", None), predictands.get("variables", None), forcings.get("variables", None)
+    normalizer_predictors, normalizer_predictands, normalizer_forcings = predictors.get("normalizer", None), predictands.get("normalizer", None), forcings.get("normalizer", None)
+    operator_predictors, operator_predictands, operator_forcings = predictors.get("operator", None), predictands.get("operator", None), forcings.get("operator", None)
     self.transform_to_2D_x, self.transform_to_2D_y = predictors.get("transform_to_2D", False), predictands.get("transform_to_2D", False)
     self.num_lagged_x, self.num_lagged_y = predictors.get("num_lagged", 0), predictands.get("num_lagged", 0)
 
     # --- Load metadata ---
     self.x, self.vars_x, self.idx_vars_x, self.normalizer_x, self.operator_x, self.H_x, self.W_x, self.G_x = self.get_data_info(path_predictors, variables_predictors, normalizer_predictors, operator_predictors)
     self.y, self.vars_y, self.idx_vars_y, self.normalizer_y, self.operator_y, self.H_y, self.W_y, self.G_y = self.get_data_info(path_predictands, variables_predictands, normalizer_predictands, operator_predictands)
-    if variables_forcings is not None:
-      _0, self.vars_f, self.idx_vars_f, self.normalizer_f, self.operator_f, _1, _2, _3 = self.get_data_info(path_predictands, variables_forcings, normalizer_predictands, operator_predictands)
+    self.forcings = forcings
+    if forcings:
+      _, self.vars_f, self.idx_vars_f, self.normalizer_f, self.operator_f, __, ___, _____ = self.get_data_info(path_predictands, variables_forcings, normalizer_forcings, operator_forcings)
     else:
-      self.vars_f = self.idx_vars_f = self.normalizer_f = self.operator_f = None
+      self.vars_f = None
+      self.idx_vars_f = None
+      self.normalizer_f = None
+      self.operator_f = None
 
 
     # --- Temporal information (intersect X and Y and get indexing info)--- 
@@ -70,7 +75,6 @@ class d4d_pydataset(Dataset):
     if normalizer_info is not None:
         normalizer = {}
         normalizer_info_default = normalizer_info.get("default", None)
-        normalizer["module"] = "deep4downscaling.utils.normalizers"
         normalizer["dataset"] = normalizer_info["path_reference"]
         normalizer["kwargs"] = {var: self.get_statistics_from_zarr_file(normalizer["dataset"], var = var) for var in vars}
         normalizer["normalizer_func_per_variable"] = {var: (normalizer_info[var] if var in normalizer_info else normalizer_info_default) for var in vars}
@@ -92,6 +96,10 @@ class d4d_pydataset(Dataset):
     # --- Return ---
     return files, vars, idx_vars, normalizer, operator, H, W, G
 
+
+  # -------------------------------------------------------------------------
+  def get_forcings_info(self):
+    return self.vars_f, self.idx_vars_f, self.normalizer_f, self.operator_f
   # -------------------------------------------------------------------------
   def get_coords(self):
     lats = np.array(self.y[0].attrs.get("lats"), dtype=np.float32)
@@ -167,7 +175,9 @@ class d4d_pydataset(Dataset):
     # Build stats dictionary
     mean_val = np.array(zarr_file.attrs['mean'][var], dtype=np.float32)
     std_val = np.array(zarr_file.attrs['std'][var], dtype=np.float32)
-    kwargs_normalizer = {"mean": mean_val, "std": std_val}
+    min_val = np.array(zarr_file.attrs['min'][var], dtype=np.float32)
+    max_val = np.array(zarr_file.attrs['max'][var], dtype=np.float32)
+    kwargs_normalizer = {"mean": mean_val, "std": std_val, "min": min_val, "max": max_val}
     # Return
     return kwargs_normalizer
 
@@ -187,8 +197,9 @@ class d4d_pydataset(Dataset):
     if normalizer is not None:
         for c, variable in enumerate(vars):
             if normalizer["normalizer_func_per_variable"][variable] is not None:
-                normalizer_func = get_func_from_string(normalizer["module"], normalizer["normalizer_func_per_variable"][variable])
-                x[c,:] = normalizer_func(x[c,:], **normalizer["kwargs"][variable])
+                normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
+                normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
+                x[c,:] = normalizer_method(x[c,:])
     # --- Transform to 2D ---
     if transform_to_2D:
         C, G = x.shape
@@ -220,9 +231,9 @@ class d4d_pydataset(Dataset):
     y = self.preprocess(target_date, self.data["y"], self.vars_y, self.idx_vars_y, self.sample_map_y, operator=self.operator_y, normalizer=self.normalizer_y, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y)
     # print(f"y shape: {y.shape}")
     # --- Forcings (f) ---
-    if self.vars_f is not None:
+    if self.forcings:
       f = self.preprocess(target_date, self.data["y"], self.vars_f, self.idx_vars_f, self.sample_map_y, operator=self.operator_f, normalizer=self.normalizer_f, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y)
-      print(f"f shape: {f.shape}")
+      # print(f"f shape: {f.shape}")
     else:
       f = "N/A"
     # --- Return ---

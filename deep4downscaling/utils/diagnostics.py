@@ -1,5 +1,6 @@
 import numpy as np
 import xarray as xr 
+from numpy.fft import fft2, fftshift, fftfreq
 from scipy.stats import wasserstein_distance as wd
 from deep4downscaling.utils.general import get_func_from_string
 
@@ -52,6 +53,81 @@ def rmse(target, prediction, spatial=False):
     return float(np.sqrt(se.mean().values))
 
 # --- PSD ------------------------------------------------------------
+def _radial_average(array_2d: np.ndarray) -> np.ndarray:
+    """
+    Compute the radial average of a two-dimensional field.
+
+    Parameters
+    ----------
+    array_2d : np.ndarray
+        Two-dimensional array to average.
+
+    Returns
+    -------
+    np.ndarray
+        Radially averaged profile.
+    """
+    y, x = np.indices(array_2d.shape)
+    center = np.array([(x.max() - x.min()) / 2.0, (y.max() - y.min()) / 2.0])
+    r = np.hypot(x - center[0], y - center[1]).astype(np.int32)
+    tbin = np.bincount(r.ravel(), array_2d.ravel())
+    nr = np.bincount(r.ravel())
+    return tbin / np.maximum(nr, 1)
+
+def radially_averaged_power_spectral_density(da, reshape_spatial_dims):
+    """
+    Compute the power spectral density a 2D spatial field.
+
+    Parameters
+    ----------
+    da : xarray.DataArray
+        Input data. Must contain the dimension `dim`.
+
+    Returns
+    -------
+    tuple[xr.Dataset, xr.Dataset]
+        Power spectral densities for x0 and x1.
+    """
+
+    if "member" in da.dims:
+        da = da.mean(dim="member")
+
+    # --- Transform to 2D ---
+    da_vals = da.values
+    if len(da.dims) <= 2:
+        nt, ng = da_vals.shape
+        nx, ny = reshape_spatial_dims
+        if nx * ny != ng:
+            raise ValueError(f"Cannot reshape: point dimension = {ng}, but nx*ny = {nx*ny}")
+        da_vals = da_vals.reshape(nt, ny, nx)
+
+    # --- Transform NaN to 0 values ---
+    da_vals = np.nan_to_num(da_vals, nan=0.0)
+    
+    # --- FFT ---
+    fft_da = fftshift(fft2(da_vals, axes=(-2, -1)), axes=(-2, -1))
+    power = np.abs(fft_da)**2
+
+    # --- Radial average for each time ---
+    psd_list = [_radial_average(power[i]) for i in range(nt)]
+    psd_mean = np.mean(psd_list, axis=0)
+
+    # --- Wavenumbers ---
+    num_bins = len(psd_list[0])
+    wavenumbers = np.arange(num_bins)
+
+    # --- Build coordinates and return DataArray ---
+    psd_da = xr.DataArray(
+        psd_mean,
+        dims=("wavenumber",),
+        coords={"wavenumber": wavenumbers},
+        name="psd"
+    )
+
+    # --- Return ---
+    return psd_da
+
+
 def power_spectral_density(da, dim="time"):
     """
     Compute the 1D Power Spectral Density (PSD) of an xarray DataArray
@@ -396,7 +472,7 @@ def relbiasAbs(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    relbiasAbs = abs(t - p) / t
+    relbiasAbs = abs(t - p) / t * 100
     if spatial:
         return relbiasAbs
     return relbiasAbs.mean().values
@@ -406,153 +482,154 @@ def relbias(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    relbias = (t - p) / t
+    relbias = (t - p) / t * 100
     if spatial:
         return relbias
     return relbias.mean().values
 
-# --- wasserstein distance ------------------------------------------------------------
-def wasserstein_dist(
-    ref,
-    sim,
-    by="point",
-    spatial=False,
-    member_mean=True,
-    skipna=True,
-    verbose=False
-):
-    """
-    Compute Wasserstein (Earth Mover's) distance between two xarray.DataArray objects.
 
-    Parameters
-    ----------
-    ref : xarray.DataArray
-        Reference data. Dimensions: (time, ...) or (member, time, ...)
-    sim : xarray.DataArray
-        Simulated/predicted data, same dims and coords as ref.
-    by : {'point', 'time', 'global'}
-        - 'point'  : compute distance at each spatial point comparing the time series distributions (recommended for spatial diagnostics)
-        - 'time'   : compute distance at each time comparing spatial distributions across points
-        - 'global' : flatten both arrays (time & space) and compute a single distance
-    spatial : bool
-        Only applies when by == 'point' or by == 'time'.
-        - If by=='point' and spatial==True: return an xarray.DataArray with spatial dims (e.g. point or lat/lon)
-        - If by=='point' and spatial==False: return scalar average of per-point distances
-        - If by=='time' and spatial==True: return xarray.DataArray indexed by time
-        - If by=='time' and spatial==False: return scalar average of per-time distances
-    member_mean : bool
-        If True and the arrays have a 'member' dimension, average over it before computing distances.
-    skipna : bool
-        Whether to ignore NaNs when computing distances at each location/time.
-    verbose : bool
-        Print progress for debugging (useful for many points).
+# # --- Wasserstein distance ------------------------------------------------------------
+# def wasserstein_dist(
+#     ref,
+#     sim,
+#     by="point",
+#     spatial=False,
+#     member_mean=True,
+#     skipna=True,
+#     verbose=False
+# ):
+#     """
+#     Compute Wasserstein (Earth Mover's) distance between two xarray.DataArray objects.
 
-    Returns
-    -------
-    xarray.DataArray or float
-        Depending on `by` and `spatial`.
-    """
+#     Parameters
+#     ----------
+#     ref : xarray.DataArray
+#         Reference data. Dimensions: (time, ...) or (member, time, ...)
+#     sim : xarray.DataArray
+#         Simulated/predicted data, same dims and coords as ref.
+#     by : {'point', 'time', 'global'}
+#         - 'point'  : compute distance at each spatial point comparing the time series distributions (recommended for spatial diagnostics)
+#         - 'time'   : compute distance at each time comparing spatial distributions across points
+#         - 'global' : flatten both arrays (time & space) and compute a single distance
+#     spatial : bool
+#         Only applies when by == 'point' or by == 'time'.
+#         - If by=='point' and spatial==True: return an xarray.DataArray with spatial dims (e.g. point or lat/lon)
+#         - If by=='point' and spatial==False: return scalar average of per-point distances
+#         - If by=='time' and spatial==True: return xarray.DataArray indexed by time
+#         - If by=='time' and spatial==False: return scalar average of per-time distances
+#     member_mean : bool
+#         If True and the arrays have a 'member' dimension, average over it before computing distances.
+#     skipna : bool
+#         Whether to ignore NaNs when computing distances at each location/time.
+#     verbose : bool
+#         Print progress for debugging (useful for many points).
 
-    # ---- Basic checks ----
-    if not isinstance(ref, xr.DataArray) or not isinstance(sim, xr.DataArray):
-        raise TypeError("ref and sim must be xarray.DataArray objects")
-    # ---- identify dims ----
-    if "time" not in ref.dims:
-        raise ValueError("Input DataArrays must have a 'time' dimension")
+#     Returns
+#     -------
+#     xarray.DataArray or float
+#         Depending on `by` and `spatial`.
+#     """
 
-    # ---- Handle ensemble member averaging ----
-    if "member" in sim.dims:
-        da = sim.mean(dim="member")
+#     # ---- Basic checks ----
+#     if not isinstance(ref, xr.DataArray) or not isinstance(sim, xr.DataArray):
+#         raise TypeError("ref and sim must be xarray.DataArray objects")
+#     # ---- identify dims ----
+#     if "time" not in ref.dims:
+#         raise ValueError("Input DataArrays must have a 'time' dimension")
 
-    # ---- Get spatial dims ----
-    spatial_dims = [d for d in ref.dims if d != "time"]
+#     # ---- Handle ensemble member averaging ----
+#     if "member" in sim.dims:
+#         da = sim.mean(dim="member")
 
-    # ---- Helper to compute WD safely ----
-    def compute_wd(arr1, arr2):
-        a1 = np.asarray(arr1).ravel()
-        a2 = np.asarray(arr2).ravel()
-        if skipna:
-            a1 = a1[~np.isnan(a1)]
-            a2 = a2[~np.isnan(a2)]
-        if a1.size == 0 or a2.size == 0:
-            return np.nan
-        try:
-            return float(wd(a1, a2))
-        except Exception:
-            # fallback simple numpy approach (should rarely happen)
-            a1 = np.sort(a1)
-            a2 = np.sort(a2)
-            # compute 1D empirical CDF difference integral approximate
-            allx = np.unique(np.concatenate([a1, a2]))
-            cu = np.searchsorted(a1, allx, side='right') / float(a1.size)
-            cv = np.searchsorted(a2, allx, side='right') / float(a2.size)
-            widths = np.diff(allx, prepend=allx[0])
-            return float(np.sum(np.abs(cu - cv) * widths))
+#     # ---- Get spatial dims ----
+#     spatial_dims = [d for d in ref.dims if d != "time"]
 
-    # ----------------- BY = 'global' -----------------
-    if by == "global":
-        arr1 = ref.values.ravel()
-        arr2 = sim.values.ravel()
-        if skipna:
-            arr1 = arr1[~np.isnan(arr1)]
-            arr2 = arr2[~np.isnan(arr2)]
-        if arr1.size == 0 or arr2.size == 0:
-            return np.nan
-        return float(wd(arr1, arr2))
+#     # ---- Helper to compute WD safely ----
+#     def compute_wd(arr1, arr2):
+#         a1 = np.asarray(arr1).ravel()
+#         a2 = np.asarray(arr2).ravel()
+#         if skipna:
+#             a1 = a1[~np.isnan(a1)]
+#             a2 = a2[~np.isnan(a2)]
+#         if a1.size == 0 or a2.size == 0:
+#             return np.nan
+#         try:
+#             return float(wd(a1, a2))
+#         except Exception:
+#             # fallback simple numpy approach (should rarely happen)
+#             a1 = np.sort(a1)
+#             a2 = np.sort(a2)
+#             # compute 1D empirical CDF difference integral approximate
+#             allx = np.unique(np.concatenate([a1, a2]))
+#             cu = np.searchsorted(a1, allx, side='right') / float(a1.size)
+#             cv = np.searchsorted(a2, allx, side='right') / float(a2.size)
+#             widths = np.diff(allx, prepend=allx[0])
+#             return float(np.sum(np.abs(cu - cv) * widths))
 
-    # ----------------- BY = 'point' -----------------
-    if by == "point":
-        # stack spatial dims to iterate over points
-        stacked_ref = ref.stack(aux=spatial_dims)
-        stacked_sim = sim.stack(aux=spatial_dims)
+#     # ----------------- BY = 'global' -----------------
+#     if by == "global":
+#         arr1 = ref.values.ravel()
+#         arr2 = sim.values.ravel()
+#         if skipna:
+#             arr1 = arr1[~np.isnan(arr1)]
+#             arr2 = arr2[~np.isnan(arr2)]
+#         if arr1.size == 0 or arr2.size == 0:
+#             return np.nan
+#         return float(wd(arr1, arr2))
 
-        pts = stacked_ref["aux"].values
-        npts = stacked_ref.sizes["aux"]
+#     # ----------------- BY = 'point' -----------------
+#     if by == "point":
+#         # stack spatial dims to iterate over points
+#         stacked_ref = ref.stack(aux=spatial_dims)
+#         stacked_sim = sim.stack(aux=spatial_dims)
 
-        wd_vals = np.full((npts,), np.nan, dtype=float)
+#         pts = stacked_ref["aux"].values
+#         npts = stacked_ref.sizes["aux"]
 
-        for j in range(npts):
-            if verbose and (j % 500 == 0):
-                print(f"computing WD for point {j+1}/{npts}")
-            series_ref = stacked_ref.isel(aux=j).values  # shape (time,)
-            series_sim = stacked_sim.isel(aux=j).values
-            wd_vals[j] = compute_wd(series_ref, series_sim)
+#         wd_vals = np.full((npts,), np.nan, dtype=float)
 
-        # unstack back to original spatial dims
-        wd_da = xr.DataArray(wd_vals, coords={"point": pts}, dims=["point"])
-        # if original spatial dims were e.g. ('lat','lon'), expand back:
-        if len(spatial_dims) > 1:
-            wd_da = wd_da.unstack("point")
+#         for j in range(npts):
+#             if verbose and (j % 500 == 0):
+#                 print(f"computing WD for point {j+1}/{npts}")
+#             series_ref = stacked_ref.isel(aux=j).values  # shape (time,)
+#             series_sim = stacked_sim.isel(aux=j).values
+#             wd_vals[j] = compute_wd(series_ref, series_sim)
 
-        if spatial:
-            return wd_da
-        else:
-            return float(wd_da.mean().values)
+#         # unstack back to original spatial dims
+#         wd_da = xr.DataArray(wd_vals, coords={"point": pts}, dims=["point"])
+#         # if original spatial dims were e.g. ('lat','lon'), expand back:
+#         if len(spatial_dims) > 1:
+#             wd_da = wd_da.unstack("point")
 
-    # ----------------- BY = 'time' -----------------
-    if by == "time":
-        times = ref["time"].values
-        nt = ref.sizes["time"]
-        wd_vals = np.full((nt,), np.nan, dtype=float)
-        for t in range(nt):
-            if verbose and (t % 50 == 0):
-                print(f"computing WD for time index {t+1}/{nt}")
-            field_ref = ref.isel(time=t).values.ravel()
-            field_sim = sim.isel(time=t).values.ravel()
-            wd_vals[t] = compute_wd(field_ref, field_sim)
-        wd_da = xr.DataArray(wd_vals, coords={"time": times}, dims=["time"])
-        if spatial:
-            return wd_da
-        else:
-            return float(wd_da.mean().values)
+#         if spatial:
+#             return wd_da
+#         else:
+#             return float(wd_da.mean().values)
 
-    raise ValueError("by must be one of {'point','time','global'}")
+#     # ----------------- BY = 'time' -----------------
+#     if by == "time":
+#         times = ref["time"].values
+#         nt = ref.sizes["time"]
+#         wd_vals = np.full((nt,), np.nan, dtype=float)
+#         for t in range(nt):
+#             if verbose and (t % 50 == 0):
+#                 print(f"computing WD for time index {t+1}/{nt}")
+#             field_ref = ref.isel(time=t).values.ravel()
+#             field_sim = sim.isel(time=t).values.ravel()
+#             wd_vals[t] = compute_wd(field_ref, field_sim)
+#         wd_da = xr.DataArray(wd_vals, coords={"time": times}, dims=["time"])
+#         if spatial:
+#             return wd_da
+#         else:
+#             return float(wd_da.mean().values)
+
+#     raise ValueError("by must be one of {'point','time','global'}")
 
 
-# --- wasserstein distance spatial ------------------------------------------------------------
-def wasserstein_dist_spatial(target, prediction, spatial=False):
-    return wasserstein_dist(ref=target, sim=prediction, by="point", spatial=spatial)
+# # --- wasserstein distance spatial ------------------------------------------------------------
+# def wasserstein_dist_spatial(target, prediction, spatial=False):
+#     return wasserstein_dist(ref=target, sim=prediction, by="point", spatial=spatial)
 
-# --- wasserstein distance temporal ------------------------------------------------------------
-def wasserstein_dist_temporal(target, prediction, spatial=False):
-    return wasserstein_dist(ref=target, sim=prediction, by="time", spatial=spatial)
+# # --- wasserstein distance temporal ------------------------------------------------------------
+# def wasserstein_dist_temporal(target, prediction, spatial=False):
+#     return wasserstein_dist(ref=target, sim=prediction, by="time", spatial=spatial)

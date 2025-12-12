@@ -4,14 +4,15 @@ import numpy as np
 import xarray as xr
 from torch import from_numpy
 ## Deep4downscaling
-from deep4downscaling.utils.trans import from_pred_to_xarray
 from deep4downscaling.deep.utils import load_model
+from deep4downscaling.utils.trans import from_pred_to_xarray
+from deep4downscaling.utils.normalizers import d4dnormalizers
 from deep4downscaling.utils.general import get_func_from_string
 from deep4downscaling.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 
 ##################################################################################################################################
 class d4d_downscaler:
-    def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None):
+    def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
         Initializes the D4D Downscaler.
         """
@@ -25,7 +26,7 @@ class d4d_downscaler:
         # --- GET MODEL AND METADATA FROM CHECKPOINT ---
         if model_file is not None:
             model_path = f"{id_dir}/models/{model_file}"
-            self.model, self.metadata = load_model(path = model_path, return_metadata=True)
+            self.model, self.metadata = load_model(path=model_path, map_location=self.device, return_metadata=True)
             self.model.to(self.device)
             print("📦 MODEL AND METADATA LOADED")
 
@@ -57,6 +58,21 @@ class d4d_downscaler:
             print("📦 DATA LOADED INTO MEMORY FOR FASTER ACCESS")
         else:
             self.data = {"x": self.x}
+        
+        # --- FORCINGS (optional) ---
+        self.forcing_data = forcing_data
+        if self.forcing_data is not None:
+            self.update_self_with_forcings(forcing_data["paths"])
+            freq = self.f[0].attrs["temporal_freq"]
+            dates_yaml = get_dates_from_yaml(forcing_data["years"], freq=freq)
+            self.sample_map_f, _ = get_sample_map(dates_yaml, self.x)
+            load_in_memory = input_data.get("load_in_memory", True)
+            if load_in_memory: # If dataset fits in memory, load input data to speed up
+                f_data = [np.array(f) for f in self.f]
+                self.data.update({"f": f_data})
+                print("📦 FORCING DATA LOADED INTO MEMORY FOR FASTER ACCESS")
+            else:
+                self.data.update({"f": self.f})
 
         # --- MAPPING TO XARRAY INFO ---
         ## Template
@@ -90,12 +106,12 @@ class d4d_downscaler:
         # --- BUILD GRAPH ---------------------------------------
         if self.graph is not None:
             if self.graph["path"] is not None:
-                self.edge_index = torch.load(f"{id_dir}/aux_files/{self.graph['path']}")
+                self.edge_index = torch.load(f"{id_dir}/aux_files/{self.graph['path']}", weights_only=False)
                 print(f"📦 GRAPH LOADED FROM: {self.graph['path']}")
             else:
                 self.edge_index = get_func_from_string(module_string=self.graph["module"],func_string=self.graph["name"], kwargs=self.graph.get("kwargs", None))
                 torch.save(self.edge_index, f"{self.aux_dir}/aux_files/edge_index_B.pt")
-                print(f"📦 GRAPH READY: function {self.graph["name"]} from {self.graph["module"]}")
+                print(f"📦 GRAPH READY: function {self.graph['name']} from {self.graph['module']}")
 
         # --- POSTPROCESS FUNC ---------------------------------------
         postprocess_module = "deep4downscaling.deep.postprocessors"
@@ -143,6 +159,7 @@ class d4d_downscaler:
         self.loss_params = self.metadata.get("loss_params", None)
         # --- Transform to 2D --- 
         self.transform_to_2D_x = self.metadata.get("transform_to_2D_x", False)
+        self.transform_to_2D_y = self.metadata.get("transform_to_2D_y", False)
         # --- Input and output 2D spatial dimensions ---
         self.H_x, self.W_x = self.metadata.get("H_x", None), self.metadata.get("W_x", None)
         self.H_y, self.W_y = self.metadata.get("H_y", None), self.metadata.get("W_y", None)
@@ -150,11 +167,28 @@ class d4d_downscaler:
         self.G_x = self.metadata.get("G_x", None)
         self.G_y = self.metadata.get("G_y", None)
 
+
     # ---------------------------------------------------------------------------------------------------------------------<
-    def to_graph(self, inp, edge_index, f=["N/A"]):
+    def update_self_with_forcings(self, fpaths):
+        # --- Forcings info ---
+        self.f = [zarr.open(p, mode='r') for p in fpaths]
+        self.vars_f = self.metadata["vars_f"]
+        self.idx_vars_f = [self.f[0].attrs["variables"][var] for var in self.vars_f]
+        self.normalizer_f = self.metadata.get("normalizer_f", None)
+        if self.normalizer_f is not None:
+            print("--- Normalizer (F) ---")
+            print(self.normalizer_f.get("normalizer_func_per_variable", None))
+        self.operator_f = self.metadata.get("operator_f", None)
+        if self.operator_f is not None:
+            print("--- Operator (F) ---")
+            print(self.operator_f.get("operator_func_per_variable", None))
+
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def graphPredict(self, x, edge_index, model, f=["N/A"]):
         assert False, (
-            "🛑 Placeholder for the to_graph function. Create a subclass of d4d_downscaler "
-            "that implements to_graph to convert the PyTorch data into a format compatible "
+            "🛑 Placeholder for the graphPredict function. Create a subclass of d4d_downscaler "
+            "that implements graphPredict to convert the PyTorch data into a format compatible "
             "with PyTorch Geometric (PyG) graph objects."
         )
 
@@ -174,14 +208,15 @@ class d4d_downscaler:
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_func = get_func_from_string(normalizer["module"], normalizer["normalizer_func_per_variable"][variable])
-                    x[c,:] = normalizer_func(x[c,:], **normalizer["kwargs"][variable])
+                    normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
+                    normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
+                    x[c,:] = normalizer_method(x[c,:])
         # --- Transform to 2D ---
         if transform_to_2D:
             C, G = x.shape
             x = x.reshape(C, H, W) # Shape (C, H, W)
         # --- Convert to torch tensor ---
-        x = from_numpy(x)
+        x = from_numpy(x.copy())
         # --- Return ---  
         return x.to(self.device)  # Shape (B, C, ...)
 
@@ -196,9 +231,9 @@ class d4d_downscaler:
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_func = get_func_from_string(normalizer["module"], normalizer["normalizer_func_per_variable"][variable])
-                    kwargs = {**normalizer["kwargs"][variable], "denormalize": True}
-                    data[c,:] = normalizer_func(data[c,:], **kwargs)
+                    normalizer_class = d4dnormalizers(**kwarg)
+                    normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
+                    data[c,:] = normalizer_method(data[c,:], denormalize=True)
         # --- Deoperator ---  
         if operator is not None:
             for c, variable in enumerate(vars):
@@ -213,8 +248,9 @@ class d4d_downscaler:
         return ds_pred
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def downscale(self, model=None, return_pred=False, display=True):
-        print("🚀 STARTING DOWNSCALING PROCESS")
+    def downscale(self, model=None, return_pred=False, verbose=True):
+        if verbose:
+            print("🚀 STARTING DOWNSCALING PROCESS")
         # --- Get model ---
         if model is None:
             model = self.model
@@ -223,9 +259,10 @@ class d4d_downscaler:
         for member in range(self.ensemble_size):
             ps = []
             for target_date in self.target_dates:  
-                if display:  
+                if verbose:  
                     print(f"📅 Member: {member+1}/{self.ensemble_size}. Downscaling date: {target_date}")
                 dates = self.pairs[target_date]
+
                 # -- Preprocess (indexing, normalizing,..) --
                 if len(dates) > 1:
                     inp = []
@@ -235,15 +272,26 @@ class d4d_downscaler:
                 else:
                     inp = self.preprocess(target_date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x).unsqueeze(0)
                 # print(f"Inp shape: {inp.shape}")
-                # -- Data to graph structure --
-                if self.graph is not None:
-                    inp = self.to_graph(x=inp, edge_index=self.edge_index)
+
+                # -- High-res forcings (indexing, normalizing,..) --
+                if self.forcing_data is not None:
+                    f = self.preprocess(target_date, self.data["f"], self.vars_f, self.idx_vars_f, self.sample_map_f, operator=self.operator_f, normalizer=self.normalizer_f, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y).unsqueeze(0)
+                else:
+                    Cy = len(self.vars_y)
+                    spatial = [self.H_y, self.W_y] if self.transform_to_2D_y else [self.G_y]
+                    f = torch.zeros(1, Cy, *spatial, device=self.device)
+                # print(f"F shape: {f.shape}")
+
                 # -- Predict --
-                with torch.no_grad():
-                    p = model(inp).cpu().numpy()
                 if self.graph is not None:
-                    p = np.expand_dims(p, axis=0) # Add time dimension to GNN outputs
+                    p_torch = self.graphPredict(x=inp, edge_index=self.edge_index, model=model, f=f)
+                else:
+                    with torch.no_grad():
+                        p_torch = model(inp, f)
                 # print(f"Pred shape: {p.shape}")
+                p = p_torch.cpu().numpy()                        
+                del inp, f, p_torch
+
                 # -- Postprocess (denormalizing, xarray formatting,..) --
                 p = self.postprocess(date=target_date, data=p, vars=self.vars_y, member=member, operator=self.operator_y, normalizer=self.normalizer_y, lats=self.lats, lons=self.lons, template=self.template, func=self.post_func, kwargs=self.post_func_kwargs)
                 ps.append(p)

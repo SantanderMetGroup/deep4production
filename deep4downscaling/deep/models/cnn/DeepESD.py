@@ -8,6 +8,20 @@ from deep4downscaling.utils.general import get_func_from_string
 def impute_padding(kernel_size, dilation=1):
     return dilation * (kernel_size - 1) // 2
 
+class GaussianNoise(nn.Module):
+    """
+    Adds Gaussian noise (mean 0, std 'sigma') on every forward call.
+    Useful for ensemble generation during evaluation.
+    """
+    def __init__(self, sigma=0.1):
+        super().__init__()
+        self.sigma = sigma
+
+    def forward(self, x):
+        if self.sigma > 0:
+            return x + torch.randn_like(x) * self.sigma
+        return x
+
 class DeepESD(torch.nn.Module):
 
     """
@@ -23,8 +37,10 @@ class DeepESD(torch.nn.Module):
     def __init__(self, 
                  x_shape,
                  y_shape,
+                 f_shape: list[int]=None,
                  filters: list[int]=[50,25,10],
                  kernel_size: int=3,
+                 sigma: float=0.,
                  loss_function_name: str=None,
                  output_activation: dict = None):
 
@@ -62,6 +78,24 @@ class DeepESD(torch.nn.Module):
                                       out_channels=filters[2],
                                       kernel_size=kernel_size,
                                       padding=impute_padding(kernel_size, dilation=1))
+
+        ## --- Add noise ---                           
+        if sigma>0:
+            self.noise_1 = GaussianNoise(sigma=sigma)
+            self.noise_2 = GaussianNoise(sigma=sigma)
+            self.noise_3 = GaussianNoise(sigma=sigma)
+        else:
+            self.noise_1 = nn.Identity()
+            self.noise_2 = nn.Identity()
+            self.noise_3 = nn.Identity()
+
+        ## --- Forcing ---
+        self.f_shape = f_shape
+        if f_shape is not None:
+            input_forcing_features = int(np.prod(f_shape))
+            flatten_features = H * W * filters[-1]
+            self.mlp_forcing = torch.nn.Linear(in_features=input_forcing_features, out_features=flatten_features)
+
         
         ## --- Output layers ---
         number_neurons_last_hidden = filters[2] * H * W
@@ -87,16 +121,22 @@ class DeepESD(torch.nn.Module):
                 self.output_activation[var_name] = act
                 self._activation_map[idx] = act
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, f: None) -> torch.Tensor:
         B = x.size(0)
         # --- First part: input and hidden layers ---
-        x = self.conv_1(x)
+        x = self.noise_1(self.conv_1(x))
         x = torch.relu(x)
-        x = self.conv_2(x)
+        x = self.noise_2(self.conv_2(x))
         x = torch.relu(x)
-        x = self.conv_3(x)
+        x = self.noise_3(self.conv_3(x))
         x = torch.relu(x)
         x = torch.flatten(x, start_dim=1)
+        
+        # --- Add forcing ---
+        if (f is not None) and (self.f_shape is not None):
+            f = torch.flatten(f, start_dim=1)
+            x = x + self.mlp_forcing(f)
+
         # --- Second part: output layer ---
         if self.loss_function_name == "NLLGaussianLoss":
             mean = self.out_mean(x).view(B, self.num_output_vars, 1, *self.spatial) # (batch_size, channel, 1, *spatial)
@@ -122,78 +162,3 @@ class DeepESD(torch.nn.Module):
         return out
 
 
-
-# class DeepESDtas(torch.nn.Module):
-#     """
-#     DeepESD model as proposed in Baño-Medina et al. 2024 for temperature
-#     downscasling. This implementation allows for a deterministic (MSE-based)
-#     and stochastic (NLL-based) definition.
-#     Baño-Medina, J., Manzanas, R., Cimadevilla, E., Fernández, J., González-Abad,
-#     J., Cofiño, A. S., and Gutiérrez, J. M.: Downscaling multi-model climate projection
-#     ensembles with deep learning (DeepESD): contribution to CORDEX EUR-44, Geosci. Model
-#     Dev., 15, 6747–6758, https://doi.org/10.5194/gmd-15-6747-2022, 2022.
-#     Parameters
-#     ----------
-#     x_shape : tuple
-#         Shape of the data used as predictor. This must have dimension 4
-#         (time, channels/variables, lon, lat).
-#     y_shape : tuple
-#         Shape of the data used as predictand. This must have dimension 2
-#         (time, gridpoint)
-#     filters_last_conv : int
-#         Number of filters/kernels of the last convolutional layer
-#     stochastic: bool
-#         If set to True, the model is composed of two final dense layers computing
-#         the mean and log fo the variance. Otherwise, the models is composed of one
-#         final layer computing the values.
-#     """
-#     def __init__(self, x_shape: tuple, y_shape: tuple,
-#                  filters_last_conv: int, stochastic: bool):
-#         super(DeepESDtas, self).__init__()
-#         if (len(x_shape) != 4) or (len(y_shape) != 2):
-#             error_msg =\
-#             'X and Y data must have a dimension of length 4'
-#             'and 2, correspondingly'
-#             raise ValueError(error_msg)
-#         self.x_shape = x_shape
-#         self.y_shape = y_shape
-#         self.filters_last_conv = filters_last_conv
-#         self.stochastic = stochastic
-#         self.conv_1 = torch.nn.Conv2d(in_channels=self.x_shape[1],
-#                                       out_channels=50,
-#                                       kernel_size=3,
-#                                       padding=1)
-#         self.conv_2 = torch.nn.Conv2d(in_channels=50,
-#                                       out_channels=25,
-#                                       kernel_size=3,
-#                                       padding=1)
-#         self.conv_3 = torch.nn.Conv2d(in_channels=25,
-#                                       out_channels=self.filters_last_conv,
-#                                       kernel_size=3,
-#                                       padding=1)
-#         if self.stochastic:
-#             self.out_mean = torch.nn.Linear(in_features=\
-#                                             self.x_shape[2] * self.x_shape[3] * self.filters_last_conv,
-#                                             out_features=self.y_shape[1])
-#             self.out_log_var = torch.nn.Linear(in_features=\
-#                                                self.x_shape[2] * self.x_shape[3] * self.filters_last_conv,
-#                                                out_features=self.y_shape[1])
-#         else:
-#             self.out = torch.nn.Linear(in_features=\
-#                                        self.x_shape[2] * self.x_shape[3] * self.filters_last_conv,
-#                                        out_features=self.y_shape[1])
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         x = self.conv_1(x)
-#         x = torch.relu(x)
-#         x = self.conv_2(x)
-#         x = torch.relu(x)
-#         x = self.conv_3(x)
-#         x = torch.relu(x)
-#         x = torch.flatten(x, start_dim=1)
-#         if self.stochastic:
-#             mean = self.out_mean(x)
-#             log_var = self.out_log_var(x)
-#             out = torch.cat((mean, log_var), dim=1)
-#         else:
-#             out = self.out(x)
-#         return out

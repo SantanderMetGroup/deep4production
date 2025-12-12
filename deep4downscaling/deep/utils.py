@@ -95,8 +95,8 @@ def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_l
     checkpoint = {
         'epoch': epoch,
         'global_step': global_step,
-        'train_losses': train_losses,
-        'valid_losses': valid_losses,
+        'train_losses': train_losses[-100:],
+        'valid_losses': valid_losses[-100:] if valid_losses else None,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
@@ -118,9 +118,9 @@ def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
 
 
 # --------------------------------------------------------------------------------------------------------------  
-def load_model(path, return_metadata=False):
+def load_model(path, map_location=None, return_metadata=False):
     # Load checkpoint
-    checkpoint = torch.load(path, weights_only=False)
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     # Use metadata to rebuild model
     model_name, model_module, model_kwargs = checkpoint["metadata"]["model_params"]["name"], checkpoint["metadata"]["model_params"]["module"], checkpoint["metadata"]["model_params"]["kwargs"]
     model = get_func_from_string(model_module, model_name, model_kwargs)

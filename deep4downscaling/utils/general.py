@@ -258,3 +258,11 @@ def is_grid_regular(ds: xr.Dataset) -> bool:
         if spatial_count >= 2:
             return True  # Regular gridded (2D+ spatial structure)
     return False  # Likely station-based or 1D
+
+def latlon_to_xyz(lat, lon):
+    lat = np.deg2rad(lat)
+    lon = np.deg2rad(lon)
+    x = np.cos(lat)*np.cos(lon)
+    y = np.cos(lat)*np.sin(lon)
+    z = np.sin(lat)
+    return np.stack([x, y, z], axis=-1)
