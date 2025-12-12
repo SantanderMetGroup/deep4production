@@ -190,7 +190,7 @@ class d4d_dataset(Dataset):
         imputer_name     = imputer_selected["name"]
         kwargs_imputer   = {k: v for k, v in imputer_selected.items() if k != "name"}
         # Dynamic NaN list for this variable
-        dyn_list = self.idx_dynamic_nan.get(var, [])
+        dyn_list = zarr_attrs.get(var, [])
         if dyn_list and len(dyn_list) > 0:
             print(f"🔧 [{var}] Starting dynamic NaN imputation using '{imputer_name}'")
             # Loop directly over the list of [t, gp] pairs
@@ -355,11 +355,12 @@ class d4d_dataset(Dataset):
     zarr_store.attrs['idx_fixed_nan'] = {
         var: idx_fixed_nan[c].tolist() for c, var in enumerate(self.variables)
     }
-    print(zarr_store.attrs['idx_fixed_nan'])
+    # print(zarr_store.attrs['idx_fixed_nan'])
     zarr_store.attrs['idx_dynamic_nan'] = {
         var: self.idx_dynamic_nan[c] for c, var in enumerate(self.variables)
     }
-    print(zarr_store.attrs['idx_dynamic_nan'])
+    # print(zarr_store.attrs['idx_dynamic_nan'])
+    print("----")
 
     ## Impute NaNs?
     if self.imputer is not None:
