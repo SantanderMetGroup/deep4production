@@ -195,6 +195,8 @@ class d4d_dataset(Dataset):
             print(f"🔧 [{var}] Starting dynamic NaN imputation using '{imputer_name}'")
             # Loop directly over the list of [t, gp] pairs
             for (t, gp) in dyn_list:
+                print(lats[gp].dtype)
+                print(lons[gp].dtype)
                 print(f"   → Imputing at timestep {t} ({self.dates[t]}) gridpoint {gp}")
                 # Build imputer instance for the specific timestep t
                 imp = d4dimputers(

@@ -452,7 +452,7 @@ def bias(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    bias = (t - p)
+    bias = (p - t)
     if spatial:
         return bias
     return bias.mean().values
@@ -462,7 +462,7 @@ def biasAbs(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    biasAbs = abs(t - p)
+    biasAbs = abs(p - t)
     if spatial:
         return biasAbs
     return biasAbs.mean().values
@@ -472,7 +472,7 @@ def relbiasAbs(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    relbiasAbs = abs(t - p) / t * 100
+    relbiasAbs = abs(p - t) / t * 100
     if spatial:
         return relbiasAbs
     return relbiasAbs.mean().values
@@ -482,7 +482,7 @@ def relbias(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4downscaling.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    relbias = (t - p) / t * 100
+    relbias = (p - t) / t * 100
     if spatial:
         return relbias
     return relbias.mean().values

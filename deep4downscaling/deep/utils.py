@@ -107,7 +107,7 @@ def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_l
 
 # --------------------------------------------------------------------------------------------------------------
 def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

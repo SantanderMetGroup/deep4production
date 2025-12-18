@@ -231,7 +231,7 @@ class d4d_downscaler:
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_class = d4dnormalizers(**kwarg)
+                    normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
                     data[c,:] = normalizer_method(data[c,:], denormalize=True)
         # --- Deoperator ---  

@@ -9,7 +9,7 @@ from deep4downscaling.classes.d4d_trainer import d4d_trainer
 class d4d_trainer_custom(d4d_trainer):
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow):
         """
-        Initializes the Residual Generator trainer.
+        XX
         """
         ######### Call parent constructor to initialize common attributes #########
         super().__init__(
@@ -44,10 +44,17 @@ class d4d_trainer_custom(d4d_trainer):
         x = x.to(device)
         y = y.to(device)
 
+        # --- Forcing ---
+        if f[0] != "N/A":
+            f = f.to(device)
+        else:
+            B, Cy, *spatial = y.shape
+            f = torch.zeros(B, Cy, *spatial, device=device)
+
         # --- Forward pass for each ensemble member ---
         prediction_list = []
         for m in range(members):
-            pred_m = model(x)  # shape: (B, C, H, W) or (B, C, G)
+            pred_m = model(x, f)  # shape: (B, C, H, W) or (B, C, G)
             prediction_list.append(pred_m)
 
         # Stack along new ensemble dimension -> (B, M, C, H, W) or (B, M, C, G)

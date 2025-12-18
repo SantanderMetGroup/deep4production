@@ -1,3 +1,4 @@
+import os
 import mlflow
 from deep4downscaling.utils.general import get_func_from_string
 
@@ -56,10 +57,10 @@ def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
             ## 3. Compute the figure
             fig = diag_func(**fig_kwargs)
             ## 4. Log the figure in MLflow
-            mlflow.log_figure(
-                fig,
-                f"figures/{var}/{diag_name}_epoch_{epoch:04d}.png"
-            )
+            file_name = f"{diag_name}_epoch_{epoch:04d}.png"
+            fig.savefig(file_name, bbox_inches="tight", dpi=300)
+            mlflow.log_artifact(file_name, artifact_path=f"figures/{var}")
+            os.remove(file_name)
             logged.append(diag_name)
         print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
             f"  --> The following FIGURES were LOGGED: {logged}")

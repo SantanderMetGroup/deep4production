@@ -10,8 +10,8 @@ class d4dimputers():
         self.lons_ref = lons_ref
         
         # Get idx of gridpoint
-        idx_lat_gp = np.where(lats_ref==lat_gp)[0]
-        idx_lon_gp = np.where(lons_ref==lon_gp)[0]
+        idx_lat_gp = np.where(np.array(lats_ref)==lat_gp)[0]
+        idx_lon_gp = np.where(np.array(lons_ref)==lon_gp)[0]
         self.idx = np.intersect1d(idx_lat_gp, idx_lon_gp)[0]
 
         # Store dataset
