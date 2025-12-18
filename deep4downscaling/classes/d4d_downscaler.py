@@ -222,6 +222,11 @@ class d4d_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def postprocess(self, date, data, vars, member, operator=None, normalizer=None, lats=None, lons=None, template=None, func=None, kwargs=None):
+        # --- De-transform from 2D? ---
+        if self.transform_to_2D_y:
+            B, C, H, W = data.shape
+            data = data.reshape(B, C, H*W) # Shape (B, C, G)
+
         # -- FUNC -- 
         if func is not None:
             # print(f"BEFORE: {data.shape}")
@@ -233,13 +238,13 @@ class d4d_downscaler:
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
                     normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
-                    data[c,:] = normalizer_method(data[c,:], denormalize=True)
+                    data[:,c,:] = normalizer_method(data[:,c,:], denormalize=True)
         # --- Deoperator ---  
         if operator is not None:
             for c, variable in enumerate(vars):
                 if operator["operator_func_per_variable"][variable] is not None:
                     operator_func = get_func_from_string(operator["module"], operator["operator_func_per_variable"][variable])
-                    data[c,:] = operator_func(data[c,:], back=True)
+                    data[:,c,:] = operator_func(data[:,c,:], back=True)
         # -- Prediction to xarray --
         date = np.datetime64(date)
         ds_pred = from_pred_to_xarray(data, date, vars, lats, lons, template, self.H_y, self.W_y)
