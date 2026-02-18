@@ -1,0 +1,27 @@
+id_dir: your_id_dir # e.g., /outputs/deepesd_asym
+
+input_data: 
+  paths: 
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - ...
+  years: [1980]
+  load_in_memory: true
+
+graph: null
+ensemble_size: 1
+
+model_file: DeepESD_asym_best.pt # Model at: id_dir/models/
+
+saving_info:
+  file: 1980.nc # Predictions will be saved at: id_dir/predictions/
+  template: path_to_your_template.nc # Optional, if not returns a xr with dims: time, point
+  # formatting: 
+  #   name: null # e.g., cordex_ml
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: ...
+
+
+
+

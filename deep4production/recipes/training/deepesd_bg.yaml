@@ -1,0 +1,73 @@
+##### GENERAL INFO #####
+run_ID: deepesd_bg # example
+output_dir: path_to_your_output_dir 
+overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
+
+
+##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
+data:
+  load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 2080,
+                    2080, 2081, 2082, 2083, 2084, 2085, 2086, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2096, 2097, 2098, 2099]
+  validation_period: [1967, 1975, 2087, 2095]
+
+  predictors:
+    paths:
+      - path_to_your_x_file_1.zarr
+      - path_to_your_x_file_2.zarr
+      - ...
+    variables: null  # If null, uses all variables available in the zarrs. 
+    normalizer: 
+      path_reference: path_to_your_x_file_1.zarr
+      default: mean_std # Applies this type of standardization to all the variables in the predictor set
+    transform_to_2D: True
+
+  predictands:
+    paths:
+      - path_to_your_y_file_1.zarr
+      - path_to_your_y_file_2.zarr
+      - ...
+    variables:
+      - pr
+    normalizer: null
+    transform_to_2D: True
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 64
+  shuffle: false
+  num_workers: 0
+
+
+##### REGRESSOR CONFIGURATION #####
+model_info: 
+  saving_params:
+    model_save_name: DeepESD_BerGamma
+    # save_every_n_epochs: 2
+    # save_every_n_steps: 300
+    # resume_checkpoint: DeepESD_BerGamma_epoch6.pt
+  loss_params: 
+    name: NLLBerGammaLoss
+    module: deep4production.deep.loss
+    kwargs:
+      threshold: 0.999
+      ignore_nans: True
+  model_params:
+    name: DeepESD
+    module: deep4production.deep.models.cnn.DeepESD
+    # kwargs model
+    kwargs:
+      x_shape: [15, 16, 16] # (C, H, W). Use `d4d-datasets-inspect your_zarr_file` to get this value
+      y_shape: [1, 128, 128] # (C, H, W). Use `d4d-datasets-inspect your_zarr_file` to get this value
+      filters: [50, 25, 10]
+      kernel_size: 3
+      loss_function_name: NLLBerGammaLoss
+  training_params:
+    num_epochs: 1000
+    patience_early_stopping: 30
+    optimizer_params:
+      lr: 0.0001
+
+
+
