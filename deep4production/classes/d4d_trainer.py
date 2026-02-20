@@ -288,18 +288,22 @@ class d4d_trainer:
         epoch_init=0
         if saving_params.get("resume_checkpoint", None) is not None:
             path_checkpoint = f"{self.model_dir}/{saving_params["resume_checkpoint"]}"
-            checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
-            epoch_init = epoch_ref = epoch = checkpoint['epoch']
-            step_ref = global_step = checkpoint['global_step']
-            train_losses = checkpoint.get('train_losses', [])
-            valid_losses = checkpoint.get('valid_losses', [])
-            best_val_loss = np.min(valid_losses)
-            epoch_best_val_loss = np.where(valid_losses == best_val_loss)[0][0]
-            early_stopping_counter = epoch - epoch_best_val_loss
-            print("🚀 Resume training:")
-            print(f"    checkpoint: {path_checkpoint}")
-            print(f"    epoch: {epoch}")
-            print(f"    global_step: {global_step}")
+            if os.path.exists(path_checkpoint):
+                print(f"🚀 Resuming training from checkpoint: {path_checkpoint}")
+                checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
+                epoch_init = epoch_ref = epoch = checkpoint['epoch']
+                step_ref = global_step = checkpoint['global_step']
+                train_losses = checkpoint.get('train_losses', [])
+                valid_losses = checkpoint.get('valid_losses', [])
+                best_val_loss = np.min(valid_losses)
+                epoch_best_val_loss = np.where(valid_losses == best_val_loss)[0][0]
+                early_stopping_counter = epoch - epoch_best_val_loss
+                print("🚀 Resume training:")
+                print(f"    checkpoint: {path_checkpoint}")
+                print(f"    epoch: {epoch}")
+                print(f"    global_step: {global_step}")
+            else:
+                print(f"⚠️ WARNING: Checkpoint specified for resuming training not found at {path_checkpoint}. Starting training from scratch.")
             
         # --- Ensemble Model Averaging (EMA) parameters ------------------------------------------
         ema = None
