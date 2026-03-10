@@ -43,7 +43,7 @@ class d4d_trainer:
             self.d4d_pydataset = get_func_from_string(d4dpy["module"], d4dpy["name"])
             self.d4dpy = d4dpy["kwargs"]
         else:
-            self.d4d_pydataset = get_func_from_string("deep4dproduction.classes.d4d_pydataset", "d4d_pydataset")
+            self.d4d_pydataset = get_func_from_string("deep4production.classes.d4d_pydataset", "d4d_pydataset")
 
         self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -96,7 +96,7 @@ class d4d_trainer:
             if self.Mlflow_diagnostics is not None:
                 ## Get d4d_downscaler function
                 d4dp_name = Mlflow.get("func_name", "d4d_downscaler")
-                d4dp_module = Mlflow.get("func_module", "deep4dproduction.classes.d4d_downscaler")
+                d4dp_module = Mlflow.get("func_module", "deep4production.classes.d4d_downscaler")
                 self.d4dp_func = get_func_from_string(module_string=d4dp_module, func_string=d4dp_name)
                 self.input_data = {"paths": data["predictors"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
                 if data.get("forcings", None) is not None:
@@ -276,7 +276,7 @@ class d4d_trainer:
                 lambda_name = scheduler_params.get("lr_lambda", None)
                 if lambda_name is None:
                     raise ValueError("LambdaLR requires 'lr_lambda' parameter in config YAML")
-                lr_lambda_func = get_func_from_string(module_string="deep4dproduction.deep.schedulers", func_string=lambda_name)
+                lr_lambda_func = get_func_from_string(module_string="deep4production.deep.schedulers", func_string=lambda_name)
                 lr_lambda = partial(lr_lambda_func, **scheduler_kwargs) # Use functools.partial to freeze parameters
                 # Instantiate scheduler properly
                 scheduler = scheduler_func(optimizer, lr_lambda=lr_lambda)

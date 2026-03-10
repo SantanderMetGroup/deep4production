@@ -2,9 +2,9 @@
 import os
 import numpy as np
 import torch
-## Deep4downscaling
-from deep4downscaling.classes.d4d_trainer import d4d_trainer
-from deep4downscaling.classes.subclasses_diff.d4d_pydataset_resdiff import d4d_pydataset_custom
+## Deep4production
+from deep4production.classes.d4d_trainer import d4d_trainer
+from deep4production.classes.subclasses_diff.d4d_pydataset_resdiff import d4d_pydataset_custom
 ##################################################################################################################################
 class d4d_trainer_custom(d4d_trainer):
     def __init__(self, data, dataloader, output_dir, model_info, graph, d4dpy, Mlflow):
