@@ -6,7 +6,6 @@ Author: Jose González-Abad
 """
 
 import sys
-import sys
 import gc
 import types
 import torch

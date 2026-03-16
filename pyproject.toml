@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d4p"
+version = "0.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Santander MetGroup" }]
+dependencies = [
+    # Core libraries
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "xarray",
+    "zarr",
+    "cftime",
+    "numcodecs",
+    "cartopy",
+    "cartopy",
+
+    # Deep Learning
+    "torch",
+    "torchvision",
+    "torch-geometric",
+
+    # ML / Analytics
+    "mlflow",
+]
+
+[tool.setuptools]
+packages = ["deep4production"]
+
+[project.scripts]
+d4p-train = "deep4production.console.main_train:main"
+d4p-downscale = "deep4production.console.main_downscale:main"
+d4p-inspect = "deep4production.console.main_inspect:main"
+d4p-create = "deep4production.console.main_create:main"
