@@ -10,16 +10,20 @@ def build_graph(
     nearest_neighbours_low_to_high: int = 4
 ):
     """
-    Builds a hetero PyG graph matching the structure required by
-    the GNN4CD model.
-
+    Builds a hetero PyG graph matching the structure required by the GNN4CD model.
     Node types:
         - low
         - high
-
     Edge types:
         - ('low', 'to', 'high')
         - ('high', 'within', 'high')
+    Parameters:
+        data_high (str): Path to high-resolution Zarr file.
+        data_low (str): Path to low-resolution Zarr file.
+        nearest_neighbours_high_to_high (int): Number of neighbors for high-to-high edges.
+        nearest_neighbours_low_to_high (int): Number of neighbors for low-to-high edges.
+    Returns:
+        tuple: (low_to_high_edges, high_edges) as torch tensors.
     """
 
     # ------------------------------------------------------------
@@ -74,6 +78,20 @@ import torch_geometric.nn as geometric_nn
 from torch_geometric.nn import GATv2Conv, GraphConv
 
 class GNN4CD(nn.Module):
+    """
+    Graph Neural Network for Climate Downscaling (GNN4CD).
+    Purpose: Processes low and high resolution climate data using graph convolutions and attention layers.
+    Parameters:
+        c_low (int): Input channels for low-resolution nodes.
+        c_rnn_out (int): Output channels for RNN encoder.
+        pred_dim (int): Output prediction dimension.
+        c_high (int): Input channels for high-resolution nodes.
+        channels_downscaler_low_in (int): Channels for low-resolution downscaler input.
+        num_lagged_predictors (int): Number of lagged predictors.
+        num_layers_rnn (int): Number of RNN layers.
+        channels_downscaler_out (int): Channels for downscaler output.
+        channels_downscaler_base (int): Base channels for downscaler.
+    """
     
     def __init__(self, c_low, c_rnn_out, pred_dim=1, c_high=0, channels_downscaler_low_in=128, num_lagged_predictors=1, num_layers_rnn=2, channels_downscaler_out=64, channels_downscaler_base=64):
         super(GNN4CD, self).__init__()
@@ -126,6 +144,13 @@ class GNN4CD(nn.Module):
             )
 
     def forward(self, data):
+        """
+        Forward pass for GNN4CD model.
+        Parameters:
+            data (dict): Dictionary containing 'low' and 'high' node data and edge indices.
+        Returns:
+            torch.Tensor: Output predictions for high-resolution nodes.
+        """
         x_low = data['low'].x       # shape: (N_low, seq_len, c_low)
         x_high = data['high'].x 
         encod_rnn, _ = self.rnn(x_low) # shape (N_low, seq_len, h_hid)

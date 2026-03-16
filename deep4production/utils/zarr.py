@@ -6,6 +6,13 @@ import numpy as np
 def zarr_inspect(
     zarr_path: str,
 ):
+    """
+    Inspects and prints metadata and statistics from a Zarr store.
+    Parameters:
+        zarr_path (str): Path to the Zarr store.
+    Returns:
+        None
+    """
 
     # Load the Zarr store
     zarr_store = zarr.open(zarr_path, mode='r')
@@ -75,6 +82,6 @@ def zarr_inspect(
         print(f"{var:22} | {m:>10} | {s:>10} | {mn:>10} | {mx:>10} | {nf:>33} | {nd:>33} | {unts:>10} ")
     
     print("-" * 160)
-    
+
 
 

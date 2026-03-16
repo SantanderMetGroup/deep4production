@@ -2,7 +2,7 @@
 This module contains functions for transforming and manipulating xarray.Dataset objects.
 It provides tools for data cleaning, alignment, standardization, and other common data operations.
 
-Author: Jose González-Abad
+Author: Jose González-Abad, Jorge Baño-Medina
 """ 
 
 import xarray as xr
@@ -10,6 +10,13 @@ import numpy as np
 from typing import Union, List, Tuple
 
 def from_xr_grid_to_vector(y):
+    """
+    Converts a 2D xarray grid to a 1D vector, stacking spatial dimensions.
+    Parameters:
+        y (xarray.DataArray): Input grid.
+    Returns:
+        xarray.DataArray: Stacked 1D vector.
+    """
  
      ## Compute mask to identify NaNs in the output field
      y_mask = compute_valid_mask(y) 
@@ -39,24 +46,13 @@ def from_xr_grid_to_vector(y):
 def remove_days_with_nans(data: xr.Dataset,
                           coord_names: dict={'lat': 'lat',
                                              'lon': 'lon'}) -> xr.Dataset:
-
     """
-    Remove the days with at least one nan across the spatial domain. This function
-    applies to all the variables composing the data
-
-    Parameters
-    ----------
-    data : xr.Dataset
-        Xarray dataset to filter
-
-    coord_names : dict, optional
-        Dictionary with mappings of the name of the spatial dimensions.
-        By default lat and lon.
-
-    Returns
-    -------
-    xr.Dataset
-        Filtered xarray Dataset
+    Removes days with at least one NaN across spatial domain for all variables.
+    Parameters:
+        data (xr.Dataset): Input dataset.
+        coord_names (dict): Coordinate names mapping.
+    Returns:
+        xr.Dataset: Filtered dataset.
     """
 
     # Get time indices with zero null values

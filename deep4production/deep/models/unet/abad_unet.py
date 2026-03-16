@@ -7,28 +7,16 @@ from deep4production.utils.general import get_func_from_string
 
 
 class UnitConv(nn.Module):
+    """
+    2D convolution block with optional batch normalization and ReLU activations.
+    Parameters:
+        in_channels (int): Input channels.
+        out_channels (int): Output channels.
+        kernel_size (int): Kernel size.
+        padding (int): Padding.
+        batch_norm (bool): Use batch normalization.
+    """
     
-    """
-    Implement the following set of layers:
-    2D convolution => Batch Normalization (opt.) => ReLU (x2)
-
-    Parameters
-    ----------
-    in_channels : int
-        Input channels to the block
-
-    out_channels : int
-        Output channels of the block
-
-    kernel_size : int
-        Kernel size of all convolutions applied within the
-        block
-
-    padding: str
-        Padding (same or valid) to apply before each convolutional
-        layer
-    """
-
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int,
                  padding: int, batch_norm: bool):
         super().__init__()
@@ -50,27 +38,24 @@ class UnitConv(nn.Module):
                     nn.ReLU())
 
     def forward(self, x):
+        """
+        Forward pass for UnitConv block.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         return self.conv(x)
 
 class UpLayer(nn.Module):
+    """
+    Upsampling block using transposed convolution or upsampling + convolution.
+    Parameters:
+        in_channels (int): Input channels.
+        out_channels (int): Output channels.
+        trans_conv (bool): Use transposed convolution.
+    """
     
-    """
-    Implement one of the following set of layers:
-    (2D transposed conv) or (up sampling => 2D convolution)
-
-    Parameters
-    ----------
-    in_channels : int
-        Input channels to the block
-
-    out_channels : int
-        Output channels of the block
-
-    trans_conv: bool
-        Whether to apply the transposed convolution (True)
-        or the up-sampling + 2D convolution
-    """
-
     def __init__(self, in_channels: int, out_channels: int, trans_conv: bool):
         super().__init__()
  
@@ -84,10 +69,33 @@ class UpLayer(nn.Module):
             )
 
     def forward(self, x):
+        """
+        Forward pass for UpLayer block.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         return self.layer_op(x)
 
 
 class abad_unet(torch.nn.Module):
+    """
+    UNet-style model for deep learning downscaling.
+    Purpose: Encodes and decodes spatial features for climate prediction.
+    Parameters:
+        x_shape (tuple): Input shape.
+        y_shape (tuple): Output shape.
+        input_padding: Padding for input.
+        kernel_size (int): Kernel size.
+        padding: Padding value.
+        batch_norm (bool): Use batch normalization.
+        trans_conv (bool): Use transposed convolution.
+        num_final_res_increases (int): Number of final upsampling layers.
+        base_channels (int): Base channels.
+        loss_function_name (str): Loss function name.
+        output_activation (dict): Output activation specification.
+    """
 
     def __init__(self, x_shape, y_shape, 
                  input_padding, kernel_size, padding,
@@ -179,6 +187,13 @@ class abad_unet(torch.nn.Module):
                 self._activation_map[idx] = act
 
     def forward(self, x):
+        """
+        Forward pass for abad_unet model.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         B = x.shape[0]
         x = F.pad(x, self.input_padding)
 

@@ -6,9 +6,27 @@ from deep4production.utils.general import get_func_from_string
 from typing import Tuple, List
 
 def impute_padding(kernel_size, dilation=1):
+    """
+    Computes padding for convolution given kernel size and dilation.
+    Parameters:
+        kernel_size (int): Kernel size.
+        dilation (int): Dilation rate.
+    Returns:
+        int: Padding value.
+    """
     return dilation * (kernel_size - 1) // 2
 
 class ConvWithLearnableMapsBlock(nn.Module):
+    """
+    Convolutional block with learnable maps and batch normalization.
+    Parameters:
+        in_channels (int): Input channels.
+        out_channels (int): Output channels.
+        img_shape (tuple): Image shape.
+        kernel_size (int): Kernel size.
+        dilation (int): Dilation rate.
+        num_pre_maps (int): Number of learnable pre-maps.
+    """
     def __init__(self, in_channels, out_channels, img_shape, kernel_size=3, dilation=1, num_pre_maps=10):
         super().__init__()
         padding = impute_padding(kernel_size, dilation)
@@ -27,6 +45,13 @@ class ConvWithLearnableMapsBlock(nn.Module):
         self.act = nn.ReLU(inplace=True)
 
     def forward(self, x):
+        """
+        Forward pass for ConvWithLearnableMapsBlock.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         x = self.conv(x)
         x = self.bn(x)
         x = x + self.pre_conv(self.pre_maps)
@@ -36,6 +61,17 @@ class ConvWithLearnableMapsBlock(nn.Module):
 
 
 class PixelShuffleBlock(nn.Module):
+    """
+    Pixel shuffle upscaling block with learnable maps.
+    Parameters:
+        in_channels (int): Input channels.
+        out_channels (int): Output channels.
+        img_shape (tuple): Image shape.
+        kernel_size (int): Kernel size.
+        upscale_factor (int): Upscale factor.
+        num_pre_maps (int): Number of learnable pre-maps.
+        use_post_map (bool): Use post-map for output.
+    """
     def __init__(self, in_channels, out_channels, img_shape, kernel_size=3, upscale_factor=2, num_pre_maps=10, use_post_map=False):
         super().__init__()
         padding = impute_padding(kernel_size, dilation=1)
@@ -60,6 +96,13 @@ class PixelShuffleBlock(nn.Module):
         self.act = nn.ReLU(inplace=True)
 
     def forward(self, x):
+        """
+        Forward pass for PixelShuffleBlock.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         x = self.conv(x)
         x = self.bn_1(x)
         x = self.pixel_shuffle(x)
@@ -74,19 +117,22 @@ class PixelShuffleBlock(nn.Module):
 
 class SMHICNN(nn.Module):
     """
-    CNN implementing the architecture described in: https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2025JH000630.
-
-    Key defaults (matching manuscript):
-      - 8 convolutional layers, width=50, kernel_size=3
-      - Four dilated convolutions with dilation rates [2,4,8,16]
-      - Pre-maps for all conv layers except the last, 10 pre-maps each (learnable)
-      - Last conv layer uses post-maps: 1 post-map per feature map
-      - PixelShuffle upscaling: 3 sequential pixel-shuffle blocks (default upscale factor=2 each)
-      - Padding preserved for all convs (same spatial size until pixel-shuffle)
-      - conv -> ReLU -> BatchNorm (BatchNorm after activation per manuscript)
-      - Bilinear regridding after final pixel shuffle and before output activations
+    CNN model for climate downscaling as described in SMHI paper.
+    Purpose: Implements convolutional layers, pixel shuffle upscaling, and output activations.
+    Parameters:
+        x_shape (tuple): Input shape.
+        y_shape (tuple): Output shape.
+        base_channels (int): Base channels.
+        kernel_size (int): Kernel size.
+        dilation_rates (list): Dilation rates.
+        dilated_layer_indices (list): Layer indices for dilation.
+        pixel_shuffle_blocks (int): Number of pixel shuffle blocks.
+        pixel_shuffle_upscale_factor (int): Upscale factor for pixel shuffle.
+        num_pre_maps (int): Number of learnable pre-maps.
+        use_post_map_on_last (bool): Use post-map on last block.
+        loss_function_name (str): Loss function name.
+        output_activation (dict): Output activation specification.
     """
-
     def __init__(
         self,
         x_shape: Tuple[int, int, int],
@@ -191,6 +237,13 @@ class SMHICNN(nn.Module):
                 self._activation_map[idx] = act
 
     def forward(self, x):
+        """
+        Forward pass for SMHICNN model.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         # Number of samples
         B = x.shape[0]
 

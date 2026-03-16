@@ -13,18 +13,12 @@ from deep4production.utils.general import get_func_from_string
 
 # --------------------------------------------------------------------------------------------------------------
 class StandardDataset(Dataset):
-
     """
-    Standard Pytorch dataset for pairs of x and y. The input data must be a
-    np.ndarray.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Array representing the predictor data
-
-    y : np.ndarray
-        Array representing the predictand data
+    Standard Pytorch dataset for pairs of x and y.
+    Purpose: Provides batching and indexing for predictor and predictand arrays.
+    Parameters:
+        x (np.ndarray): Array representing the predictor data.
+        y (np.ndarray): Array representing the predictand data.
     """
 
     def __init__(self, x: np.ndarray, y: np.ndarray) -> None:
@@ -32,35 +26,34 @@ class StandardDataset(Dataset):
         self.y = torch.tensor(y)
 
     def __len__(self) -> int:
+        """
+        Returns number of samples in the dataset.
+        Returns:
+            int: Number of samples.
+        """
         return self.x.shape[0]
 
     def __getitem__(self, idx: int) -> (torch.Tensor, torch.Tensor):
+        """
+        Returns a tuple (x, y) for a given sample index.
+        Parameters:
+            idx (int): Sample index.
+        Returns:
+            tuple: (x, y)
+        """
         x = self.x[idx, :]
         y = self.y[idx, :]
         return x, y
 
 # --------------------------------------------------------------------------------------------------------------
 def precipitation_NLL_trans(data: xr.Dataset, threshold: float) -> xr.Dataset:
-    
     """
-    This function performs the transformation required for training
-    a model with the NLL of a Bernoulli and gamma distributions. The
-    main idea is to set a threshold that defines the wet days, so the
-    DL model learns the gamma only on wet days, avoiding biased amounts
-    if including the amount for dry days.
-
-    Parameters
-    ----------
-    data : xr.Dataset
-        Data to apply the transformation to.
-
-    threshold : float
-        Threshold defining the amount for wet days.
-
-    Returns
-    -------
-    xr.Dataset
-        The transformed data
+    Performs transformation for NLL Bernoulli-Gamma loss: sets threshold for wet days, zeros dry days.
+    Parameters:
+        data (xr.Dataset): Data to apply the transformation to.
+        threshold (float): Threshold defining the amount for wet days.
+    Returns:
+        xr.Dataset: The transformed data.
     """
     data_final = data.copy(deep=True)
     epsilon = 1e-06
@@ -73,18 +66,38 @@ def precipitation_NLL_trans(data: xr.Dataset, threshold: float) -> xr.Dataset:
 
 # --------------------------------------------------------------------------------------------------------------
 class EMA:
+    """
+    Exponential Moving Average (EMA) utility for model weights.
+    Purpose: Maintains shadow weights for model averaging during training.
+    Parameters:
+        model: PyTorch model.
+        device: Device string ('cpu' or 'cuda').
+        decay (float): EMA decay rate.
+    """
     def __init__(self, model, device, decay=0.5):
         self.model = model
         self.decay = decay
         # Initialize shadow weights as a copy of model parameters
         self.shadow = {name: param.clone().detach().to(device) for name, param in model.named_parameters() if param.requires_grad}
+
     def update(self):
+        """
+        Updates EMA shadow weights after each optimizer step.
+        Returns:
+            None
+        """
         # Update EMA after each optimizer step
         with torch.no_grad():
             for name, param in self.model.named_parameters():
                 if name in self.shadow:
                     self.shadow[name] = self.decay * self.shadow[name] + (1 - self.decay) * param
+
     def apply_shadow(self):
+        """
+        Copies EMA weights to the model for evaluation or sampling.
+        Returns:
+            None
+        """
         # Copy EMA weights to the model (for evaluation or sampling)
         for name, param in self.model.named_parameters():
             if name in self.shadow:
@@ -92,6 +105,21 @@ class EMA:
 
 # --------------------------------------------------------------------------------------------------------------
 def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_losses, metadata = None, scheduler=None):
+    """
+    Saves model checkpoint to disk, including optimizer, scheduler, losses, and metadata.
+    Parameters:
+        model: PyTorch model.
+        path (str): Output path for checkpoint.
+        optimizer: PyTorch optimizer.
+        epoch (int): Current epoch.
+        global_step (int): Current global step.
+        train_losses (list): Training losses.
+        valid_losses (list): Validation losses.
+        metadata (dict, optional): Metadata dictionary.
+        scheduler (optional): Learning rate scheduler.
+    Returns:
+        None
+    """
     checkpoint = {
         'epoch': epoch,
         'global_step': global_step,
@@ -107,6 +135,17 @@ def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_l
 
 # --------------------------------------------------------------------------------------------------------------
 def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
+    """
+    Loads model checkpoint and resumes training state.
+    Parameters:
+        model: PyTorch model.
+        path (str): Checkpoint path.
+        optimizer (optional): PyTorch optimizer.
+        scheduler (optional): Learning rate scheduler.
+        device (str): Device string ('cpu' or 'cuda').
+    Returns:
+        dict: Checkpoint dictionary.
+    """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
@@ -119,6 +158,16 @@ def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
 
 # --------------------------------------------------------------------------------------------------------------  
 def load_model(path, map_location=None, return_metadata=False):
+    """
+    Loads model from checkpoint, rebuilds model from metadata, loads weights, and returns model (and metadata).
+    Parameters:
+        path (str): Checkpoint path.
+        map_location (optional): Device mapping for torch.load.
+        return_metadata (bool): Whether to return metadata.
+    Returns:
+        model: PyTorch model.
+        metadata (optional): Metadata dictionary.
+    """
     # Load checkpoint
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     # Use metadata to rebuild model

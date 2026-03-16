@@ -4,6 +4,14 @@ import yaml
 from deep4production.classes.d4p_dataset import d4p_dataset
 
 def main():
+    """
+    Main entry point for the D4P dataset creation console script.
+    Purpose: Loads configuration from YAML, initializes dataset, and saves processed data to disk.
+    Parameters:
+        None (reads sys.argv for config file path)
+    Returns:
+        None
+    """
 
     # --- Get config from YAML ------------------------------------------
     config_file = sys.argv[1]
@@ -49,5 +57,5 @@ def main():
         print(f"Dataset (.zarr) already exists at: {output_path}")
 
 
-    
-    
+
+

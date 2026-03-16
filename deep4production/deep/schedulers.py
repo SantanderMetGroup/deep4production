@@ -1,4 +1,4 @@
-# Custom d4d schedulers. Set the following lines in the .yaml:
+# Custom d4d schedulers. Set the following lines in the .yaml file:
 # model_info: 
 #     training_params:
 #         scheduler_params:

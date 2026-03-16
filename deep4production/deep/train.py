@@ -19,66 +19,24 @@ def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: 
                            scheduler: torch.optim=None,
                            patience_early_stopping: int=None,
                            mixed_precision: bool=False) -> dict:
-    
     """
-    Standard training loop for a DL model in a supervised setting. Besides the
-    training, it is possible to perform a validation step and control the saving 
-    of the model through an early stopping strategy. To activate the latter, pass
-    a value to the argument patience_early_stopping, otherwise the training will 
-    continue for the num_epochs specified, saving the model at the end of each
-    epoch.
-
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Pytorch model to train
-
-    model_name : str
-        Name of the model when saved as
-        a .pt file
-
-    model_path : str
-        Path of the folder where the model
-        will be saved
-
-    loss_function : torch.nn.Module
-        Loss function to use when training/evaluating
-        the model
-
-    optimizer : torch.optim
-        Optimizer to use when training the model
-
-    num_epochs : int
-        Number of epochs
-
-    device : str
-        Device used to run the training (cuda or cpu)
-
-    train_data : torch.utils.data.dataloader.DataLoader
-        DataLoader with the training data
-
-    valid_data : torch.utils.data.dataloader.DataLoader, optional
-        DataLoader with the validation data
-
-    scheduler : torch.optim=None, optional
-        Scheduler to use for the optimization
-
-    patience_early_stopping : int, optional
-        Number of steps allowed for the model to run before
-        any improvement in the loss function occurs. If this
-        number is surpassd without improvement the training is
-        stopped.
-
-    mixed_precision : bool, optional
-        If training on GPUs, mixed_precision allows for automatic
-        mixed precision training to reduce computation and memory
-        footprint. By default this parameter is set to False.
-
-    Returns
-    -------
-    dict
-        Dictionary with list(s) representing the loss function
-        across epochs.
+    Standard training loop for a DL model in a supervised setting.
+    Purpose: Handles training, validation, early stopping, model saving, and mixed precision.
+    Parameters:
+        model (torch.nn.Module): Pytorch model to train.
+        model_name (str): Name of the model when saved as a .pt file.
+        model_path (str): Path of the folder where the model will be saved.
+        loss_function (torch.nn.Module): Loss function to use when training/evaluating the model.
+        optimizer (torch.optim): Optimizer to use when training the model.
+        num_epochs (int): Number of epochs.
+        device (str): Device used to run the training (cuda or cpu).
+        train_data (torch.utils.data.dataloader.DataLoader): DataLoader with the training data.
+        valid_data (torch.utils.data.dataloader.DataLoader, optional): DataLoader with the validation data.
+        scheduler (torch.optim, optional): Scheduler to use for the optimization.
+        patience_early_stopping (int, optional): Number of steps allowed before early stopping.
+        mixed_precision (bool, optional): Enables mixed precision training on GPUs.
+    Returns:
+        dict: Dictionary with lists representing the loss function across epochs.
     """
 
     model = model.to(device)
@@ -216,11 +174,21 @@ def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: 
 
 # -------------------------------------------------------------------------
 def update_params(optimizer, lr, scheduler = None):
-        # --- Update optimizer --- 
-        optimizer.step()
-        # --- Update scheduler --- 
-        if scheduler is not None:
-            scheduler.step()
-            lr = scheduler.get_last_lr()[0]
-        # --- Return ---
-        return lr  
+    """
+    Updates optimizer and scheduler, returns new learning rate.
+    Purpose: Steps optimizer and scheduler, updates learning rate for training loop.
+    Parameters:
+        optimizer: PyTorch optimizer.
+        lr: Current learning rate.
+        scheduler: Learning rate scheduler (optional).
+    Returns:
+        float: Updated learning rate.
+    """
+    # --- Update optimizer --- 
+    optimizer.step()
+    # --- Update scheduler --- 
+    if scheduler is not None:
+        scheduler.step()
+        lr = scheduler.get_last_lr()[0]
+    # --- Return ---
+    return lr

@@ -6,18 +6,28 @@ import math
 from deep4production.utils.general import get_func_from_string
 
 def impute_padding(kernel_size, dilation=1):
+    """
+    Computes padding for convolution given kernel size and dilation.
+    Parameters:
+        kernel_size (int): Kernel size.
+        dilation (int): Dilation rate.
+    Returns:
+        int: Padding value.
+    """
     return dilation * (kernel_size - 1) // 2
 
 class DeepESD(torch.nn.Module):
-
     """
-    DeepESD model as proposed in Baño-Medina et al. 2024. 
-
-    Baño-Medina, J., Manzanas, R., Cimadevilla, E., Fernández, J., González-Abad,
-    J., Cofiño, A. S., and Gutiérrez, J. M.: Downscaling multi-model climate projection
-    ensembles with deep learning (DeepESD): contribution to CORDEX EUR-44, Geosci. Model
-    Dev., 15, 6747–6758, https://doi.org/10.5194/gmd-15-6747-2022, 2022.
-
+    DeepESD model for deep learning climate downscaling.
+    Purpose: Implements convolutional layers for spatial prediction.
+    Parameters:
+        x_shape (tuple): Input shape.
+        y_shape (tuple): Output shape.
+        f_shape (list[int]): Forcing shape.
+        filters (list[int]): Filter sizes.
+        kernel_size (int): Kernel size.
+        loss_function_name (str): Loss function name.
+        output_activation (dict): Output activation specification.
     """
 
     def __init__(self, 
@@ -28,7 +38,17 @@ class DeepESD(torch.nn.Module):
                  kernel_size: int=3,
                  loss_function_name: str=None,
                  output_activation: dict = None):
-
+        """
+        Initializes DeepESD model.
+        Parameters:
+            x_shape (tuple): Input shape.
+            y_shape (tuple): Output shape.
+            f_shape (list[int]): Forcing shape.
+            filters (list[int]): Filter sizes.
+            kernel_size (int): Kernel size.
+            loss_function_name (str): Loss function name.
+            output_activation (dict): Output activation specification.
+        """
         super().__init__()
 
         ## --- Predictor checks ---
@@ -97,6 +117,14 @@ class DeepESD(torch.nn.Module):
                 self._activation_map[idx] = act
 
     def forward(self, x: torch.Tensor, f: None) -> torch.Tensor:
+        """
+        Forward pass of the DeepESD model.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+            f (torch.Tensor or None): Forcing tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         B = x.size(0)
         # --- First part: input and hidden layers ---
         x = self.conv_1(x)

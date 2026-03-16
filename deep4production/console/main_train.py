@@ -7,6 +7,14 @@ import mlflow
 from deep4production.utils.general import get_func_from_string
 
 def main():
+    """
+    Main entry point for the D4P training console script.
+    Purpose: Loads configuration from YAML, initializes trainer, sets up MLflow, and runs the training process.
+    Parameters:
+        None (reads sys.argv for config file path)
+    Returns:
+        None
+    """
     
     # --- Check .sh call ------------------------------------------
     if len(sys.argv) != 2:

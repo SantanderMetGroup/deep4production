@@ -47,6 +47,15 @@ class MaeLoss(nn.Module):
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
 
+        """
+        Computes MAE loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
+        """
+
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
         if target.ndim > 3: # stack spatial dimensions
             B, C, H, W = target.shape
@@ -71,20 +80,10 @@ class MaeLoss(nn.Module):
 class MseLoss(nn.Module):
 
     """
-    Standard Mean Square Error (MSE). It is possible to compute
-    this metric over a target dataset with nans.
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain.
-
-    target : torch.Tensor
-        Target/ground-truth data
-
-    output : torch.Tensor
-        Predicted data (model's output)
+    Standard Mean Square Error (MSE) loss.
+    Purpose: Computes MSE between target and output, optionally ignoring NaNs.
+    Parameters:
+        ignore_nans (bool): Ignore NaNs in target domain.
     """
 
     def __init__(self, ignore_nans: bool) -> None:
@@ -92,6 +91,14 @@ class MseLoss(nn.Module):
         self.ignore_nans = ignore_nans
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes MSE loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
+        """
         
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
         if target.ndim > 3: # stack spatial dimensions
@@ -116,28 +123,10 @@ class MseLoss(nn.Module):
 class NLLGaussianLoss(nn.Module):
 
     """
-    Negative Log-Likelihood of a Gaussian distribution. It is possible to compute
-    this metric over a target dataset with nans.
-
-    Notes
-    -----
-    Expects model output with separate mean and log-variance per channel.
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain.
-
-    target : torch.Tensor
-        Target/ground-truth data.
-        Shape: (B, C, H, W) or (B, C, GP)
-
-    output : torch.Tensor
-        Predicted data (model's output). 
-        Shape: (B, C, P, H, W) or (B, C, P, GP)
-            where P = 2 (mean, log_var)
-            GP = gridpoint
+    Negative Log-Likelihood Gaussian loss.
+    Purpose: Computes NLL for Gaussian distribution, optionally ignoring NaNs.
+    Parameters:
+        ignore_nans (bool): Ignore NaNs in target domain.
     """
 
     def __init__(self, ignore_nans: bool) -> None:
@@ -145,6 +134,14 @@ class NLLGaussianLoss(nn.Module):
         self.ignore_nans = ignore_nans
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes NLL Gaussian loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output (mean, log_var).
+        Returns:
+            torch.Tensor: Loss value.
+        """
 
         # --- Ensure same shape compatibility ---
         assert output.shape[2] == 2, f"Expected P=2 (mean, log_var), got {output.shape[2]}"
@@ -185,26 +182,11 @@ class NLLGaussianLoss(nn.Module):
 class NLLBerGammaLoss(nn.Module):
 
     """
-    Negative Log-Likelihood of a Bernoulli-gamma distributions. It is possible to compute
-    this metric over a target dataset with nans.
-
-    Notes
-    -----
-    This loss function needs as input three values, corresponding to the p, shape
-    and scale parameters. THese must be provided concatenated as an unique vector.
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain.
-
-    target : torch.Tensor
-        Target/ground-truth data
-
-    output : torch.Tensor
-        Predicted data (model's output). This vector must be composed
-        by the concatenation of the predicted p, shape and scale.
+    Negative Log-Likelihood Bernoulli-Gamma loss.
+    Purpose: Computes NLL for Bernoulli-Gamma distribution, optionally ignoring NaNs.
+    Parameters:
+        ignore_nans (bool): Ignore NaNs in target domain.
+        threshold (float): Threshold for wet days.
     """
 
     def __init__(self, ignore_nans: bool, threshold: float | None = None) -> None:
@@ -213,6 +195,14 @@ class NLLBerGammaLoss(nn.Module):
         self.threshold = threshold
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes NLL Bernoulli-Gamma loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output (p, shape, scale).
+        Returns:
+            torch.Tensor: Loss value.
+        """
         
         # --- Ensure same shape compatibility ---
         assert output.shape[1] == 3, f"Expected P=3 (p, shape, scale), got {output.shape[1]}"
@@ -266,52 +256,18 @@ class NLLBerGammaLoss(nn.Module):
 class Asym(nn.Module):
 
     """
-    Generalization of the asymmetric loss function tailored for daily precipitation developed in
-    Doury et al. 2024. It is possible to compute this metric over a target dataset
-    with nans.
-
-    Doury, A., Somot, S. & Gadat, S. On the suitability of a convolutional neural
-    network based RCM-emulator for fine spatio-temporal precipitation. Clim Dyn (2024).
-    https://doi.org/10.1007/s00382-024-07350-8
-
-    Notes
-    -----
-    This loss function relies on gamma distribution fitted for each gridpoint in the
-    spatial domain. This class provides all the methods require to fit these 
-    distributions to the data.
-
-    The level of asymmetry can be adjusted by the pairs asym_weight and cdf_pow.
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain.
-
-    asym_weight : float, optional
-        Weight for the asymmetric term at the loss function relative to the MAE term.
-        Default value: 1 (as in Doury et al., 2024)
-
-    cdf_pow : float, optional
-        Pow for the CDF at the asymmetric term of the loss function.
-        Default value: 2 (as in Doury et al., 2024)
-        Higher values make a bigger differentiation between the weight for high/low percentiles
-
-    asym_path : str
-        Path to the folder to save the fitted distributions.
-
-    appendix : str, optional
-        String to add to the files generated/loaded for this loss function.
-        (e.g., appendix=test1 -> scale_test1.npy). If not provided no appendix
-        will be added.
-
-    target : torch.Tensor
-        Target/ground-truth data
-
-    output : torch.Tensor
-        Predicted data (model's output). This vector must be composed
-        by the concatenation of the predicted mean and logarithm of the
-        variance.
+    Asymmetric loss function for precipitation downscaling.
+    Purpose: Computes asymmetric loss using fitted gamma distributions.
+    Parameters:
+        ref_path (str): Reference data path.
+        var (str): Target variable.
+        ignore_nans (bool): Ignore NaNs in target domain.
+        asym_path (str): Path to save/load gamma parameters.
+        type (str): Fitting type ('per_year' or 'full').
+        asym_weight (float): Weight for asymmetric term.
+        cdf_pow (float): Power for CDF term.
+        threshold (float): Threshold for wet days.
+        appendix (str): File appendix.
     """
 
     def __init__(self, ref_path: str, var: str, 
@@ -377,7 +333,9 @@ class Asym(nn.Module):
 
     def parameters_exist(self):
         """
-        Check for the existence of the gamma distributions
+        Checks if gamma distribution parameters exist.
+        Returns:
+            bool: True if parameters exist.
         """
 
         shape_exist = os.path.exists(self.shape_path)
@@ -387,7 +345,9 @@ class Asym(nn.Module):
 
     def load_parameters(self):
         """
-        Load the gamma distributions from asym_path.
+        Loads gamma distribution parameters from files.
+        Returns:
+            tuple: (shape, scale, loc) arrays.
         """
 
         shape = np.load(self.shape_path)
@@ -398,20 +358,12 @@ class Asym(nn.Module):
     def _compute_gamma_parameters(self, x: np.ndarray, threshold: float=1.0) -> tuple:
 
         """
-        Fit a gamma distribution to the wet days of the provided
-        1D np.ndarray.
-
-        Parameters
-        ----------      
-        x : np.ndarray
-            1D np.ndarray containing the precipitation values across time
-            for a specific gridpoint.com
-
-        Returns
-        -------
-        tuple
-        The shape, loc and scale parameters of the fitted gamma
-        distribution.
+        Fits gamma distribution to wet days in 1D array.
+        Parameters:
+            x (np.ndarray): Precipitation values.
+            threshold (float): Wet day threshold.
+        Returns:
+            tuple: (shape, loc, scale) parameters.
         """
 
         # If nan return nan
@@ -427,17 +379,14 @@ class Asym(nn.Module):
             return fit_shape, fit_loc, fit_scale
 
     def compute_parameters(self, data, dates=None, type="full"):
-
         """
-        Iterate over the xr.Dataset and compute for each spatial gridpoint
-        the parameters of a fitted gamma distribution for the wet days.
-
-        Parameters
-        ----------      
-        data : ... (2D np.array) --> dimensions BxGP (batch, sgridpoint)
-
-        var_target : str
-            Target variable.
+        Computes gamma parameters for each spatial gridpoint.
+        Parameters:
+            data (np.ndarray): Input data array.
+            dates (list): List of dates.
+            type (str): Fitting type.
+        Returns:
+            None
         """
 
         # --- Fit a Gamma distribution ---
@@ -457,25 +406,19 @@ class Asym(nn.Module):
         scale = gamma_params[2, :]
         loc = gamma_params[1, :]
 
-        # # --- Fit a Gamma distribution (per year) ---
-        # gamma_params = []
-        # group_years = data.groupby('time.year')
-        # for year, group in group_years:
-        #     print(f'Year: {year}')
-        #     y_year = group[var_target].values
-        #     params_year = np.apply_along_axis(self._compute_gamma_parameters, axis=0, arr=y_year) # shape, loc, scale
-        #     gamma_params.append(params_year)
-        # gamma_params = np.nanmean(np.stack(gamma_params), axis=0)
-        # shape = gamma_params[0, :]
-        # scale = gamma_params[2, :]
-        # loc = gamma_params[1, :]
-
         # --- Save the parameters in the asym_path ---
         np.save(file=self.shape_path, arr=shape)
         np.save(file=self.scale_path, arr=scale)
         np.save(file=self.loc_path, arr=loc)
 
     def prepare_parameters(self, shape, scale, loc):
+        """
+        Converts parameters to torch tensors and handles NaNs.
+        Parameters:
+            shape, scale, loc: Gamma parameters.
+        Returns:
+            tuple: (shape, scale, loc) tensors.
+        """
         # --- Convert to torch tensor ---
         shape = torch.tensor(shape).to(self.device)
         scale = torch.tensor(scale).to(self.device)
@@ -494,17 +437,14 @@ class Asym(nn.Module):
         return shape, scale, loc
 
     def compute_cdf(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Computes CDF for input data using fitted gamma parameters.
+        Parameters:
+            data (torch.Tensor): Input data.
+        Returns:
+            torch.Tensor: CDF values.
+        """
     
-        """
-        Compute the value of the cumulative distribution function (CDF) for
-        the data.
-
-        Parameters
-        ----------      
-        data : torch.Tensor
-            Data (from the target dataset) to compute the CDF for.
-        """
-
         # Compute cdfs for Torch
         if isinstance(data, torch.Tensor):
             data = data - self.loc # For scipy, loc corresponds to the mean
@@ -527,10 +467,15 @@ class Asym(nn.Module):
         return cdfs
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes asymmetric loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
+        """
 
-        """
-        Compute the loss function for the target and output data
-        """
         # --- Only univariate cases ---
         assert target.shape[1] == 1, f"Expected univariate target (C=1), got {target.shape[1]}"
 
@@ -562,18 +507,50 @@ class Asym(nn.Module):
 ### -------------------------------------------------------------------------------- ###
 ### -------------------- Weighted Denoising Score Matching Loss -------------------- ###
 class WeightedDenoisingScoreMatchingLoss(nn.Module):
+    """
+    Weighted Denoising Score Matching loss for diffusion models.
+    Purpose: Computes DSM loss for denoising tasks.
+    Parameters:
+        ignore_nans (bool): Ignore NaNs in target domain.
+        sigma_data (float): Data noise level.
+    """
+
     def __init__(self, ignore_nans: bool = False, sigma_data: float = 0.5) -> None:   
         super().__init__()
         self.ignore_nans = ignore_nans
         self.sigma_data = sigma_data
 
     def c_skip(self, sigma_t):
+        """
+        Computes skip coefficient for DSM loss.
+        Parameters:
+            sigma_t: Noise level tensor.
+        Returns:
+            float: Skip coefficient.
+        """
         return self.sigma_data ** 2 / (self.sigma_data ** 2 + sigma_t ** 2)
 
     def c_out(self, sigma_t):
+        """
+        Computes output coefficient for DSM loss.
+        Parameters:
+            sigma_t: Noise level tensor.
+        Returns:
+            float: Output coefficient.
+        """
         return self.sigma_data * sigma_t / (self.sigma_data ** 2 + sigma_t ** 2) ** (0.5)
 
     def forward(self, target: torch.Tensor, output: torch.Tensor, sigma_t: torch.Tensor, r_t: torch.Tensor = None) -> torch.Tensor:
+        """
+        Computes DSM loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+            sigma_t (torch.Tensor): Noise level.
+            r_t (torch.Tensor): Reference tensor.
+        Returns:
+            torch.Tensor: Loss value.
+        """
         
         # Rescale target since we are computing the loss against the raw denoiser output, i.e., against F and not D in the Karras et al., 
         target_rescaled = (target - self.c_skip(sigma_t) * r_t) / self.c_out(sigma_t)
@@ -594,18 +571,15 @@ class WeightedDenoisingScoreMatchingLoss(nn.Module):
 ### -------------------- Quantised MSE Loss ---------------------------------------- ###
 class QuantisedMSELoss(nn.Module):
     """
-    Implements the Quantised MSE (QMSE) + standard MSE (with coefficient α).
-
-    Parameters
-    ----------
-    zarr_path : str
-        Path to Zarr store containing training target data.
-    alpha : float
-        Weight multiplying the QMSE term in the final combined loss.
-    n_quantiles : int
-        Number of quantile bins for QMSE.
-    ignore_nans : bool
-        Whether to ignore NaNs in both MSE and QMSE computations.
+    Quantised MSE (QMSE) loss plus standard MSE.
+    Purpose: Computes QMSE and MSE for quantile bins.
+    Parameters:
+        zarr_path (str): Path to Zarr store.
+        var (str): Target variable.
+        alpha (float): Weight for QMSE term.
+        n_quantiles (int): Number of quantile bins.
+        threshold (float): Threshold for NaN conversion.
+        ignore_nans (bool): Ignore NaNs in computations.
     """
 
     def __init__(self, 
@@ -642,6 +616,14 @@ class QuantisedMSELoss(nn.Module):
     # Compute QMSE for a batch
     # ------------------------------------------------------------
     def _compute_qmse(self, target: torch.Tensor, output: torch.Tensor):
+        """
+        Computes QMSE for a batch.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: QMSE value.
+        """
 
         # ----- reshape (B,C,H,W) → (B*C*G) -----
         if target.ndim > 3:
@@ -691,6 +673,14 @@ class QuantisedMSELoss(nn.Module):
     # Final Loss = MSE + α * QMSE
     # ------------------------------------------------------------
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes combined MSE and QMSE loss.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
+        """
         # ------------------------------------------------------------
         # Assert that C = 1 (univariate regression)
         # ------------------------------------------------------------
@@ -734,15 +724,11 @@ class QuantisedMSELoss(nn.Module):
 
 class BinaryCrossEntropyLoss(nn.Module):
     """
-    N-dimensional Cross Entropy Loss supporting:
-    - Shapes (B, C, G)  or (B, C, H, W)
-    - Multivariate cases (C >= 1)
-    - Optional NaN masking in the target
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        If True, locations where target = nan will be ignored.
+    N-dimensional Binary Cross Entropy loss.
+    Purpose: Computes BCE for binary targets, supports NaN masking.
+    Parameters:
+        threshold (float): Threshold for binarization.
+        ignore_nans (bool): Ignore NaNs in target domain.
     """
 
     def __init__(self, threshold: 1.0, ignore_nans: bool = False):
@@ -760,14 +746,13 @@ class BinaryCrossEntropyLoss(nn.Module):
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        output : torch.Tensor
-            Logits of shape (B, C, G) or (B, C, H, W)
-        target : torch.Tensor
-            Binary labels in {0,1}, same shape as output
+        Computes BCE loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
         """
-
 
         # --- Check shapes match -----------------------------
         if target.shape != output.shape:
@@ -829,24 +814,13 @@ class BinaryCrossEntropyLoss(nn.Module):
 
 class BernoulliFocalLoss(nn.Module):
     """
-    N-dimensional Bernoulli Focal Loss (binary Focal Loss).
-
-    Supports:
-      - Shapes (B, C, G) or (B, C, H, W)
-      - Multivariate channels (C >= 1)
-      - Optional NaN masking
-      - Same gamma, alpha, and threshold for all channels
-
-    Parameters
-    ----------
-    gamma : float
-        Focusing parameter γ ≥ 0.
-    alpha : float
-        Weight for positive class (0 < alpha < 1)
-    threshold : float
-        Threshold to binarize targets
-    ignore_nans : bool
-        Whether to ignore NaNs in target.
+    N-dimensional Bernoulli Focal Loss.
+    Purpose: Computes focal loss for binary targets, supports NaN masking.
+    Parameters:
+        gamma (float): Focusing parameter.
+        alpha (float): Weight for positive class.
+        threshold (float): Threshold for binarization.
+        ignore_nans (bool): Ignore NaNs in target domain.
     """
 
     def __init__(self, gamma: float = 2.0, alpha: float = 0.25, threshold: float = 1.0, ignore_nans: bool = False):
@@ -858,12 +832,12 @@ class BernoulliFocalLoss(nn.Module):
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        output : torch.Tensor
-            Raw output data of shape (B, C, G) or (B, C, H, W)
-        target : torch.Tensor
-            Raw target data, same shape as output, will be binarized.
+        Computes Bernoulli focal loss between target and output.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (torch.Tensor): Model output.
+        Returns:
+            torch.Tensor: Loss value.
         """
 
         if target.shape != output.shape:
@@ -909,46 +883,15 @@ class BernoulliFocalLoss(nn.Module):
 class CRPSSpectralLoss(nn.Module):
 
     """
-    Fair Continuous Ranked Probability Score (CRPS). Following Nordhagen et al. (2025),
-    we combine the pointwise and the spectral CRPS. The spectral CRPS is computed by
-    applying a Fourier transform to the field and then computing the CRPS.
-
-    Nordhagen, E. M., Haugen, H. H., Salihi, A. F. S., Ingstad, M. S.,
-    Nipen, T. N., Seierstad, I. A., ... & Kristiansen, J. (2025).
-    High-Resolution Probabilistic Data-Driven Weather Modeling with a
-    Stretched-Grid. arXiv preprint arXiv:2511.23043.
-
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain. This only applies to the pointwise CRPS.
-
-    H_shape : int
-        Height of the predictand's spatial domain.
-
-    W_shape : int
-        Width of the predictand's spatial domain.
-
-    beta : int
-        Power parameter for the absolute differences in the CRPS computation.
-
-    lambda_spectral : float
-        Weight for the spectral CRPS.
-
-    spatial_resolution : float, optional
-        Spatial resolution of the predictand grid in km. When provided, a
-        low-pass filter is applied in the spectral CRPS branch to remove
-        frequencies beyond the Nyquist limit k_N = 2*pi/(2*spatial_resolution).
-        If None, no spectral filtering is applied.
-
-    target : torch.Tensor
-        Target/ground-truth data
-
-    output : list of torch.Tensor or torch.Tensor
-        List of predicted data (model's outputs) for ensemble predictions,
-        or a single tensor (which will be wrapped in a list automatically).
-        For proper CRPS computation, at least 2 ensemble members are required.
+    Fair Continuous Ranked Probability Score (CRPS) with spectral component.
+    Purpose: Computes CRPS and spectral CRPS for ensemble predictions.
+    Parameters:
+        ignore_nans (bool): Ignore NaNs in target domain.
+        H_shape (int): Height of spatial domain.
+        W_shape (int): Width of spatial domain.
+        beta (int): Power parameter for CRPS.
+        lambda_spectral (float): Weight for spectral CRPS.
+        spatial_resolution (float): Spatial resolution for filtering.
     """
 
     def __init__(self, ignore_nans: bool,
@@ -968,6 +911,14 @@ class CRPSSpectralLoss(nn.Module):
         self.filter_nans = False # Control whether to filter out nans in _CRPS_pointwise
 
     def _CRPS_pointwise(self, target: torch.Tensor, output) -> torch.Tensor:
+        """
+        Computes pointwise CRPS for ensemble predictions.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (list): List of ensemble predictions.
+        Returns:
+            torch.Tensor: CRPS value.
+        """
         
         if self.ignore_nans and self.filter_nans:
             nans_idx = torch.isnan(target)
@@ -999,6 +950,13 @@ class CRPSSpectralLoss(nn.Module):
         return loss
 
     def _FFT(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Computes FFT for input data, applies low-pass filtering if needed.
+        Parameters:
+            data (torch.Tensor): Input data.
+        Returns:
+            torch.Tensor: FFT-transformed data.
+        """
 
         # It does not make sense to filter out nans in the spectral domain
         self.filter_nans = False
@@ -1034,6 +992,14 @@ class CRPSSpectralLoss(nn.Module):
         return data
         
     def forward(self, target: torch.Tensor, output) -> torch.Tensor:
+        """
+        Computes combined CRPS and spectral CRPS loss.
+        Parameters:
+            target (torch.Tensor): Target data.
+            output (list or torch.Tensor): Ensemble predictions.
+        Returns:
+            torch.Tensor: Loss value.
+        """
 
         if isinstance(output, torch.Tensor):
             output = [output]
@@ -1050,121 +1016,3 @@ class CRPSSpectralLoss(nn.Module):
         # Compute total loss
         loss = crps_field + self.lambda_spectral * crps_spectral
         return loss
-
-
-# # ------------------------------------------------------------------------------------------------------------------------
-# class CRPSSpectralLoss(nn.Module):
-#     """
-#     CRPS + Spectral CRPS loss for statistical downscaling.
-
-#     Supports:
-#         target: (B, C, G) or (B, C, H, W)
-#         output: (B, M, C, G) or (B, M, C, H, W)
-    
-#      Loss:
-#         L = CRPS_point(output, target) 
-#             + lambda_freq * CRPS_point( FFT(output), FFT(target) )
-#     """
-
-#     def __init__(self, lambda_freq=0.1, lowpass_ratio=0.25, H=None, W=None):
-#         super().__init__()
-#         self.lambda_freq = lambda_freq
-#         self.eps_ratio = 0.05 
-#         self.lowpass_ratio = lowpass_ratio
-#         self.H = H
-#         self.W = W
-
-
-#     # ---------------------------------------------------------
-#     def _crps_pointwise(self, pred, target):
-#         """
-#         pred:   (B, M, C, G)
-#         target: (B, C, G)
-#         """
-#         B, M, C, G = pred.shape
-#         eps = self.eps_ratio / M  # epsilon = 0.05 / M
-
-#         # Expand target across ensemble dimension
-#         target_exp = target.unsqueeze(1)  # (B, 1, C, G)
-
-#         # ---- Term 1: MAE between ensemble member & truth ----
-#         mae = torch.abs(pred - target_exp).mean(dim=1)  # (B, C, G)
-#         term1 = mae.mean()
-
-#         # ---- Term 2: ensemble spread ----
-#         pred_i = pred.unsqueeze(2)  # (B, M, 1, C, G)
-#         pred_j = pred.unsqueeze(1)  # (B, 1, M, C, G)
-#         pairwise = torch.abs(pred_i - pred_j)  # (B, M, M, C, G)
-
-#         # Remove diagonal safely
-#         diag = torch.eye(M, device=pred.device).bool().view(1, M, M, 1, 1)
-#         pairwise = pairwise.masked_fill(diag, 0.0)  # zero out diagonal
-#         spread = pairwise.sum(dim=2) / (M - 1)      # mean over other members
-#         term2 = spread.mean() * (1 - eps)
-
-#         return term1 - 0.5 * term2
-
-#     # ---------------------------------------------------------
-#     def _lowpass_fft(self, x):
-#         """
-#         Apply 2D rFFT over spatial dimensions (H, W) with low-pass filtering.
-
-#         x: (B, M, C, G) or (B, M, C, H, W)
-#         - If G, assumes self.H and self.W are set and G = H*W
-#         Returns: (B, M, C, H_freq, W_freq) filtered FFT
-#         """
-
-#         # --- Reshape flattened G to (H, W) if needed ---
-#         if x.ndim == 4:  # (B, M, C, G)
-#             B, M, C, G = x.shape
-#             assert G == self.H * self.W, "G must equal H*W"
-#             x = x.reshape(B, M, C, self.H, self.W)
-
-#         # --- Compute 2D rFFT along spatial dims ---
-#         X = torch.fft.rfft2(x, dim=(-2, -1))  # shape: (B, M, C, H, W_freq)
-#         H, W_freq = X.shape[-2], X.shape[-1]
-
-#         # --- Build low-pass mask ---
-#         cut_h = max(int(H * self.lowpass_ratio), 1)
-#         cut_w = max(int(W_freq * self.lowpass_ratio), 1)
-#         mask = torch.zeros_like(X, dtype=torch.bool)
-#         mask[..., :cut_h, :cut_w] = True
-
-#         # --- Apply mask ---
-#         X_filtered = X * mask
-#         return X_filtered
-
-#     # ---------------------------------------------------------
-#     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-#         """
-#         target: (B, C, G) or (B, C, H, W)
-#         output: (B, M, C, G) or (B, M, C, H, W)
-#         """
-
-#         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
-#         if target.ndim > 3: # stack spatial dimensions
-#             B, C, H, W = target.shape
-#             target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-#         if output.ndim > 3: # stack spatial dimensions
-#             B, M, C, H, W = output.shape
-#             output = output.reshape(B, M, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-        
-#         # # --- Remove Nans if present ---
-#         # if self.ignore_nans:
-#         #     nans_idx = torch.isnan(target)
-#         #     output = output[~nans_idx]
-#         #     target = target[~nans_idx]
-        
-#         # ---------------- Pointwise CRPS ----------------
-#         crps_p = self._crps_pointwise(output, target) # (B, C, G) → scalar
-
-#         # ---------------- Spectral CRPS -----------------
-#         output_fft = self._lowpass_fft(output).reshape(B, M, C, -1)
-#         # print(output_fft.shape)
-#         target_fft = self._lowpass_fft(target.unsqueeze(1)).reshape(B, C, -1)  # (B, M, C, G)
-#         # print(target_fft.shape)
-#         crps_f = self._crps_pointwise(output_fft.abs(), target_fft.abs())
-
-#         # ---------------- Total Loss --------------------
-#         loss = crps_p + self.lambda_freq * crps_f
-#         return loss

@@ -13,6 +13,20 @@ from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.deep.utils import load_model
 ########################################################################################################
 class d4d_pydataset_custom(d4d_pydataset):
+    """
+    Custom dataset class for residual-based deep learning models.
+    Purpose: Loads predictors, predictands, regressor model, computes and stores residuals, and provides context for model training.
+    Parameters:
+        predictors (dict): Predictor dataset configuration.
+        predictands (dict): Predictand dataset configuration.
+        temporal_period (list): List of target dates.
+        dataset (str): 'training' or 'validation'.
+        path_regressor (str): Path to regressor model.
+        residuals (dict): Residuals configuration.
+        load_in_memory (bool): Whether to load all data into memory.
+        add_pred_mean (bool): Whether to add deterministic prediction as context.
+        add_context_lowres (bool): Whether to add low-res predictors as context.
+    """
     def __init__(self, 
                 predictors: dict,
                 predictands: dict,
@@ -74,6 +88,11 @@ class d4d_pydataset_custom(d4d_pydataset):
 
     # -------------------------------------------------------------------------
     def update_sample_map(self):
+        """
+        Updates sample map with additional indexing for residuals.
+        Returns:
+            dict: Updated sample map.
+        """
         sm = self.sample_map
         for i in range(self.num_samples):
             sm[i].extend([0, i])
@@ -81,6 +100,14 @@ class d4d_pydataset_custom(d4d_pydataset):
 
     # -------------------------------------------------------------------------
     def forward_pass_regressor(self, path, date):
+        """
+        Runs regressor model for a given date and saves output and residuals to NetCDF.
+        Parameters:
+            path (str): Output NetCDF path.
+            date: Target date.
+        Returns:
+            None
+        """
         # -- Get sample --
         i_X, j_X = self.get_idx_sample(date, self.x)
         i_Y, j_Y = self.get_idx_sample(date, self.y)
@@ -138,6 +165,13 @@ class d4d_pydataset_custom(d4d_pydataset):
 
     # -------------------------------------------------------------------------
     def __getitem__(self, idx):
+        """
+        Returns a tuple (residual, c_low, c_high) for a given sample index.
+        Parameters:
+            idx (int): Sample index.
+        Returns:
+            tuple: (residual, c_low, c_high)
+        """
         # -- Get sample --
         idx_zarr_X, idx_real_X, idx_zarr_Y, idx_real_Y, idx_zarr_R, idx_real_R = self.sample_map[idx]
         # print(f"{idx_zarr_X} - {idx_real_X} - {idx_zarr_Y} - {idx_real_Y} - {idx_zarr_R} - {idx_real_R}")

@@ -26,7 +26,19 @@ from deep4production.utils.mlflow import *
 class d4p_trainer:
     def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None):
         """
-        Initializes D4D trainer.
+        Initializes the d4p_trainer class.
+        
+        Purpose:
+            Sets up the trainer with data, dataloader, model info, graph, metadata, and MLflow tracking.
+        
+        Parameters:
+            data (dict): Dataset configuration and paths.
+            dataloader (dict): Dataloader parameters (batch size, shuffle, num_workers).
+            id_dir (str): Directory for experiment outputs.
+            model_info (dict): Model, loss, saving, and training parameters.
+            graph (dict, optional): Graph configuration for GNN models.
+            d4dpy (dict, optional): Custom pydataset configuration.
+            Mlflow (dict, optional): MLflow tracking configuration.
         """
         print("🚀 STARTING D4D TRAINER")
         # --- SELF PARAMETERS ---------------------------------------
@@ -107,6 +119,17 @@ class d4p_trainer:
                 
     # -------------------------------------------------------------------------
     def build_metadata(self):
+        """
+        Builds and returns a metadata dictionary containing model and loss parameters.
+        
+        Purpose:
+            Collects and organizes model and loss configuration for tracking and reproducibility.
+        
+        Parameters:
+            None (uses self attributes)
+        Returns:
+            dict: Metadata dictionary.
+        """
         # --- INIT METADATA DICTIONARY ---
         metadata_dict = {}
         metadata_dict["id_dir"] = self.id_dir
@@ -125,6 +148,17 @@ class d4p_trainer:
 
     # -------------------------------------------------------------------------
     def cont_metadata(self, pydataset):
+        """
+        Updates metadata dictionary with additional information from the pydataset.
+        
+        Purpose:
+            Adds variables, lagged info, spatial info, normalizer and operator parameters, and forcings to metadata.
+        
+        Parameters:
+            pydataset: Dataset object with methods to extract relevant info.
+        Returns:
+            dict: Updated metadata dictionary.
+        """
         ### Variables
         self.metadata_dict["vars_x"], self.metadata_dict["vars_y"] = pydataset.get_vars()
         ### Lagged info
@@ -151,6 +185,17 @@ class d4p_trainer:
 
     # -------------------------------------------------------------------------
     def get_pydatasets(self):
+        """
+        Creates training and validation pydataset objects, updates metadata, and prepares for MLflow diagnostics.
+        
+        Purpose:
+            Instantiates pydataset objects for training and validation, updates metadata, and prepares MLflow targets.
+        
+        Parameters:
+            None (uses self attributes)
+        Returns:
+            tuple: (train_dataset, valid_dataset)
+        """
         ## Create pydatasets
         kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "forcings": self.data.get("forcings", {}), "load_in_memory": self.data.get("load_in_memory", True)}
         kwargs_pydataset.update(**self.d4dpy)
@@ -169,6 +214,18 @@ class d4p_trainer:
 
     # -------------------------------------------------------------------------
     def get_dataloaders(self, train_dataset, valid_dataset):
+        """
+        Creates PyTorch DataLoader objects for training and validation datasets.
+        
+        Purpose:
+            Sets up DataLoader objects using parameters from YAML config for efficient batch processing.
+        
+        Parameters:
+            train_dataset: Training dataset object.
+            valid_dataset: Validation dataset object (optional).
+        Returns:
+            tuple: (train_dataloader, valid_dataloader)
+        """
         ## Some parameters
         num_workers = self.dataloader.get("num_workers", 0)
         if self.dataloader.get("num_workers", None) is None:
@@ -190,10 +247,38 @@ class d4p_trainer:
 
     # -------------------------------------------------------------------------
     def get_num_trainable_parameters(self):
-      return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        """
+        Returns the total number of trainable parameters in the model.
+        
+        Purpose:
+            Useful for model size reporting and debugging.
+        
+        Parameters:
+            None (uses self.model)
+        Returns:
+            int: Number of trainable parameters.
+        """
+        return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, is_this_training=True, **kwargs):
+        """
+        Performs a single forward and backward pass for a batch, computes loss, and optionally backpropagates.
+        
+        Purpose:
+            Handles the core training step for one batch, including loss computation and gradient update.
+        
+        Parameters:
+            model: PyTorch model.
+            data: Tuple of input, target, and optional forcing arrays.
+            optimizer: PyTorch optimizer.
+            loss_function: Loss function callable.
+            device: Device string ('cpu' or 'cuda').
+            is_this_training (bool): Whether to perform backpropagation.
+            **kwargs: Additional arguments.
+        Returns:
+            float: Loss value for the batch.
+        """
         # --- Get arrays as defined in the pydataset class. ---
         x, y, f = data
         x = x.to(device)
@@ -234,7 +319,24 @@ class d4p_trainer:
         kwargs: dict = {},
     ) -> dict:
         """
-        Training loop.
+        Runs the main training loop, handles optimizer, scheduler, early stopping, model saving, MLflow logging, and diagnostics.
+        
+        Purpose:
+            Orchestrates the full training process, including validation, early stopping, model saving, and MLflow integration.
+        
+        Parameters:
+            training_params (dict): Training configuration (epochs, optimizer, scheduler, etc).
+            saving_params (dict): Model saving configuration.
+            model (torch.nn.Module): Model to train.
+            loss_function: Loss function callable.
+            device: Device string ('cpu' or 'cuda').
+            train_data: Training DataLoader.
+            valid_data: Validation DataLoader (optional).
+            ema_decay (float, optional): EMA decay rate.
+            metadata (dict, optional): Metadata dictionary.
+            kwargs (dict, optional): Additional arguments.
+        Returns:
+            tuple: (train_losses, valid_losses)
         """
         # --- Get some training parameters ------------------------------------------------
         num_epochs = training_params["num_epochs"]
@@ -511,7 +613,16 @@ class d4p_trainer:
     # -------------------------------------------------------------------------
     def train(self, train_dataloader, valid_dataloader):
         """
-        Perform model training.
+        High-level method to start training using the training loop.
+        
+        Purpose:
+            Calls the training loop, handles MLflow run ending, and prints completion message.
+        
+        Parameters:
+            train_dataloader: Training DataLoader.
+            valid_dataloader: Validation DataLoader.
+        Returns:
+            tuple: (train_loss, val_loss)
         """
         print(f"✅ CONFIGURATION READY FOR: {self.model_save_name}")   
         train_loss, val_loss = self.training_loop( 

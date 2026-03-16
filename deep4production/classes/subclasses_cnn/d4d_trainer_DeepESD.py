@@ -7,10 +7,20 @@ from torch_geometric.data import HeteroData
 from deep4production.classes.d4d_trainer import d4d_trainer
 ##################################################################################################################################
 class d4d_trainer_custom(d4d_trainer):
+    """
+    Custom trainer class for DeepESD models using ensemble members.
+    Purpose: Handles batch training, ensemble prediction, and loss computation for CNN-based models.
+    Parameters:
+        data (dict): Dataset configuration.
+        dataloader (dict): Dataloader parameters.
+        id_dir (str): Experiment directory.
+        model_info (dict): Model, loss, saving, and training parameters.
+        graph (dict): Graph configuration (optional).
+        d4dpy (dict): Custom pydataset configuration.
+        Mlflow (dict): MLflow tracking configuration.
+    """
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow):
-        """
-        XX
-        """
+
         ######### Call parent constructor to initialize common attributes #########
         super().__init__(
             data=data,
@@ -25,20 +35,19 @@ class d4d_trainer_custom(d4d_trainer):
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, is_this_training=True, members=2):
         """
-        Perform a forward + backward pass for one batch with ensemble members.
-
-        Args:
-            model: PyTorch model
-            data: tuple (x, y, f) from dataset
-            optimizer: optimizer
-            loss_function: CRPSSpectralLoss or other loss
-            device: torch.device
-            is_this_training: bool, whether to call backward()
-            members: int, ensemble size
+        Performs a single forward and backward pass for a batch using ensemble prediction.
+        Purpose: Runs forward passes for each ensemble member, stacks predictions, computes loss, and performs backpropagation.
+        Parameters:
+            model: PyTorch model.
+            data: Tuple of input, target, and forcing arrays.
+            optimizer: PyTorch optimizer.
+            loss_function: Loss function callable.
+            device: Device string ('cpu' or 'cuda').
+            is_this_training (bool): Whether to perform backpropagation.
+            members (int): Number of ensemble members.
         Returns:
-            loss value (float)
+            float: Loss value for the batch.
         """
-
         # --- Get arrays ---
         x, y, f = data
         x = x.to(device)

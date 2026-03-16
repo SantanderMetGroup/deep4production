@@ -7,6 +7,18 @@ from torch_geometric.data import HeteroData
 from deep4production.classes.d4d_trainer import d4d_trainer
 ##################################################################################################################################
 class d4d_trainer_custom(d4d_trainer):
+    """
+    Custom trainer class for GNN4CD models using PyTorch Geometric.
+    Purpose: Handles graph-based batch training, builds HeteroData structures, and computes loss for GNN models.
+    Parameters:
+        data (dict): Dataset configuration.
+        dataloader (dict): Dataloader parameters.
+        id_dir (str): Experiment directory.
+        model_info (dict): Model, loss, saving, and training parameters.
+        graph (dict): Graph configuration for GNN models.
+        d4dpy (dict): Custom pydataset configuration.
+        Mlflow (dict): MLflow tracking configuration.
+    """
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow):
         """
         Initializes the Residual Generator trainer.
@@ -24,7 +36,20 @@ class d4d_trainer_custom(d4d_trainer):
 
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, edge_index, is_this_training=True):
-
+        """
+        Performs a single forward and backward pass for a batch using graph-based input.
+        Purpose: Builds HeteroData structure, feeds to GNN model, computes loss, and performs backpropagation.
+        Parameters:
+            model: PyTorch model.
+            data: Tuple of input, target, and forcing arrays.
+            optimizer: PyTorch optimizer.
+            loss_function: Loss function callable.
+            device: Device string ('cpu' or 'cuda').
+            edge_index: Tuple of edge indices for graph structure.
+            is_this_training (bool): Whether to perform backpropagation.
+        Returns:
+            float: Loss value for the batch.
+        """
         # --- Get arrays as defined in the pydataset class. ---
         x, y, f = data
         y = y.to(device)
@@ -51,4 +76,4 @@ class d4d_trainer_custom(d4d_trainer):
             loss.backward()
 
         # --- Return ---
-        return loss.item() 
+        return loss.item()

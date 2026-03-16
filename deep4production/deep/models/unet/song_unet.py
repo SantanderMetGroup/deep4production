@@ -16,19 +16,52 @@ import torch.nn.functional as F
 
 # -- Utilities ----------------------------
 def exists(x):
+    """
+    Checks if the input is not None.
+    Parameters:
+        x: Any object.
+    Returns:
+        bool: True if x is not None.
+    """
     return x is not None
 
 def default(x, d):
+    """
+    Returns x if it exists, otherwise returns default value d.
+    Parameters:
+        x: Any object.
+        d: Default value.
+    Returns:
+        Any: x or d.
+    """
     return x if exists(x) else d
 
 class SiLU(nn.Module):
+    """
+    SiLU activation function module.
+    Purpose: Applies the SiLU activation to input tensor.
+    """
     def forward(self, x):
+        """
+        Applies SiLU activation.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Activated tensor.
+        """
         return x * torch.sigmoid(x)
 
 
 # -- Timestep embedding ----------------------------
 def timestep_embedding(t: torch.Tensor, dim: int):
-    """t: (B,) tensor of floats (e.g., diffusion step or continuous time). Returns (B, dim)."""
+    """
+    Generates sinusoidal timestep embeddings for diffusion models.
+    Parameters:
+        t (torch.Tensor): Timestep tensor.
+        dim (int): Embedding dimension.
+    Returns:
+        torch.Tensor: Sinusoidal embedding tensor.
+    """
     if t is None:
         return None
     # -- Create sinusoidal features --
@@ -44,9 +77,15 @@ def timestep_embedding(t: torch.Tensor, dim: int):
 # -- Positional embedding ----------------------------
 def build_sinusoidal_pos_emb(H: int, W: int, n_channels: int = 4, device=None, dtype=torch.float32):
     """
-    Build a fixed sinusoidal spatial embedding of shape (n_channels, H, W).
-    For n_channels=4 we provide [sin(pi*x), cos(pi*x), sin(pi*y), cos(pi*y)] with x,y in [-1,1].
-    If n_channels > 4 we add higher-frequency harmonics pairwise.
+    Builds fixed sinusoidal spatial embedding grid.
+    Parameters:
+        H (int): Height.
+        W (int): Width.
+        n_channels (int): Number of embedding channels.
+        device: Torch device.
+        dtype: Torch dtype.
+    Returns:
+        torch.Tensor: Positional embedding grid.
     """
     device = device or torch.device("cpu")
     dtype = dtype or torch.float32
@@ -78,16 +117,37 @@ def build_sinusoidal_pos_emb(H: int, W: int, n_channels: int = 4, device=None, d
 
 # -- Basic building blocks ----------------------------
 class GroupNormAct(nn.Module):
+    """
+    Group normalization followed by SiLU activation.
+    Parameters:
+        dim (int): Number of channels.
+        groups (int): Number of groups for normalization.
+    """
     def __init__(self, dim, groups=8):
         super().__init__()
         self.gn = nn.GroupNorm(groups, dim, eps=1e-6, affine=True)
         self.act = SiLU()
 
     def forward(self, x):
+        """
+        Applies group normalization and SiLU activation.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Normalized and activated tensor.
+        """
         return self.act(self.gn(x))
 
 # -------------------------------------------------------------------------------------
 class ResidualBlock(nn.Module):
+    """
+    Residual block with optional timestep embedding.
+    Parameters:
+        in_ch (int): Input channels.
+        out_ch (int): Output channels.
+        time_emb_dim (Optional[int]): Timestep embedding dimension.
+        groups (int): Number of groups for normalization.
+    """
     def __init__(self, in_ch, out_ch, time_emb_dim: Optional[int] = None, groups: int = 8):
         super().__init__()
         self.time_emb_dim = time_emb_dim
@@ -105,6 +165,14 @@ class ResidualBlock(nn.Module):
             self.shortcut = nn.Identity()
 
     def forward(self, x, t_emb: Optional[torch.Tensor] = None):
+        """
+        Forward pass for residual block.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+            t_emb (Optional[torch.Tensor]): Timestep embedding.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         h = self.conv1(self.norm1(x))
         if exists(self.time_emb_dim) and exists(t_emb):
             # Add (broadcasted) time embedding
@@ -114,6 +182,12 @@ class ResidualBlock(nn.Module):
 
 # -------------------------------------------------------------------------------------
 class SelfAttention(nn.Module):
+    """
+    Self-attention layer for spatial features.
+    Parameters:
+        ch (int): Number of channels.
+        num_heads (int): Number of attention heads.
+    """
     def __init__(self, ch, num_heads=1):
         super().__init__()
         assert ch % num_heads == 0
@@ -124,6 +198,13 @@ class SelfAttention(nn.Module):
         self.to_out = nn.Conv1d(ch, ch, kernel_size=1)
 
     def forward(self, x):
+        """
+        Forward pass for self-attention.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         # x: (B, C, H, W)
         B, C, H, W = x.shape
         n = H * W
@@ -143,20 +224,46 @@ class SelfAttention(nn.Module):
 
 # -------------------------------------------------------------------------------------
 class Downsample(nn.Module):
+    """
+    Downsampling layer using strided convolution.
+    Parameters:
+        in_ch (int): Input channels.
+        out_ch (int): Output channels.
+    """
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.op = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1)
 
     def forward(self, x):
+        """
+        Downsamples input tensor.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Downsampled tensor.
+        """
         return self.op(x)
 
 # -------------------------------------------------------------------------------------
 class Upsample(nn.Module):
+    """
+    Upsampling layer using interpolation and convolution.
+    Parameters:
+        in_ch (int): Input channels.
+        out_ch (int): Output channels.
+    """
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
 
     def forward(self, x):
+        """
+        Upsamples input tensor.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Upsampled tensor.
+        """
         x = F.interpolate(x, scale_factor=2.0, mode="nearest")
         return self.conv(x)
 
@@ -166,17 +273,21 @@ class Upsample(nn.Module):
 class SongUNetPosEmbd(nn.Module):
     """
     Song-style U-Net with sinusoidal spatial positional embeddings.
-    - in_channels: number of data input channels (excluding context and pos emb)
-    - cond_channels_low / cond_channels_high: optional context channels (low/high res)
-    - n_pos_emb: number of positional embedding channels (sinusoidal)
-    - base_channels: starting number of channels
-    - channel_mult: multipliers for each downsample level
-    - num_blocks: residual blocks per level
-    - attention_resolutions: list of integer spatial sizes (H or W) where attention is applied
-    - time_emb_dim: dimension for timestep embedding (if None or use_time_emb=False, acts as zero)
-    - use_time_emb: if True, uses timestep embedding when t is provided; if False, time embedding is zero
+    Purpose: Used for regression and diffusion denoising tasks.
+    Parameters:
+        img_resolution (int): Image resolution.
+        in_channels (int): Input channels.
+        cond_channels_low (int): Context channels (low-res).
+        cond_channels_high (int): Context channels (high-res).
+        n_pos_emb (int): Positional embedding channels.
+        out_channels (int): Output channels.
+        base_channels (int): Base channels.
+        channel_mult (List[int]): Channel multipliers.
+        num_blocks (int): Residual blocks per level.
+        attention_resolutions (List[int]): Resolutions for attention.
+        time_emb_dim (Optional[int]): Timestep embedding dimension.
+        use_time_emb (bool): Use timestep embedding.
     """
-
     def __init__(
         self,
         *,
@@ -285,12 +396,14 @@ class SongUNetPosEmbd(nn.Module):
         context_high: Optional[torch.Tensor],
     ) -> torch.Tensor:
         """
-        x: (B, in_channels, H, W)
-        context_low: (B, cond_channels_low, H_low, W_low) OR None
-        context_high: (B, cond_channels_high, H, W) OR None
-        Returns concatenated tensor (B, total_in, H, W)
+        Prepares and concatenates input tensors for the model.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+            context_low (torch.Tensor): Low-res context tensor.
+            context_high (torch.Tensor): High-res context tensor.
+        Returns:
+            torch.Tensor: Concatenated input tensor.
         """
-
         H = self.img_resolution
         W = self.img_resolution
         parts = []
@@ -344,14 +457,15 @@ class SongUNetPosEmbd(nn.Module):
         t: Optional[torch.Tensor] = None, # i.e., continuous diffusion timestep or sigma step
     ) -> torch.Tensor:
         """
-        context_low: optional (B, cond_channels_low, H_low, W_low)
-        context_high: optional (B, cond_channels_high, H, W)
-        x: optional (B, in_channels, H, W)
-        t: optional (B,) continuous diffusion timestep (scaled appropriately).
-           If use_time_emb==False or t is None, time embedding behaves as zero.
-        Returns: (B, out_channels, H, W)
+        Forward pass for SongUNetPosEmbd model.
+        Parameters:
+            context_low (torch.Tensor): Low-res context tensor.
+            context_high (torch.Tensor): High-res context tensor.
+            x (torch.Tensor): Input tensor.
+            t (torch.Tensor): Timestep tensor.
+        Returns:
+            torch.Tensor: Output tensor.
         """
-
         # # -- Get shapes --
         # B, _, H, W = x.shape
 

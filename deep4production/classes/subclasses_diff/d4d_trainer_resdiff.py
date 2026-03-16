@@ -7,6 +7,18 @@ from deep4production.classes.d4d_trainer import d4d_trainer
 from deep4production.classes.subclasses_diff.d4d_pydataset_resdiff import d4d_pydataset_custom
 ##################################################################################################################################
 class d4d_trainer_custom(d4d_trainer):
+    """
+    Custom trainer class for residual-based deep learning models.
+    Purpose: Handles noise scheduling, regressor context, metadata updates, and batch training for residual denoising models.
+    Parameters:
+        data (dict): Dataset configuration.
+        dataloader (dict): Dataloader parameters.
+        output_dir (str): Output directory for experiment.
+        model_info (dict): Model, loss, saving, and training parameters.
+        graph (dict): Graph configuration for GNN models.
+        d4dpy (dict): Custom pydataset configuration.
+        Mlflow (dict): MLflow tracking configuration.
+    """
     def __init__(self, data, dataloader, output_dir, model_info, graph, d4dpy, Mlflow):
         """
         Initializes the Residual Generator trainer.
@@ -40,6 +52,14 @@ class d4d_trainer_custom(d4d_trainer):
 
     # -------------------------------------------------------------------------
     def update_metadata(self):
+        """
+        Updates metadata dictionary with generator-specific parameters (noise, regressor, context).
+        Purpose: Adds noise scheduling, regressor path, and context flags to metadata for reproducibility.
+        Parameters:
+            None (uses self attributes)
+        Returns:
+            None
+        """
         ### Generator-specific metadata parameters
         self.metadata_dict["training_params"] = {}
         self.metadata_dict["training_params"]["noise_params"] = {k: v for k, v in self.noise_params.items()}
@@ -51,6 +71,14 @@ class d4d_trainer_custom(d4d_trainer):
 
     # -------------------------------------------------------------------------
     def get_pydatasets(self):
+        """
+        Creates training and validation pydataset objects for residual models, updates metadata.
+        Purpose: Instantiates pydataset objects, updates metadata, and prepares for training.
+        Parameters:
+            None (uses self attributes)
+        Returns:
+            tuple: (train_dataset, valid_dataset)
+        """
         ## Create pydatasets
         kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True)}
         kwargs_pydataset.update(**self.d4dpy)
@@ -68,6 +96,18 @@ class d4d_trainer_custom(d4d_trainer):
         
     # -------------------------------------------------------------------------
     def sigma(self, P_mean, P_std, sigma_min, sigma_max, batch_size):
+        """
+        Samples noise schedule for diffusion models using log-normal distribution.
+        Purpose: Generates noise scaling factors for each batch.
+        Parameters:
+            P_mean (torch.Tensor): Mean parameter for log-normal noise.
+            P_std (torch.Tensor): Std parameter for log-normal noise.
+            sigma_min (float): Minimum noise value.
+            sigma_max (float): Maximum noise value.
+            batch_size (int): Batch size.
+        Returns:
+            torch.Tensor: Noise schedule tensor.
+        """
         z = torch.randn(batch_size, 1, 1, 1)  # standard normal
         sigma_t = torch.exp(P_mean + P_std * z)
         sigma_t = sigma_t.clamp(min=sigma_min, max=sigma_max) 
@@ -75,7 +115,20 @@ class d4d_trainer_custom(d4d_trainer):
 
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, noise_params, is_this_training=True):
-
+        """
+        Performs a single forward and backward pass for a batch, including noise scheduling and conditioning.
+        Purpose: Handles core training step for residual denoising models, including noise injection and loss computation.
+        Parameters:
+            model: PyTorch model.
+            data: Tuple of residual, context low-res, context high-res arrays.
+            optimizer: PyTorch optimizer.
+            loss_function: Loss function callable.
+            device: Device string ('cpu' or 'cuda').
+            noise_params (dict): Noise scheduling parameters.
+            is_this_training (bool): Whether to perform backpropagation.
+        Returns:
+            float: Loss value for the batch.
+        """
         # --- Get noise scheduler parameters ---
         P_mean, P_std, sigma_min, sigma_max, sigma_data = noise_params["P_mean"], noise_params["P_std"], noise_params["sigma_min"], noise_params["sigma_max"], noise_params["sigma_data"]
 
@@ -118,4 +171,4 @@ class d4d_trainer_custom(d4d_trainer):
             loss.backward()
 
         # --- Return ---
-        return loss.item() 
+        return loss.item()

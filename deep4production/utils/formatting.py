@@ -1,5 +1,4 @@
 def cordex_ml(ds, attributes_dict):
-
     """
     Set CORDEX ESD-specific global attributes on an xarray Dataset according to
     the CORDEX experiment design for statistical downscaling of CMIP6.

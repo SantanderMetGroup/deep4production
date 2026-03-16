@@ -12,6 +12,18 @@ from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, 
 
 ##################################################################################################################################
 class d4p_downscaler:
+    """
+    Downscaler class for applying trained models to input data and generating predictions.
+    Purpose: Loads model and metadata, preprocesses input, handles forcings, and saves predictions.
+    Parameters:
+        id_dir (str): Experiment directory.
+        input_data (dict): Input data configuration.
+        model_file (str, optional): Model checkpoint filename.
+        saving_info (dict, optional): Output saving configuration.
+        ensemble_size (int, optional): Number of ensemble members.
+        graph (dict, optional): Graph configuration for GNN models.
+        forcing_data (dict, optional): Forcing data configuration.
+    """
     def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
         Initializes the D4D Downscaler.
@@ -128,6 +140,11 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def update_self(self, paths):
+        """
+        Updates internal attributes using input paths and metadata.
+        Parameters:
+            paths (list): List of Zarr file paths.
+        """
         # --- Files (X)---
         self.x = [zarr.open(p, mode='r') for p in paths]
         # --- Variables --- 
@@ -170,6 +187,11 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def update_self_with_forcings(self, fpaths):
+        """
+        Updates internal attributes for forcings using input paths and metadata.
+        Parameters:
+            fpaths (list): List of Zarr file paths for forcings.
+        """
         # --- Forcings info ---
         self.f = [zarr.open(p, mode='r') for p in fpaths]
         self.vars_f = self.metadata["vars_f"]
@@ -186,6 +208,16 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def graphPredict(self, x, edge_index, model, f=["N/A"]):
+        """
+        Placeholder for graph prediction. Should be implemented in subclass for PyTorch Geometric models.
+        Parameters:
+            x (torch.Tensor): Input tensor.
+            edge_index: Graph edge indices.
+            model: PyTorch model.
+            f: Forcing tensor (optional).
+        Returns:
+            np.ndarray: Prediction array.
+        """
         assert False, (
             "🛑 Placeholder for the graphPredict function. Create a subclass of d4d_downscaler "
             "that implements graphPredict to convert the PyTorch data into a format compatible "
@@ -194,6 +226,21 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def preprocess(self, date, data, vars, idx_vars, sample_map, operator=None, normalizer=None, transform_to_2D=False, H=None, W=None):
+        """
+        Preprocesses a sample for model input: indexing, operator, normalization, reshaping, and conversion to tensor.
+        Parameters:
+            date: Target date.
+            data: Data array.
+            vars: Variable names.
+            idx_vars: Variable indices.
+            sample_map: Sample mapping.
+            operator: Operator info (optional).
+            normalizer: Normalizer info (optional).
+            transform_to_2D (bool): Whether to reshape to 2D.
+            H, W: Height and width for reshaping.
+        Returns:
+            torch.Tensor: Preprocessed sample.
+        """
         # -- Get sample --
         i, j = sample_map[date]
         source = data[i][j]
@@ -222,6 +269,22 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def postprocess(self, date, data, vars, member, operator=None, normalizer=None, lats=None, lons=None, template=None, func=None, kwargs=None):
+        """
+        Postprocesses model output: denormalization, deoperator, formatting, and conversion to xarray.
+        Parameters:
+            date: Target date.
+            data: Prediction array.
+            vars: Variable names.
+            member: Ensemble member index.
+            operator: Operator info (optional).
+            normalizer: Normalizer info (optional).
+            lats, lons: Latitude and longitude arrays.
+            template: xarray template (optional).
+            func: Postprocessing function (optional).
+            kwargs: Additional arguments for postprocessing.
+        Returns:
+            xarray.Dataset: Prediction in xarray format.
+        """
         # --- De-transform from 2D? ---
         if self.transform_to_2D_y:
             B, C, H, W = data.shape
@@ -254,6 +317,15 @@ class d4p_downscaler:
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def downscale(self, model=None, return_pred=False, verbose=True):
+        """
+        Runs the downscaling process: preprocesses input, predicts, postprocesses, and saves or returns output.
+        Parameters:
+            model: PyTorch model (optional).
+            return_pred (bool): Whether to return prediction instead of saving.
+            verbose (bool): Print progress messages.
+        Returns:
+            xarray.Dataset or None: Prediction dataset if return_pred is True.
+        """
         if verbose:
             print("🚀 STARTING DOWNSCALING PROCESS")
         # --- Get model ---
@@ -315,4 +387,3 @@ class d4p_downscaler:
         ds_out.to_netcdf(self.output_path)
 
 
-    
