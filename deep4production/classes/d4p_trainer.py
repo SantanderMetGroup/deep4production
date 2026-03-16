@@ -43,7 +43,7 @@ class d4p_trainer:
             self.d4d_pydataset = get_func_from_string(d4dpy["module"], d4dpy["name"])
             self.d4dpy = d4dpy["kwargs"]
         else:
-            self.d4d_pydataset = get_func_from_string("deep4dproduction.classes.d4d_pydataset", "d4d_pydataset")
+            self.d4d_pydataset = get_func_from_string("deep4production.classes.d4d_pydataset", "d4d_pydataset")
 
         self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -94,9 +94,9 @@ class d4p_trainer:
             self.Mlflow_compute_diagnostics_every_n_epochs = Mlflow.get("compute_diagnostics_every_n_epochs", None)
             self.Mlflow_save_checkpoint_every_n_epochs = Mlflow.get("save_checkpoint_every_n_epochs", None)
             if self.Mlflow_diagnostics is not None:
-                ## Get d4d_downscaler function
-                d4dp_name = Mlflow.get("func_name", "d4d_downscaler")
-                d4dp_module = Mlflow.get("func_module", "deep4dproduction.classes.d4p_downscaler")
+                ## Get d4p_downscaler function
+                d4dp_name = Mlflow.get("func_name", "d4P_downscaler")
+                d4dp_module = Mlflow.get("func_module", "deep4production.classes.d4p_downscaler")
                 self.d4dp_func = get_func_from_string(module_string=d4dp_module, func_string=d4dp_name)
                 self.input_data = {"paths": data["predictors"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
                 if data.get("forcings", None) is not None:
@@ -276,7 +276,7 @@ class d4p_trainer:
                 lambda_name = scheduler_params.get("lr_lambda", None)
                 if lambda_name is None:
                     raise ValueError("LambdaLR requires 'lr_lambda' parameter in config YAML")
-                lr_lambda_func = get_func_from_string(module_string="deep4dproduction.deep.schedulers", func_string=lambda_name)
+                lr_lambda_func = get_func_from_string(module_string="deep4production.deep.schedulers", func_string=lambda_name)
                 lr_lambda = partial(lr_lambda_func, **scheduler_kwargs) # Use functools.partial to freeze parameters
                 # Instantiate scheduler properly
                 scheduler = scheduler_func(optimizer, lr_lambda=lr_lambda)
@@ -288,18 +288,22 @@ class d4p_trainer:
         epoch_init=0
         if saving_params.get("resume_checkpoint", None) is not None:
             path_checkpoint = f"{self.model_dir}/{saving_params["resume_checkpoint"]}"
-            checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
-            epoch_init = epoch_ref = epoch = checkpoint['epoch']
-            step_ref = global_step = checkpoint['global_step']
-            train_losses = checkpoint.get('train_losses', [])
-            valid_losses = checkpoint.get('valid_losses', [])
-            best_val_loss = np.min(valid_losses)
-            epoch_best_val_loss = np.where(valid_losses == best_val_loss)[0][0]
-            early_stopping_counter = epoch - epoch_best_val_loss
-            print("🚀 Resume training:")
-            print(f"    checkpoint: {path_checkpoint}")
-            print(f"    epoch: {epoch}")
-            print(f"    global_step: {global_step}")
+            if os.path.exists(path_checkpoint):
+                print(f"🚀 Resuming training from checkpoint: {path_checkpoint}")
+                checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
+                epoch_init = epoch_ref = epoch = checkpoint['epoch']
+                step_ref = global_step = checkpoint['global_step']
+                train_losses = checkpoint.get('train_losses', [])
+                valid_losses = checkpoint.get('valid_losses', [])
+                best_val_loss = np.min(valid_losses)
+                epoch_best_val_loss = np.where(valid_losses == best_val_loss)[0][0]
+                early_stopping_counter = epoch - epoch_best_val_loss
+                print("🚀 Resume training:")
+                print(f"    checkpoint: {path_checkpoint}")
+                print(f"    epoch: {epoch}")
+                print(f"    global_step: {global_step}")
+            else:
+                print(f"⚠️ WARNING: Checkpoint specified for resuming training not found at {path_checkpoint}. Starting training from scratch.")
             
         # --- Ensemble Model Averaging (EMA) parameters ------------------------------------------
         ema = None

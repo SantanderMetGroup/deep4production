@@ -42,7 +42,7 @@ def plot_psd(
 
     # --- Import PSD function ---
     psd_func = get_func_from_string(
-        module_string="deep4downscaling.utils.diagnostics",
+        module_string="deep4production.utils.diagnostics",
         func_string=compute_psd_func
     )
 

@@ -86,7 +86,7 @@ class d4p_pydataset(Dataset):
     if operator_info is not None:
         operator = {}
         operator_info_default = operator_info.get("default", None)
-        operator["module"] = "deep4dproduction.utils.operators"
+        operator["module"] = "deep4production.utils.operators"
         operator["operator_func_per_variable"] = {var: (operator_info[var] if var in operator_info else operator_info_default) for var in vars}
         print(f"--- Operator for variables: {vars} ---")
         print(operator["operator_func_per_variable"])
