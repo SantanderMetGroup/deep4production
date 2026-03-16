@@ -23,7 +23,7 @@ from deep4production.deep.utils import save_model, resume_model, load_model
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.mlflow import *
 ##################################################################################################################################
-class d4d_trainer:
+class d4p_trainer:
     def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None):
         """
         Initializes D4D trainer.
@@ -96,7 +96,7 @@ class d4d_trainer:
             if self.Mlflow_diagnostics is not None:
                 ## Get d4d_downscaler function
                 d4dp_name = Mlflow.get("func_name", "d4d_downscaler")
-                d4dp_module = Mlflow.get("func_module", "deep4dproduction.classes.d4d_downscaler")
+                d4dp_module = Mlflow.get("func_module", "deep4dproduction.classes.d4p_downscaler")
                 self.d4dp_func = get_func_from_string(module_string=d4dp_module, func_string=d4dp_name)
                 self.input_data = {"paths": data["predictors"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
                 if data.get("forcings", None) is not None:

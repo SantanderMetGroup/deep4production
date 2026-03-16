@@ -9,8 +9,8 @@ setup(
         'console_scripts': [
             'd4p-train = deep4production.console.main_train:main',
             'd4p-downscale = deep4production.console.main_downscale:main',
-            'd4p-datasets-inspect = deep4production.console.main_inspect:main',
-            'd4p-datasets-create = deep4production.console.main_create:main'
+            'd4p-inspect = deep4production.console.main_inspect:main',
+            'd4p-create = deep4production.console.main_create:main'
         ]
     }
 )

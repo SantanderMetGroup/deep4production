@@ -14,7 +14,7 @@ from deep4production.utils.trans import xarray_to_numpy
 from deep4production.utils.general import is_grid_regular
 from deep4production.utils.imputers import d4dimputers
 ########################################################################################################
-class d4d_dataset(Dataset):
+class d4p_dataset(Dataset):
   def __init__(self, date_init, date_end, freq, data):
     
     # --- GENERAL INFO ------

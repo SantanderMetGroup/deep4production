@@ -10,7 +10,7 @@ def main():
     
     # --- Check .sh call ------------------------------------------
     if len(sys.argv) != 2:
-        print("Usage: d4d-train path/to/config.yaml")
+        print("Usage: d4p-train path/to/config.yaml")
         sys.exit(1)  # Exit with error code
 
     # --- Get config from YAML ------------------------------------------
@@ -19,7 +19,7 @@ def main():
         config = yaml.safe_load(f)
 
     # --- Unpack config to get parameters ------------------------------------------
-    print("👋 WELCOME TO D4D TRAIN!")
+    print("👋 WELCOME TO D4P TRAIN!")
     data = config["data"]
     dataloader = config["dataloader"]
     model_info = config["model_info"]
@@ -45,12 +45,12 @@ def main():
     os.makedirs(aux_prd, exist_ok=True)
     
     # --- Import training module ----------------------------------
-    d4dt = config.get("d4d_trainer", None)
+    d4dt = config.get("d4p_trainer", None)
     if d4dt is None: 
-      d4d_trainer = get_func_from_string("deep4production.classes.d4d_trainer", "d4d_trainer")
+      d4d_trainer = get_func_from_string("deep4production.classes.d4p_trainer", "d4p_trainer")
     else:
       d4d_trainer = get_func_from_string(d4dt["module"], d4dt["name"])
-    d4dpy = config.get("d4d_pydataset", {})
+    d4dpy = config.get("d4p_pydataset", {})
 
     # --- Start Mlflow and log config ----------------------------------
     if Mlflow is not None:
@@ -100,7 +100,7 @@ def main():
     # --- Train ----------------------------------
     model_path=f"{model_dir}/{model_info["saving_params"]["model_save_name"]}.pt"
     if not os.path.exists(model_path) or overwrite:
-      trainer = d4d_trainer(data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow)
+      trainer = d4p_trainer(data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow)
       train_dataset, valid_dataset = trainer.get_pydatasets()
       train_dataloader, valid_dataloader = trainer.get_dataloaders(train_dataset, valid_dataset)
       trainer.train(train_dataloader, valid_dataloader) 

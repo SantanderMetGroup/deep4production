@@ -5,21 +5,18 @@
 ## Description
 
 `deep4production` is a Python library designed for:
-- Create AI-ready datasets in .zarr format.
-- Implement deep learning models for statistical downscaing.
-- Set of recipes to...
+- Create AI-ready datasets tailored for downscaling tasks.
+- Store state-of-the-art downscaling models
+- Tools to compute and generate projections (ensuring compatibility with standard climate data formats like NetCDF).
+....
 
-**Ease of Research**:
-`deep4production` ...:
-
-
-By offering these foundational methods, researchers can focus on innovative tasks such as novel architecture development, rather than re-implementing standard routines from scratch.
+**Ease of Research**: 
+Researchers can focus on innovative tasks such as novel architecture development, rather than re-implementing standard routines from scratch.
 
 **Established Deep Learning Models**:
 `deep4production` also supplies established deep learning models that can be used to downscale global climate model outputs. Beyond the models themselves, the library provides:
 
-- Tools to compute and generate projections (ensuring compatibility with standard climate data formats like NetCDF).
-- Scripts for proper post-processing (e.g., bias correction, domain mapping).
+
 
 In addition to these main goals, `deep4production` includes:
 
@@ -44,14 +41,15 @@ cd deep4production
 conda env create -f requirements/deep4production-gpu.yml
 ```
 If you prefer a CPU-only setup, use the `requirements/deep4production-cpu.yml` file instead.
+(NOT READY YET)
 
 ## Usage
 
 We provide a set of Jupyter notebooks in the `notebooks` directory that demonstrate the basic functionality of the `deep4downscaling` library. These notebooks cover topics such as:
 
-
-
 As new features are developed and added to `deep4production`, additional example notebooks will be included to help you stay up-to-date with the latest capabilities.
+
+(NOT READY YET)
 
 ## Documentation
 

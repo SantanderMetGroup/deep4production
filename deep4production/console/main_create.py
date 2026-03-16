@@ -1,7 +1,7 @@
 import os
 import sys
 import yaml
-from deep4production.classes.d4d_dataset import d4d_dataset
+from deep4production.classes.d4p_dataset import d4p_dataset
 
 def main():
 
@@ -21,7 +21,7 @@ def main():
     # --- Log info ------------------------------------------
     print(f"""
     -----------------------------------------------------------------------------------------------------------
-    WELCOME TO D4D CREATE DATASET! 📈🤖📊
+    WELCOME TO D4P CREATE DATASET! 📈🤖📊
 
     Date Init: {date_init}
     Date End: {date_end}
@@ -38,7 +38,7 @@ def main():
     if not os.path.exists(output_path) or overwrite:
       os.makedirs(output_path, exist_ok=True)
       # Training dataset
-      d = d4d_dataset(date_init, date_end, freq, data) # Call Init
+      d = d4p_dataset(date_init, date_end, freq, data) # Call Init
       d.to_disk(zarr_path = output_path) # Preprocess dataset and save it as a torch dataset for rapid loading.
       # Log info
       print("----------------------------------------------------")

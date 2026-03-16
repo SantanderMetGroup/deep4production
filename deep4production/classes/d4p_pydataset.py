@@ -14,7 +14,7 @@ from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 ########################################################################################################
 ########################################################################################################
-class d4d_pydataset(Dataset):
+class d4p_pydataset(Dataset):
   def __init__(self, predictors: dict, predictands: dict, temporal_period: list, load_in_memory: bool = True, forcings={}): 
     # --- Parameters (X, Y) --- 
     path_predictors, path_predictands = predictors["paths"], predictands["paths"]

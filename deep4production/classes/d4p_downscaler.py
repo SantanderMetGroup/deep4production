@@ -11,7 +11,7 @@ from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 
 ##################################################################################################################################
-class d4d_downscaler:
+class d4p_downscaler:
     def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
         Initializes the D4D Downscaler.

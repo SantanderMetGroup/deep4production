@@ -904,261 +904,267 @@ class BernoulliFocalLoss(nn.Module):
         loss = -alpha_t * focal_weight * torch.log(pt + 1e-8)
 
         return loss.mean()
-class PriceLoss(nn.Module):
+
+
+class CRPSSpectralLoss(nn.Module):
 
     """
-    L = |y - y'| ⊙ (y + 1)
-    where y' is the predicted output, y is the target, and ⊙ represents
-    elementwise multiplication across space.
+    Fair Continuous Ranked Probability Score (CRPS). Following Nordhagen et al. (2025),
+    we combine the pointwise and the spectral CRPS. The spectral CRPS is computed by
+    applying a Fourier transform to the field and then computing the CRPS.
+
+    Nordhagen, E. M., Haugen, H. H., Salihi, A. F. S., Ingstad, M. S.,
+    Nipen, T. N., Seierstad, I. A., ... & Kristiansen, J. (2025).
+    High-Resolution Probabilistic Data-Driven Weather Modeling with a
+    Stretched-Grid. arXiv preprint arXiv:2511.23043.
 
     Parameters
     ----------
     ignore_nans : bool
         Whether to allow the loss function to ignore nans in the
-        target domain.
+        target domain. This only applies to the pointwise CRPS.
+
+    H_shape : int
+        Height of the predictand's spatial domain.
+
+    W_shape : int
+        Width of the predictand's spatial domain.
+
+    beta : int
+        Power parameter for the absolute differences in the CRPS computation.
+
+    lambda_spectral : float
+        Weight for the spectral CRPS.
+
+    spatial_resolution : float, optional
+        Spatial resolution of the predictand grid in km. When provided, a
+        low-pass filter is applied in the spectral CRPS branch to remove
+        frequencies beyond the Nyquist limit k_N = 2*pi/(2*spatial_resolution).
+        If None, no spectral filtering is applied.
 
     target : torch.Tensor
         Target/ground-truth data
 
-    output : torch.Tensor
-        Predicted data (model's output)
+    output : list of torch.Tensor or torch.Tensor
+        List of predicted data (model's outputs) for ensemble predictions,
+        or a single tensor (which will be wrapped in a list automatically).
+        For proper CRPS computation, at least 2 ensemble members are required.
     """
 
-    def __init__(self, ignore_nans: bool) -> None:
-        super(PriceLoss, self).__init__()
+    def __init__(self, ignore_nans: bool,
+                 H_shape: int, W_shape: int, 
+                 beta: int = 1,
+                 lambda_spectral: float = 0.1,
+                 spatial_resolution: float = None) -> None:
+        super(CRPSSpectralLoss, self).__init__()
         self.ignore_nans = ignore_nans
+        self.H_shape = H_shape
+        self.W_shape = W_shape
+        self.beta = beta
+        self.lambda_spectral = lambda_spectral
+        if spatial_resolution is not None and spatial_resolution <= 0:
+            raise ValueError("spatial_resolution must be > 0 when provided.")
+        self.spatial_resolution = spatial_resolution
+        self.filter_nans = False # Control whether to filter out nans in _CRPS_pointwise
 
-    def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-
-        if target.ndim > 2:
-            target = target.reshape(target.shape[0], -1)
-            output = output.reshape(output.shape[0], -1)
-
-        if self.ignore_nans:
+    def _CRPS_pointwise(self, target: torch.Tensor, output) -> torch.Tensor:
+        
+        if self.ignore_nans and self.filter_nans:
             nans_idx = torch.isnan(target)
-            output = output[~nans_idx]
             target = target[~nans_idx]
+            output = [out[~nans_idx] for out in output]
 
-        loss = torch.mean(torch.abs(target - output) * (target + 1))
-        return loss
+        # Number of ensemble members
+        M = len(output)
 
-class DualOutputLoss(nn.Module):
+        # Error between target and each prediction
+        first_term = 0.0
+        for i in range(M):
+            first_term += torch.abs(target - output[i]) ** self.beta
+        first_term = first_term / M
 
-    """
-    Combined loss function for DeepESDDualOutput model.
-    
-    This loss function combines:
-    - Binary Cross Entropy for dry/wet day classification
-    - Loss for precipitation amount prediction
-    
-    The target data is split based on a threshold (similar to BerGamma loss):
-    - Classification target: 1 if precipitation > threshold, 0 otherwise
-    - Amount target: original precipitation values (only used where classification = 1)
-    
-    Parameters
-    ----------
-    ignore_nans : bool
-        Whether to allow the loss function to ignore nans in the
-        target domain.
-        
-    threshold : float
-        Threshold for dry/wet day classification. Values above this threshold
-        are considered wet days.
-        
-    classification_weight : float, optional
-        Weight for the classification loss component. Default is 1.0.
-        
-    amount_weight : float, optional
-        Weight for the amount loss component. Default is 1.0.
-    """
-
-    def __init__(self, ignore_nans: bool, threshold: float = 0.0, 
-                 classification_weight: float = 1.0, amount_weight: float = 1.0) -> None:
-        super(DualOutputLoss, self).__init__()
-        self.ignore_nans = ignore_nans
-        self.threshold = threshold
-        self.classification_weight = classification_weight
-        self.amount_weight = amount_weight
-        
-        # Initialize BCE loss
-        self.bce_loss = nn.BCELoss(reduction='none')
-        
-        # Pre-allocate tensors to avoid memory allocation during forward pass
-        self._zero_tensor = None
-
-    def forward(self, target: torch.Tensor, output: dict) -> torch.Tensor:
-
-        # Extract outputs from the dual-output model
-        classification_pred = output[:, :output.shape[1]//2]
-        amount_pred = output[:, output.shape[1]//2:]
-            
-        # Create classification target (1 if > threshold, 0 otherwise)
-        classification_target = (target > self.threshold).float()
-        
-        # Handle NaNs if needed
-        if self.ignore_nans:
-            nans_idx = torch.isnan(target)
-            classification_pred = classification_pred[~nans_idx]
-            classification_target = classification_target[~nans_idx]
-            amount_pred = amount_pred[~nans_idx]
-            target = target[~nans_idx]
-        
-        # Classification loss (Binary Cross Entropy)
-        bce_losses = self.bce_loss(classification_pred, classification_target)
-        classification_loss = torch.mean(bce_losses)
-
-        # Amount loss (only for wet days)
-        wet_mask = (classification_target == 1)
-        
-        # Check if there are any wet days without creating intermediate tensors
-        num_wet_days = wet_mask.sum()
-        
-        if num_wet_days > 0:  # If there are any wet days
-            ############################################
-            # Price loss formula
-            # diff = torch.abs(target - amount_pred)
-            # weighted_diff = diff * (target + 1)
-            ############################################
-
-            ############################################
-            # Non-parametric asymmetric loss formula
-            # diff = torch.abs(target - amount_pred)
-            # weighted_diff = diff * torch.max(torch.tensor(1.0), target - amount_pred)
-            
-            # Only compute mean for wet days
-            # amount_loss = weighted_diff[wet_mask].mean()
-            ############################################
-
-            ############################################
-            diff = ((target ** 0.3) - (amount_pred)) ** 2
-            amount_loss = diff[wet_mask].mean()
-            ############################################
+        # Difference between all pairs of predictions
+        if M > 1:
+            second_term = 0.0
+            for i in range(M):
+                for j in range(M):
+                    second_term += torch.abs(output[i] - output[j]) ** self.beta
+            second_term = second_term / (2*M*(M-1)) # Fair CRPS
         else:
-            # If no wet days, amount loss is 0
-            if self._zero_tensor is None or self._zero_tensor.device != target.device:
-                self._zero_tensor = torch.tensor(0.0, device=target.device, requires_grad=True)
-            amount_loss = self._zero_tensor
-        
-        # Combine losses
-        total_loss = (self.classification_weight * classification_loss + 
-                      self.amount_weight * amount_loss)
-        
-        return total_loss
+            second_term = 0.0
 
+        # Final loss
+        loss = torch.mean(first_term - second_term)
 
-# ------------------------------------------------------------------------------------------------------------------------
-class CRPSSpectralLoss(nn.Module):
-    """
-    CRPS + Spectral CRPS loss for statistical downscaling.
-
-    Supports:
-        target: (B, C, G) or (B, C, H, W)
-        output: (B, M, C, G) or (B, M, C, H, W)
-    
-     Loss:
-        L = CRPS_point(output, target) 
-            + lambda_freq * CRPS_point( FFT(output), FFT(target) )
-    """
-
-    def __init__(self, lambda_freq=0.1, lowpass_ratio=0.25, H=None, W=None):
-        super().__init__()
-        self.lambda_freq = lambda_freq
-        self.eps_ratio = 0.05 
-        self.lowpass_ratio = lowpass_ratio
-        self.H = H
-        self.W = W
-
-
-    # ---------------------------------------------------------
-    def _crps_pointwise(self, pred, target):
-        """
-        pred:   (B, M, C, G)
-        target: (B, C, G)
-        """
-        B, M, C, G = pred.shape
-        eps = self.eps_ratio / M  # epsilon = 0.05 / M
-
-        # Expand target across ensemble dimension
-        target_exp = target.unsqueeze(1)  # (B, 1, C, G)
-
-        # ---- Term 1: MAE between ensemble member & truth ----
-        mae = torch.abs(pred - target_exp).mean(dim=1)  # (B, C, G)
-        term1 = mae.mean()
-
-        # ---- Term 2: ensemble spread ----
-        pred_i = pred.unsqueeze(2)  # (B, M, 1, C, G)
-        pred_j = pred.unsqueeze(1)  # (B, 1, M, C, G)
-        pairwise = torch.abs(pred_i - pred_j)  # (B, M, M, C, G)
-
-        # Remove diagonal safely
-        diag = torch.eye(M, device=pred.device).bool().view(1, M, M, 1, 1)
-        pairwise = pairwise.masked_fill(diag, 0.0)  # zero out diagonal
-        spread = pairwise.sum(dim=2) / (M - 1)      # mean over other members
-        term2 = spread.mean() * (1 - eps)
-
-        return term1 - 0.5 * term2
-
-    # ---------------------------------------------------------
-    def _lowpass_fft(self, x):
-        """
-        Apply 2D rFFT over spatial dimensions (H, W) with low-pass filtering.
-
-        x: (B, M, C, G) or (B, M, C, H, W)
-        - If G, assumes self.H and self.W are set and G = H*W
-        Returns: (B, M, C, H_freq, W_freq) filtered FFT
-        """
-
-        # --- Reshape flattened G to (H, W) if needed ---
-        if x.ndim == 4:  # (B, M, C, G)
-            B, M, C, G = x.shape
-            assert G == self.H * self.W, "G must equal H*W"
-            x = x.reshape(B, M, C, self.H, self.W)
-
-        # --- Compute 2D rFFT along spatial dims ---
-        X = torch.fft.rfft2(x, dim=(-2, -1))  # shape: (B, M, C, H, W_freq)
-        H, W_freq = X.shape[-2], X.shape[-1]
-
-        # --- Build low-pass mask ---
-        cut_h = max(int(H * self.lowpass_ratio), 1)
-        cut_w = max(int(W_freq * self.lowpass_ratio), 1)
-        mask = torch.zeros_like(X, dtype=torch.bool)
-        mask[..., :cut_h, :cut_w] = True
-
-        # --- Apply mask ---
-        X_filtered = X * mask
-        return X_filtered
-
-    # ---------------------------------------------------------
-    def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-        """
-        target: (B, C, G) or (B, C, H, W)
-        output: (B, M, C, G) or (B, M, C, H, W)
-        """
-
-        # --- Handle both spatial (H, W) and flattened (GP) shapes ---
-        if target.ndim > 3: # stack spatial dimensions
-            B, C, H, W = target.shape
-            target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-        if output.ndim > 3: # stack spatial dimensions
-            B, M, C, H, W = output.shape
-            output = output.reshape(B, M, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-        
-        # # --- Remove Nans if present ---
-        # if self.ignore_nans:
-        #     nans_idx = torch.isnan(target)
-        #     output = output[~nans_idx]
-        #     target = target[~nans_idx]
-        
-        # ---------------- Pointwise CRPS ----------------
-        crps_p = self._crps_pointwise(output, target) # (B, C, G) → scalar
-
-        # ---------------- Spectral CRPS -----------------
-        output_fft = self._lowpass_fft(output).reshape(B, M, C, -1)
-        # print(output_fft.shape)
-        target_fft = self._lowpass_fft(target.unsqueeze(1)).reshape(B, C, -1)  # (B, M, C, G)
-        # print(target_fft.shape)
-        crps_f = self._crps_pointwise(output_fft.abs(), target_fft.abs())
-
-        # ---------------- Total Loss --------------------
-        loss = crps_p + self.lambda_freq * crps_f
         return loss
+
+    def _FFT(self, data: torch.Tensor) -> torch.Tensor:
+
+        # It does not make sense to filter out nans in the spectral domain
+        self.filter_nans = False
+
+        # Fill nans with 0 for the FFT computation
+        if isinstance(data, torch.Tensor): # For the target
+            data = [torch.nan_to_num(data, nan=0.0)]
+        else:
+            data = [torch.nan_to_num(d, nan=0.0) for d in data]
+
+        B = data[0].shape[0] # Batch size
+        if data[0].ndim == 3: M = data[0].shape[1] # Number of ensemble members
+
+        # Reshape to spatial dimensions
+        if data[0].ndim == 2:
+            data = [member.view(B, self.H_shape, self.W_shape) for member in data]
+        elif data[0].ndim == 3:
+            data = [member.view(B, M, self.H_shape, self.W_shape) for member in data]
+
+        # Compute FFT
+        data = [torch.fft.rfft2(member) for member in data]
+
+        # Optionally remove frequencies beyond the Nyquist limit
+        if self.spatial_resolution is not None:
+            k_nyquist = 2.0 * torch.pi / (2.0 * self.spatial_resolution)
+            kx = 2.0 * torch.pi * torch.fft.rfftfreq(self.W_shape, d=self.spatial_resolution)
+            ky = 2.0 * torch.pi * torch.fft.fftfreq(self.H_shape, d=self.spatial_resolution)
+            k_radius = torch.sqrt(ky[:, None] ** 2 + kx[None, :] ** 2)
+            low_pass_mask = k_radius <= k_nyquist
+            low_pass_mask = low_pass_mask.to(device=data[0].device)
+            data = [member * low_pass_mask for member in data]
+
+        return data
+        
+    def forward(self, target: torch.Tensor, output) -> torch.Tensor:
+
+        if isinstance(output, torch.Tensor):
+            output = [output]
+
+        # Compute standard CRPS
+        self.filter_nans = True
+        crps_field = self._CRPS_pointwise(target, output)
+
+        # Compute spectral CRPS
+        target_fft = self._FFT(target)[0]
+        output_fft = self._FFT(output)
+        crps_spectral = self._CRPS_pointwise(target_fft, output_fft)
+
+        # Compute total loss
+        loss = crps_field + self.lambda_spectral * crps_spectral
+        return loss
+
+
+# # ------------------------------------------------------------------------------------------------------------------------
+# class CRPSSpectralLoss(nn.Module):
+#     """
+#     CRPS + Spectral CRPS loss for statistical downscaling.
+
+#     Supports:
+#         target: (B, C, G) or (B, C, H, W)
+#         output: (B, M, C, G) or (B, M, C, H, W)
+    
+#      Loss:
+#         L = CRPS_point(output, target) 
+#             + lambda_freq * CRPS_point( FFT(output), FFT(target) )
+#     """
+
+#     def __init__(self, lambda_freq=0.1, lowpass_ratio=0.25, H=None, W=None):
+#         super().__init__()
+#         self.lambda_freq = lambda_freq
+#         self.eps_ratio = 0.05 
+#         self.lowpass_ratio = lowpass_ratio
+#         self.H = H
+#         self.W = W
+
+
+#     # ---------------------------------------------------------
+#     def _crps_pointwise(self, pred, target):
+#         """
+#         pred:   (B, M, C, G)
+#         target: (B, C, G)
+#         """
+#         B, M, C, G = pred.shape
+#         eps = self.eps_ratio / M  # epsilon = 0.05 / M
+
+#         # Expand target across ensemble dimension
+#         target_exp = target.unsqueeze(1)  # (B, 1, C, G)
+
+#         # ---- Term 1: MAE between ensemble member & truth ----
+#         mae = torch.abs(pred - target_exp).mean(dim=1)  # (B, C, G)
+#         term1 = mae.mean()
+
+#         # ---- Term 2: ensemble spread ----
+#         pred_i = pred.unsqueeze(2)  # (B, M, 1, C, G)
+#         pred_j = pred.unsqueeze(1)  # (B, 1, M, C, G)
+#         pairwise = torch.abs(pred_i - pred_j)  # (B, M, M, C, G)
+
+#         # Remove diagonal safely
+#         diag = torch.eye(M, device=pred.device).bool().view(1, M, M, 1, 1)
+#         pairwise = pairwise.masked_fill(diag, 0.0)  # zero out diagonal
+#         spread = pairwise.sum(dim=2) / (M - 1)      # mean over other members
+#         term2 = spread.mean() * (1 - eps)
+
+#         return term1 - 0.5 * term2
+
+#     # ---------------------------------------------------------
+#     def _lowpass_fft(self, x):
+#         """
+#         Apply 2D rFFT over spatial dimensions (H, W) with low-pass filtering.
+
+#         x: (B, M, C, G) or (B, M, C, H, W)
+#         - If G, assumes self.H and self.W are set and G = H*W
+#         Returns: (B, M, C, H_freq, W_freq) filtered FFT
+#         """
+
+#         # --- Reshape flattened G to (H, W) if needed ---
+#         if x.ndim == 4:  # (B, M, C, G)
+#             B, M, C, G = x.shape
+#             assert G == self.H * self.W, "G must equal H*W"
+#             x = x.reshape(B, M, C, self.H, self.W)
+
+#         # --- Compute 2D rFFT along spatial dims ---
+#         X = torch.fft.rfft2(x, dim=(-2, -1))  # shape: (B, M, C, H, W_freq)
+#         H, W_freq = X.shape[-2], X.shape[-1]
+
+#         # --- Build low-pass mask ---
+#         cut_h = max(int(H * self.lowpass_ratio), 1)
+#         cut_w = max(int(W_freq * self.lowpass_ratio), 1)
+#         mask = torch.zeros_like(X, dtype=torch.bool)
+#         mask[..., :cut_h, :cut_w] = True
+
+#         # --- Apply mask ---
+#         X_filtered = X * mask
+#         return X_filtered
+
+#     # ---------------------------------------------------------
+#     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+#         """
+#         target: (B, C, G) or (B, C, H, W)
+#         output: (B, M, C, G) or (B, M, C, H, W)
+#         """
+
+#         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
+#         if target.ndim > 3: # stack spatial dimensions
+#             B, C, H, W = target.shape
+#             target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+#         if output.ndim > 3: # stack spatial dimensions
+#             B, M, C, H, W = output.shape
+#             output = output.reshape(B, M, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+        
+#         # # --- Remove Nans if present ---
+#         # if self.ignore_nans:
+#         #     nans_idx = torch.isnan(target)
+#         #     output = output[~nans_idx]
+#         #     target = target[~nans_idx]
+        
+#         # ---------------- Pointwise CRPS ----------------
+#         crps_p = self._crps_pointwise(output, target) # (B, C, G) → scalar
+
+#         # ---------------- Spectral CRPS -----------------
+#         output_fft = self._lowpass_fft(output).reshape(B, M, C, -1)
+#         # print(output_fft.shape)
+#         target_fft = self._lowpass_fft(target.unsqueeze(1)).reshape(B, C, -1)  # (B, M, C, G)
+#         # print(target_fft.shape)
+#         crps_f = self._crps_pointwise(output_fft.abs(), target_fft.abs())
+
+#         # ---------------- Total Loss --------------------
+#         loss = crps_p + self.lambda_freq * crps_f
+#         return loss
