@@ -4,8 +4,6 @@
 
 ## Description
 
-## The `deep4production` Framework
-
 ![Deep4Production framework](./framework.png)
 
 `deep4production` is a command-line framework designed to streamline the **end-to-end workflow for deep learning–based climate downscaling in production environments**. It provides tools to transform raw climate datasets into AI-ready formats, train deep learning models, and perform inference in a reproducible and scalable way.
