@@ -6,7 +6,7 @@ from torch import from_numpy
 ## Deep4production
 from deep4production.deep.utils import load_model
 from deep4production.utils.trans import from_pred_to_xarray
-from deep4production.utils.normalizers import d4dnormalizers
+from deep4production.utils.normalizers import d4pnormalizers
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 
@@ -26,9 +26,9 @@ class d4p_downscaler:
     """
     def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
-        Initializes the D4D Downscaler.
+        Initializes the D4P Downscaler.
         """
-        print("🚀 STARTING D4D DOWNSCALER")
+        print("🚀 STARTING D4P DOWNSCALER")
         # --- SELF PARAMETERS ---
         self.ensemble_size = ensemble_size
         self.graph = graph
@@ -219,7 +219,7 @@ class d4p_downscaler:
             np.ndarray: Prediction array.
         """
         assert False, (
-            "🛑 Placeholder for the graphPredict function. Create a subclass of d4d_downscaler "
+            "🛑 Placeholder for the graphPredict function. Create a subclass of d4p_downscaler "
             "that implements graphPredict to convert the PyTorch data into a format compatible "
             "with PyTorch Geometric (PyG) graph objects."
         )
@@ -255,7 +255,7 @@ class d4p_downscaler:
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
+                    normalizer_class = d4pnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
                     x[c,:] = normalizer_method(x[c,:])
         # --- Transform to 2D ---
@@ -299,7 +299,7 @@ class d4p_downscaler:
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
+                    normalizer_class = d4pnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
                     data[:,c,:] = normalizer_method(data[:,c,:], denormalize=True)
         # --- Deoperator ---  

@@ -38,8 +38,9 @@ def is_grid_regular(ds: xr.Dataset) -> bool:
       that are coordinates of the dataset, it is considered regular.
     - Otherwise, it is irregular (station, unstructured, etc.)
     """
+    
     # Identify likely spatial dimensions
-        dims = ds[var].dims in ds.dims if d in ("lat", "lon", "x", "y")]
+    dims = [d for d in ds.dims if d in ("lat", "lon", "x", "y")]
     spatial_dims = [d for d in ds.dims if d in ("lat", "lon", "x", "y")]
     if not spatial_dims:
         return False
@@ -51,7 +52,6 @@ def is_grid_regular(ds: xr.Dataset) -> bool:
         dims = ds[var].dims
         # Count how many of its dims are spatial ones
         spatial_count = sum(d in spatial_dims for d in dims)
-        if spatial_count >= 2:ta variable (skip scalars or coords)
         if spatial_count >= 2:
             return True  # Regular gridded (2D+ spatial structure)
     return False  # Likely station-based or 1D

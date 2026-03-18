@@ -45,19 +45,17 @@ def main():
     id_dir = os.path.abspath(f"{output_dir}/{run_ID}")
     model_dir = f"{id_dir}/models/"
     os.makedirs(model_dir, exist_ok=True)
-    metadata_dir = f"{id_dir}/metadata/"
-    os.makedirs(metadata_dir, exist_ok=True)
     aux_dir = f"{id_dir}/aux_files/"
     os.makedirs(aux_dir, exist_ok=True)
-    aux_prd = f"{id_dir}/predictions/"
-    os.makedirs(aux_prd, exist_ok=True)
+    pred_dir = f"{id_dir}/predictions/"
+    os.makedirs(pred_dir, exist_ok=True)
     
     # --- Import training module ----------------------------------
     d4dt = config.get("d4p_trainer", None)
     if d4dt is None: 
-      d4d_trainer = get_func_from_string("deep4production.classes.d4p_trainer", "d4p_trainer")
+      d4p_trainer = get_func_from_string("deep4production.classes.d4p_trainer", "d4p_trainer")
     else:
-      d4d_trainer = get_func_from_string(d4dt["module"], d4dt["name"])
+      d4p_trainer = get_func_from_string(d4dt["module"], d4dt["name"])
     d4dpy = config.get("d4p_pydataset", {})
 
     # --- Start Mlflow and log config ----------------------------------

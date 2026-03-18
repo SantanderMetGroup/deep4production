@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 import torch
 ## Deep4production
 from deep4production.utils.trans import from_pred_to_xarray
-from deep4production.utils.normalizers import d4dnormalizers
+from deep4production.utils.normalizers import d4pnormalizers
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 ########################################################################################################
@@ -283,7 +283,7 @@ class d4p_pydataset(Dataset):
         if normalizer is not None:
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
-                    normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
+                    normalizer_class = d4pnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
                     x[c,:] = normalizer_method(x[c,:])
         # --- Transform to 2D ---

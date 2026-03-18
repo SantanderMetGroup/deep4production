@@ -1,4 +1,4 @@
-class d4dnormalizers():
+class d4pnormalizers():
     """
     Normalization class for climate data.
     Purpose: Provides methods for normalizing and denormalizing arrays using mean, std, min, max.

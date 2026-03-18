@@ -33,11 +33,11 @@ def main():
     saving_info = config["saving_info"]
 
     # --- Import downscaler module ----------------------------------
-    d4dp = config.get("d4p_downscaler", None)
-    if d4dp is None: 
-      d4d_downscaler = get_func_from_string("deep4production.classes.d4p_downscaler", "d4p_downscaler")
+    d4p = config.get("d4p_downscaler", None)
+    if d4p is None: 
+      d4p_downscaler = get_func_from_string("deep4production.classes.d4p_downscaler", "d4p_downscaler")
     else:
-      d4d_downscaler = get_func_from_string(d4dp["module"], d4dp["name"])
+      d4p_downscaler = get_func_from_string(d4p["module"], d4p["name"])
 
     # --- Downscale ----------------------------------
     downscaler = d4p_downscaler(id_dir=id_dir, input_data=input_data, graph=graph, ensemble_size=ensemble_size, model_file=model_file, saving_info=saving_info)

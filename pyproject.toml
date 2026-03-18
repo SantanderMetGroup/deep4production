@@ -16,6 +16,8 @@ dependencies = [
     "scikit-learn",
     "scipy",
     "xarray",
+    "netcdf4",
+    "h5py",
     "zarr",
     "cftime",
     "numcodecs",

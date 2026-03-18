@@ -40,7 +40,7 @@ class d4p_trainer:
             d4dpy (dict, optional): Custom pydataset configuration.
             Mlflow (dict, optional): MLflow tracking configuration.
         """
-        print("🚀 STARTING D4D TRAINER")
+        print("🚀 STARTING D4P TRAINER")
         # --- SELF PARAMETERS ---------------------------------------
         self.data = data
         self.dataloader = dataloader
@@ -52,10 +52,10 @@ class d4p_trainer:
         self.training_params = model_info["training_params"]
         self.d4dpy = d4dpy
         if d4dpy: # Is d4dpy dict not empty?
-            self.d4d_pydataset = get_func_from_string(d4dpy["module"], d4dpy["name"])
+            self.d4p_pydataset = get_func_from_string(d4dpy["module"], d4dpy["name"])
             self.d4dpy = d4dpy["kwargs"]
         else:
-            self.d4d_pydataset = get_func_from_string("deep4production.classes.d4d_pydataset", "d4d_pydataset")
+            self.d4p_pydataset = get_func_from_string("deep4production.classes.d4p_pydataset", "d4p_pydataset")
 
         self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -107,9 +107,9 @@ class d4p_trainer:
             self.Mlflow_save_checkpoint_every_n_epochs = Mlflow.get("save_checkpoint_every_n_epochs", None)
             if self.Mlflow_diagnostics is not None:
                 ## Get d4p_downscaler function
-                d4dp_name = Mlflow.get("func_name", "d4P_downscaler")
-                d4dp_module = Mlflow.get("func_module", "deep4production.classes.d4p_downscaler")
-                self.d4dp_func = get_func_from_string(module_string=d4dp_module, func_string=d4dp_name)
+                d4p_name = Mlflow.get("func_name", "d4P_downscaler")
+                d4p_module = Mlflow.get("func_module", "deep4production.classes.d4p_downscaler")
+                self.d4p_func = get_func_from_string(module_string=d4p_module, func_string=d4p_name)
                 self.input_data = {"paths": data["predictors"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
                 if data.get("forcings", None) is not None:
                     self.forcing_data = {"paths": data["predictands"]["paths"], "years": data["validation_period"], "load_in_memory": data["load_in_memory"]}
@@ -199,10 +199,10 @@ class d4p_trainer:
         ## Create pydatasets
         kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "forcings": self.data.get("forcings", {}), "load_in_memory": self.data.get("load_in_memory", True)}
         kwargs_pydataset.update(**self.d4dpy)
-        train_dataset = self.d4d_pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
+        train_dataset = self.d4p_pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
         valid_dataset = None
         if self.data.get("validation_period", None) is not None:
-            valid_dataset = self.d4d_pydataset(temporal_period = self.data["validation_period"], **kwargs_pydataset)
+            valid_dataset = self.d4p_pydataset(temporal_period = self.data["validation_period"], **kwargs_pydataset)
             if self.Mlflow is not None:
                 if self.Mlflow_diagnostics is not None:
                     self.tgt_mlflow = valid_dataset.get_target_samples()
@@ -551,12 +551,12 @@ class d4p_trainer:
             if self.Mlflow is not None:
                 if self.Mlflow_compute_diagnostics_every_n_epochs is not None:
 
-                    ## Init d4d_downscaler
+                    ## Init d4p_downscaler
                     if epoch == 0:
                         path_save_mlflow = f"{self.model_dir}/modelPlaceholder_mlflow.pt"
-                        save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save) # Save a model that contains all the metadata necessary to init properly d4d_downscaler
-                        d4dp = self.d4dp_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph_loc) # Run init
-                        # print("🌐 (Mlflow) D4D DOWNSCALER READY ")
+                        save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save) # Save a model that contains all the metadata necessary to init properly d4p_downscaler
+                        d4p = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph_loc) # Run init
+                        # print("🌐 (Mlflow) D4P DOWNSCALER READY ")
 
                     ## Determine if diagnostics are computed in this epoch
                     mlflow_diagnostic_epoch_interval = epoch - epoch_ref_mlflow_diagnostic
@@ -564,7 +564,7 @@ class d4p_trainer:
 
                         ## Predict and postprocess prediction
                         model.eval()
-                        prd_mlflow = d4dp.downscale(model=model, return_pred=True, verbose=False)
+                        prd_mlflow = d4p.downscale(model=model, return_pred=True, verbose=False)
                         # print(f"Pred (mlflow): {prd_mlflow}")
                         # print(f"Target (mlflow): {self.tgt_mlflow}")
                        
@@ -601,8 +601,8 @@ class d4p_trainer:
             if Mlflow_figures is not None:
                 if Mlflow_figures.get("on_best", False):
                     # Predict
-                    d4dp = self.d4dp_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file=f"{self.model_save_name}_best.pt", graph=self.graph_loc) # Run init
-                    prd_mlflow = d4dp.downscale(return_pred=True, verbose=False)
+                    d4p = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file=f"{self.model_save_name}_best.pt", graph=self.graph_loc) # Run init
+                    prd_mlflow = d4p.downscale(return_pred=True, verbose=False)
                     # Log figures
                     mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info = Mlflow_figures, epoch=epoch_best)
             

@@ -18,29 +18,29 @@ def from_xr_grid_to_vector(y):
         xarray.DataArray: Stacked 1D vector.
     """
  
-     ## Compute mask to identify NaNs in the output field
-     y_mask = compute_valid_mask(y) 
+    ## Compute mask to identify NaNs in the output field
+    y_mask = compute_valid_mask(y) 
 
-     ## Predictand: Convert 2D grid to 1D vector
-     if "x" in y.dims and "y" in y.dims:
-          if y.sizes["x"] > 1 and y.sizes["y"] > 1:
-               y_mask_stack = y_mask.stack(gridpoint=("y", "x"))
-               y_stack = y.stack(gridpoint=("y", "x"))
-          else:
-               raise ValueError("x or y dimension has size <= 1; cannot stack.")
+    ## Predictand: Convert 2D grid to 1D vector
+    if "x" in y.dims and "y" in y.dims:
+         if y.sizes["x"] > 1 and y.sizes["y"] > 1:
+              y_mask_stack = y_mask.stack(gridpoint=("y", "x"))
+              y_stack = y.stack(gridpoint=("y", "x"))
+         else:
+              raise ValueError("x or y dimension has size <= 1; cannot stack.")
+    
+    elif "lat" in y.dims and "lon" in y.dims:
+       y_mask_stack = y_mask.stack(gridpoint=("lat", "lon"))
+       y_stack = y.stack(gridpoint=("lat", "lon"))
+    
+    else:
+         raise ValueError("Cannot determine which dimensions to stack.")
 
-     elif "lat" in y.dims and "lon" in y.dims:
-        y_mask_stack = y_mask.stack(gridpoint=("lat", "lon"))
-        y_stack = y.stack(gridpoint=("lat", "lon"))
+    ## Drop NaNs
+    y_stack_filt = y_stack.where(y_stack['gridpoint'] == y_mask_stack['gridpoint'], drop=True) 
 
-     else:
-          raise ValueError("Cannot determine which dimensions to stack.")
-
-     ## Drop NaNs
-     y_stack_filt = y_stack.where(y_stack['gridpoint'] == y_mask_stack['gridpoint'], drop=True) 
-
-     ## Return
-     return y_stack_filt
+    ## Return
+    return y_stack_filt
 
 
 def remove_days_with_nans(data: xr.Dataset,
