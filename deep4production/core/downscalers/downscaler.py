@@ -11,7 +11,7 @@ from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 
 ##################################################################################################################################
-class d4p_downscaler:
+class downscaler:
     """
     Downscaler class for applying trained models to input data and generating predictions.
     Purpose: Loads model and metadata, preprocesses input, handles forcings, and saves predictions.

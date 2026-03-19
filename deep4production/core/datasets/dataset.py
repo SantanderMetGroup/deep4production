@@ -14,7 +14,7 @@ from deep4production.utils.trans import xarray_to_numpy
 from deep4production.utils.general import is_grid_regular
 from deep4production.utils.imputers import d4dimputers
 ########################################################################################################
-class d4p_dataset(Dataset):
+class dataset(Dataset):
     """
     Dataset class for loading and processing NetCDF climate data.
     Purpose: Handles spatial, temporal, and variable selection, imputation, and statistics computation for deep learning workflows.

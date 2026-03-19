@@ -53,7 +53,7 @@ def main():
     # --- Import training module ----------------------------------
     d4dt = config.get("d4p_trainer", None)
     if d4dt is None: 
-      d4p_trainer = get_func_from_string("deep4production.classes.d4p_trainer", "d4p_trainer")
+      d4p_trainer = get_func_from_string("deep4production.core.trainers.trainer", "trainer")
     else:
       d4p_trainer = get_func_from_string(d4dt["module"], d4dt["name"])
     d4dpy = config.get("d4p_pydataset", {})

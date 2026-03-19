@@ -35,7 +35,7 @@ def main():
     # --- Import downscaler module ----------------------------------
     d4p = config.get("d4p_downscaler", None)
     if d4p is None: 
-      d4p_downscaler = get_func_from_string("deep4production.classes.d4p_downscaler", "d4p_downscaler")
+      d4p_downscaler = get_func_from_string("deep4production.core.downscalers.downscaler", "downscaler")
     else:
       d4p_downscaler = get_func_from_string(d4p["module"], d4p["name"])
 

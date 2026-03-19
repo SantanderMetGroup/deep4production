@@ -1,4 +1,4 @@
-# Deep4Production Tutorial: CORDEX-BENCH Alps Case Study with DeepESD
+# Deep4Production Tutorial: CORDEX-BENCH Alps Case Study with DeepESD with MLflow
 
 This tutorial demonstrates how to use the [deep4production](https://github.com/yourorg/deep4production) framework for climate downscaling, using the CORDEX-BENCH Alps domain as a case study. We will walk through the full workflow: preparing AI-ready datasets, inspecting datasets, training a model, and running inference.
 
@@ -6,71 +6,20 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/y
 
 ## 1. Introduction
 
-**deep4production** is a modular command-line framework designed to operationalize deep learning workflows for climate downscaling applications It operates with four main tools:
+**deep4production** is a command-line framework for deep learning-based climate downscaling. It operates with four main tools:
 
 1. **d4p-datasets**: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
 2. **d4p-inspect**: Inspects the created Zarr file for basic QA/QC.
-3. **d4p-train**: Trains a deep learning downscaling model.
-4. **d4p-predict**: Runs inference using trained model.
+3. **d4p-train**: Trains a deep learning model using configuration files.
+4. **d4p-predict**: Runs inference using a pre-trained model.
 
-All steps are controlled via **YAML configuration files**, ensuring:
-
-* **Reproducibility**
-
-* **Transparency**
-
-* **Easy experimentation**
+All tools (except `d4p-inspect`) use YAML configuration files for reproducibility.
 
 CORDEX-BENCH is a ...
 
-
 ---
 
-## 2. Case study: CORDEX-BENCH
-
-**CORDEX-BENCH** is a community benchmark dataset from **CORDEX (Coordinated Regional Climate Downscaling Experiment)**, designed to evaluate machine learning methods for climate downscaling in a standardized and reproducible way. It defines standardized training and test experiments assessing various downscaling challenges along with the corresponding datasets from Regional Climate Models (RCMs) driven by different Global Climate Models (GCMs), across different regions covering both the standard (perfect prognosis ESD) and emulation climate downscaling approaches.
-
-For more details on CORDEX-BENCH, see the official repository:  
-https://github.com/WCRP-CORDEX/ml-benchmark
-
-To keep the focus on illustrating the workflow of `deep4production`, we use a **simplified CORDEX-BENCH configuration**.
-
-* **Domain:** Central Europe (Alps)
-* **AI-model (loss function):** DeepESD (negative log-likelihood of a Bernoulli-Gamma)
-
-The following variables are used as predictors, predictands and forcings:
-* **Predictors:**
-  * **Dataset**: Upscaled CNRM-CM5-ALADIN-63 Regional Climate Model
-  * **Spatial resolution (dimensions)**: 2-degrees (16 x 16)
-  * **Temporal resolution**: daily
-  * **Variables:** 15
-    * `z_850`, `z_700`, `z_500`: geopotential at 850, 700, and 500 hPa
-    * `t_850`, `t_700`, `t_500`: air temperature at 850, 700, and 500 hPa
-    * `q_850`, `q_700`, `q_500`: specific humidity at 700, 700, and 500 hPa
-    * `u_850`, `u_700`, `u_500`: zonal wind at 500, 700, and 500 hPa
-    * `v_850`, `v_700`, `v_500`: meridional wind at 850, 700, and 500 hPa
-* **Predictands:** 1
-  * **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
-  * **Spatial resolution (dimensions)**: 0.11-degrees (128 x 128)
-  * **Temporal resolution**: daily
-  * **Variables:** 1
-    * `pr`: precipitation
-* **Forcings:** 
-  * **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
-  * **Spatial resolution (dimensions)**: 0.11-degrees (128 x 128)
-  * **Temporal resolution**: daily
-  * **Variables:** 1
-    * `orog`: orography
-
-The following training, validation and testing periods are considered:
-* **Training period**: 1961-1979 (except 1967, 1975)
-* **Validation period**: 1967, 1975
-* **Testing period**: 1980
-
-For simplicity, the CNRM-CM5-ALADIN-63 Regional Climate Model and its upscaled version will hereafter be referred to as **RCM** and **UPSRCM**, respectively.
----
-
-## 3. Download CORDEX-BENCH Alps Data
+## 2. Setup: Download CORDEX-BENCH Alps Data
 
 We will use the Alps domain data from CORDEX-BENCH, available on Zenodo. Estimated size of files is: XXX GB
 
@@ -151,12 +100,12 @@ Inspect the generated Zarr files to ensure they are correct.
 
 ## 5. Train a Model with `d4p-train`
 
-Prepare a YAML configuration for training.
+Prepare a YAML configuration for training. The MLflow information appears at the bottom of the YAML config file.
 
 ```python
 # Show example training config
 ##### GENERAL INFO #####
-run_ID: deepesd
+run_ID: deepesd_mlflow
 output_dir: ./outputs
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
@@ -231,6 +180,59 @@ model_info:
     patience_early_stopping: 30
     optimizer_params:
       lr: 0.0001
+
+
+##### MLFlow #####
+Mlflow:
+  tracking_uri: https://mlflow.c3s2-384.predictia.es/
+  username: banoj
+  password: flow
+  experiment: CSIC
+  run: csic-manage-deepesd
+  tags:
+    domain: alps
+    rcm: cnrm-aladin-6.3
+    gcm: cnrm-cm5
+    framework: perfect
+    model: deepesd
+    loss: bergamma
+    contact: jorge
+  save_checkpoint_every_n_epochs: null
+  compute_diagnostics_every_n_epochs: 3
+  diagnostics:
+    scalars:
+      default:
+        - rmse
+      pr:
+        - [R01, relbiasAbs]
+        - [R20, relbiasAbs]
+        - [Rx1day, relbiasAbs]
+        - [SDII, relbiasAbs]
+        - [P98Wet, relbiasAbs]
+    figures:
+      on_best: true
+      default:
+        figure_1:
+          module: deep4production.visualization.xyplots
+          name: plot_psd_spatial
+          kwargs:
+            reshape_spatial_dims: [128, 128]
+      pr:
+        figure_2:
+          module: deep4production.visualization.spatial
+          name: plot_date_from_1D_spatial_field
+          kwargs:
+            date: 2095-01-01
+            vmin: 0
+            vmax: 10
+            set_extent: [5, 15, 44, 48]
+            central_longitude: 0
+            cbar_label: Precipitation (mm)
+            titles: [target, prediction]
+            diff: True
+            vminDiff: -5
+            vmaxDiff: 5
+            cmapDiff: BrBG
 ```
 
 Train the model:

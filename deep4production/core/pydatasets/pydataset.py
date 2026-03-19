@@ -14,7 +14,7 @@ from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
 ########################################################################################################
 ########################################################################################################
-class d4p_pydataset(Dataset):
+class pydataset(Dataset):
     """
     Dataset class for loading, preprocessing, and batching predictor/predictand/forcing data for deep learning.
     Purpose: Handles variable selection, normalization, operator application, temporal alignment, and batching for PyTorch models.

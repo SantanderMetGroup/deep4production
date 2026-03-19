@@ -1,2 +1,3 @@
-from . import console, classes, deep, utils, visualization
+from . import cli, core, deep, utils, visualization
+from .core import datasets, downscalers, pydatasets, trainers
 from .deep import models
