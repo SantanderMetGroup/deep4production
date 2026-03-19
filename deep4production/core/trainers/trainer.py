@@ -555,7 +555,7 @@ class trainer:
                     if epoch == 0:
                         path_save_mlflow = f"{self.model_dir}/modelPlaceholder_mlflow.pt"
                         save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save) # Save a model that contains all the metadata necessary to init properly downscaler
-                        d4p = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph_loc) # Run init
+                        runner = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file="modelPlaceholder_mlflow.pt", graph=self.graph_loc) # Run init
                         # print("🌐 (Mlflow) D4P DOWNSCALER READY ")
 
                     ## Determine if diagnostics are computed in this epoch
@@ -564,10 +564,10 @@ class trainer:
 
                         ## Predict and postprocess prediction
                         model.eval()
-                        prd_mlflow = d4p.downscale(model=model, return_pred=True, verbose=False)
+                        prd_mlflow = runner.downscale(model=model, return_pred=True, verbose=False)
                         # print(f"Pred (mlflow): {prd_mlflow}")
                         # print(f"Target (mlflow): {self.tgt_mlflow}")
-                       
+
                         ## Log scalars ------------------------------------------------------------------------------
                         Mlflow_scalars = self.Mlflow_diagnostics.get("scalars", None)
                         if Mlflow_scalars is not None:
@@ -601,8 +601,8 @@ class trainer:
             if Mlflow_figures is not None:
                 if Mlflow_figures.get("on_best", False):
                     # Predict
-                    d4p = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file=f"{self.model_save_name}_best.pt", graph=self.graph_loc) # Run init
-                    prd_mlflow = d4p.downscale(return_pred=True, verbose=False)
+                    runner = self.d4p_func(id_dir=self.id_dir, input_data=self.input_data, forcing_data=self.forcing_data, model_file=f"{self.model_save_name}_best.pt", graph=self.graph_loc) # Run init
+                    prd_mlflow = runner.downscale(return_pred=True, verbose=False)
                     # Log figures
                     mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info = Mlflow_figures, epoch=epoch_best)
             

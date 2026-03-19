@@ -324,7 +324,7 @@ class downscaler:
             return_pred (bool): Whether to return prediction instead of saving.
             verbose (bool): Print progress messages.
         Returns:
-            xarray.Dataset or None: Prediction dataset if return_pred is True.
+            xarray.Dataset or None: Prediction dataset if return_pred is True, otherwise saves the prediction file.
         """
         if verbose:
             print("🚀 STARTING DOWNSCALING PROCESS")

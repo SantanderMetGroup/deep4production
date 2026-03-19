@@ -6,9 +6,11 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/y
 
 ## 1. Introduction
 
+### Command Line Interface (CLI) available in `deep4production`
+
 **deep4production** is a modular command-line framework designed to operationalize deep learning workflows for climate downscaling applications. It operates with four main tools:
 
-1. `d4p-datasets`: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
+1. `d4p-create`: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
 2. `d4p-inspect`: Inspects the created Zarr file for basic QA/QC.
 3. `d4p-train`: Trains a deep learning downscaling model.
 4. `d4p-predict`: Runs inference using trained model.
@@ -25,7 +27,7 @@ Please see installation instructions at:
 https://github.com/SantanderMetGroup/deep4production/tree/master
 
 
-# Project structure
+### Project structure
 
 The `deep4production` workflow relies on a well-defined directory structure to organize data, configurations, models, and outputs. Each step of the pipeline (dataset creation, training, inference) reads from and writes to specific locations.
 
@@ -35,8 +37,8 @@ A typical project structure looks like:
 example/
 ├── AI_ready_datasets/
 │ ├── configs/ # YAML configs for dataset creation
-│ │ ├── config_predictor.yaml # e.g., UPSRCM_1961-1980
-│ │ └── config_predictand.yaml # e.g., RCM_1961-1980
+│ │ ├── config_predictor.yaml # e.g., UPSRCM_1961-1980.yaml
+│ │ └── config_predictand.yaml # e.g., RCM_1961-1980.yaml
 │ └── files/ # Generated Zarr datasets
 │ ├── UPSRCM_1961-1980.zarr # Created with: d4p-create /example/AI_ready_datasets/configs/UPSRCM_1961-1980.yaml
 │ └── RCM_1961-1980.zarr # Created with: d4p-create /example/AI_ready_datasets/configs/RCM_1961-1980.yaml
@@ -93,7 +95,8 @@ https://github.com/WCRP-CORDEX/ml-benchmark
 To keep the focus on illustrating the workflow of `deep4production`, we use a **simplified CORDEX-BENCH configuration**.
 
 * **Domain:** Central Europe (Alps)
-* **AI-model (loss function):** DeepESD (negative log-likelihood of a Bernoulli-Gamma)
+* **AI-model backbone:** DeepESD 
+* **Loss function:** Negative log-likelihood of a Bernoulli-Gamma
 
 Information from predictors, predictands and forcings sources is explained below:
 * **Predictors:**
@@ -106,7 +109,7 @@ Information from predictors, predictands and forcings sources is explained below
     * `q_850`, `q_700`, `q_500`: specific humidity at 700, 700, and 500 hPa
     * `u_850`, `u_700`, `u_500`: zonal wind at 500, 700, and 500 hPa
     * `v_850`, `v_700`, `v_500`: meridional wind at 850, 700, and 500 hPa
-* **Predictands:** 1
+* **Predictands:** 
   * **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
   * **Spatial resolution (dimensions)**: 0.11-degrees (128 x 128)
   * **Temporal resolution**: daily
@@ -154,7 +157,7 @@ os.remove("./source_files/data_zenodo/ALPS_domain.zip")
 
 ---
 
-## 3. Prepare AI-Ready Datasets with `d4p-create`
+## 4. Prepare AI-Ready Datasets with `d4p-create`
 
 We use YAML configuration files to convert raw NetCDF data into **AI-ready Zarr datasets** using `d4p-create`. This step is essential because it standardizes the data format, extracts only the required variables, and computes normalization statistics that will be reused during training.
 
@@ -213,7 +216,7 @@ d4p-create ./AI_ready_datasets/configs/RCM_1961-1980.yaml # Predictands and forc
 
 ---
 
-## 4. Inspect the Zarr Datasets with `d4p-inspect`
+## 5. Inspect the Zarr Datasets with `d4p-inspect`
 
 Once the AI-ready datasets have been created, it is good practice to inspect them to ensure everything has been processed correctly.
 
@@ -244,7 +247,7 @@ The output should look like this for the predictors:
 
 ---
 
-## 5. Train a Model with `d4p-train`
+## 6. Train a Model with `d4p-train`
 
 We now train a deep learning model using the preprocessed Zarr datasets. This step is controlled entirely through a YAML configuration file, which defines:
 
@@ -389,12 +392,12 @@ Once the configuration file is defined, we train the model: `d4p-train`.
 d4p-train ./training/configs/deepesd.yaml
 ```
 Below is an example of training output:
-![d4p-inspect](./images/d4p-train-output.png)
-![d4p-inspect](./images/d4p-train-output-v2.png)
+![d4p-train-1](./images/d4p-train-output.png)
+![d4p-train-2](./images/d4p-train-output-v2.png)
 
 ---
 
-## 6. Run Inference with `d4p-predict`
+## 7. Run Inference with `d4p-predict`
 
 Once the model has been trained, we can use it to generate predictions on new (or held-out) data. This step is controlled via a YAML configuration file, which specifies:
 
@@ -441,19 +444,73 @@ Once the configuration file is defined, we perform inference: `d4p-predict`.
 d4p-predict ./inference/configs/deepesd.yaml
 ```
 Below is an example of inference output:
-![d4p-inspect](./images/d4p-predict-output.png)
+![d4p-predict-1](./images/d4p-predict-output.png)
 
 Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
 
-![d4p-inspect](./images/d4p-predict-pred.png)
+![d4p-predict-2](./images/d4p-predict-pred.png)
 
 ... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
-![d4p-inspect](./images/d4p-predict-pred-template.png)
+![d4p-predict-3](./images/d4p-predict-pred-template.png)
+
 
 
 ---
 
-## 7. Summary
+## 8. Visualization
+
+Finally, in this section, we demonstrate how to visualize the model outputs using a built-in function from `deep4production`. Specifically, we use `plot_date_from_1D_spatial_field` from the `deep4production.visualization.spatial` module to create a simple, illustrative example of the predicted fields.
+
+This example plots a single date, showing the model prediction, the reference observation, and their difference, providing a **quick qualitative assessment of model performance**.
+
+```
+# This example demonstrates how to plot a random date from the model, groundtruth, and difference 
+# between the two using the `plot_date_from_1D_spatial_field` function from the `dee4production.visualization` module.
+
+# Import the necessary libraries
+import xarray as xr
+import numpy as np
+from deep4production.visualization.spatial import plot_date_from_1D_spatial_field
+
+# Define the plotting parameters.
+kwargs = {
+          # Plotting parameters for the date to be plotted
+          "date": "1980-01-01", # Date to be plotted
+          "vmin": 0,
+          "vmax": 10,
+          "set_extent": [5, 15, 44, 48],
+          "central_longitude": 0,
+          "cbar_label": "Precipitation (mm)",
+          "titles": ["Groundtruth (RCM)", "Prediction (DeepESD)", "Difference"],
+          # Plotting parameters for the difference between model and observation for the date to be plotted
+          "diff": True,
+          "vminDiff": -5,
+          "vmaxDiff": 5,
+          "cmapDiff": "BrBG"
+        }
+
+# Load the data for the model, observation, and difference between the two for the date to be plotted.
+tgt = xr.open_dataset("./source_files/data_zenodo/ALPS_domain/train/ESD_pseudo_reality/target/pr_tasmax_CNRM-CM5_1961-1980.nc")
+tgt = tgt.stack(point=("y", "x")) # From [time, y, x] to [time, point] format
+tgt['time'] = tgt.time.dt.floor('D')
+
+prd = xr.open_dataset("./outputs/deepesd/predictions/1980.nc") # Already in [member, time, point] format
+prd = prd.isel(member=0) # Select the first member of the ensemble
+prd['time'] = prd.time.dt.floor('D')
+
+var = "pr" # Variable to be plotted
+kwargs.update({"data": [tgt[var], prd[var]]})
+
+# Call the plotting function with the defined parameters
+fig = plot_date_from_1D_spatial_field(**kwargs)
+```
+
+![figure](./images/deepesd_1980-01-01.png)
+
+
+---
+
+## 9. Summary
 
 You have now completed the full deep4production workflow using the DeepESD model for a simplified CORDEX-BENCH case-study over Central Europe:
 - Downloaded and prepared data
@@ -462,7 +519,7 @@ You have now completed the full deep4production workflow using the DeepESD model
 - Performed inference
 ---
 
-## 8. References
+## 10. References
 
 - [CORDEX-BENCH Github](https://github.com/WCRP-CORDEX/ml-benchmark)
 - [CORDEX-BENCH Zenodo](https://zenodo.org/records/17957264)
