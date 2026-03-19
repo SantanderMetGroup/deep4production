@@ -181,7 +181,7 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
 The output should look like this for the predictors:
 ![d4p-inspect](./images/d4p-inspect-predictors.png)
 
-... like this for the predictands:
+... and like this for the predictands:
 ![d4p-inspect](./images/d4p-inspect-predictands.png)
 
 
@@ -198,14 +198,10 @@ We now train a deep learning model using the preprocessed Zarr datasets. This st
   - The **normalization strategy**, which uses precomputed statistics (e.g., mean and standard deviation) stored in the Zarr files  
   - Optional transformations such as reshaping the data into a **2D format suitable for convolutional neural networks (CNNs)**  
 
----
-
 - The **data loader**, which controls how data is fed into the model during training. This includes:
   - The **batch size** (number of samples processed at once)  
   - Whether to **shuffle** the dataset (important for stochastic training)  
   - The number of **worker processes** used to load data in parallel  
-
----
 
 - The **model information**, which defines all components related to the learning process:
 
@@ -335,6 +331,9 @@ Once the configuration file is defined, we train the model: `d4p-train`.
 ```bash
 d4p-train ./training/configs/deepesd.yaml
 ```
+Below is an example of training output:
+![d4p-inspect](./images/d4p-train-output.png)
+![d4p-inspect](./images/d4p-train-output-v2.png)
 
 ---
 
@@ -345,10 +344,6 @@ Once the model has been trained, we can use it to generate predictions on new (o
 - The **input data** to run inference on, which has to be in `Zarr`. See `input_data` in YAML. 
 - The **trained model** to use. See `model_file` parameter in YAML. 
 - The **output format and storage** of predictions. See `saving_info` in YAML. 
-
----
-
-### What does `d4p-predict` do?
 
 When executed, `d4p-predict`:
 
@@ -388,22 +383,29 @@ Once the configuration file is defined, we perform inference: `d4p-predict`.
 ```bash
 d4p-predict ./inference/configs/deepesd.yaml
 ```
+Below is an example of inference output:
+![d4p-inspect](./images/d4p-predict-output.png)
+
+Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
+![d4p-inspect](./images/d4p-predict-pred.png)
+
+... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
+![d4p-inspect](./images/d4p-predict-pred-template.png)
+
 
 ---
 
 ## 7. Summary
 
-You have now completed the full deep4production workflow for the CORDEX-BENCH Alps domain:
+You have now completed the full deep4production workflow using the DeepESD model for a simplified CORDEX-BENCH case-study over Central Europe:
 - Downloaded and prepared data
 - Inspected AI-ready datasets
 - Trained a deep learning model
 - Performed inference
-
-For more details, see the [deep4production README](../deep4production/README.md) and the [CORDEX-BENCH documentation](https://github.com/CORDEX-BENCH).
-
 ---
 
 ## 8. References
 
-- [deep4production GitHub](https://github.com/yourorg/deep4production)
-- [CORDEX-BENCH Zenodo](https://zenodo.org/record/XXXXXX)
+- [CORDEX-BENCH Github](https://github.com/WCRP-CORDEX/ml-benchmark)
+- [CORDEX-BENCH Zenodo](https://zenodo.org/records/17957264)
+- [DeepESD](https://gmd.copernicus.org/articles/15/6747/2022/)

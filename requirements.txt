@@ -7,6 +7,7 @@ annotated-types==0.7.0
 anyio==4.11.0
 attrs==25.3.0
 blinker==1.9.0
+bottleneck==1.6.0
 cachetools==6.2.2
 cartopy==0.24.0
 cffi==2.0.0
