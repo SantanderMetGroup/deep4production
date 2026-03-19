@@ -175,10 +175,13 @@ This step is particularly important to:
 
 ```bash
 d4p-inspect ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Predictors
-d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
+d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands 
 ```
 
+The output should look like this for the predictors:
 ![d4p-inspect](./images/d4p-inspect-predictors.png)
+
+... like this for the predictands:
 ![d4p-inspect](./images/d4p-inspect-predictands.png)
 
 
@@ -186,7 +189,66 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
 
 ## 5. Train a Model with `d4p-train`
 
-Prepare a YAML configuration for training.
+We now train a deep learning model using the preprocessed Zarr datasets. This step is controlled entirely through a YAML configuration file, which defines:
+
+- The **data configuration**, which defines the datasets used during training. This includes:
+  - **Predictors, predictands, and optional forcings**, along with their corresponding Zarr paths  
+  - The **temporal splits** (training and validation periods)  
+  - The **variables to load** from each dataset  
+  - The **normalization strategy**, which uses precomputed statistics (e.g., mean and standard deviation) stored in the Zarr files  
+  - Optional transformations such as reshaping the data into a **2D format suitable for convolutional neural networks (CNNs)**  
+
+---
+
+- The **data loader**, which controls how data is fed into the model during training. This includes:
+  - The **batch size** (number of samples processed at once)  
+  - Whether to **shuffle** the dataset (important for stochastic training)  
+  - The number of **worker processes** used to load data in parallel  
+
+---
+
+- The **model information**, which defines all components related to the learning process:
+
+  - **Saving configuration**  
+    Specifies how and when models are stored during training.  
+    By default, the **best-performing model on the validation set** is saved.  
+    Optionally, intermediate checkpoints can also be saved:
+    - Every *N epochs*  
+    - Every *N training steps*  
+    This section also controls the **model naming**, which determines how saved files are identified.
+
+  - **Model architecture**  
+    Defines the neural network used for downscaling (here, `DeepESD`).  
+    The parameters provided in `kwargs` are passed directly to the model’s `__init__` method in the corresponding Python implementation.  
+    This includes:
+    - Input/output shapes (`x_shape`, `y_shape`, `f_shape`)  
+    - Network structure (e.g., number of filters, kernel size)  
+
+  - **Loss function**  
+    Specifies the objective function used to train the model.  
+    As with the model, the parameters in `kwargs` are passed directly to the loss function’s `__init__` method.  
+    In this case, `NLLBerGammaLoss` is used, which is well-suited for precipitation because it can handle:
+    - Zero-inflated values  
+    - Skewed distributions  
+
+  - **Training parameters**  
+    Controls the optimization process, including:
+    - The number of **epochs** (full passes over the dataset)  
+    - **Early stopping**, which halts training if validation performance does not improve after a given number of epochs  
+    - The **optimizer settings**, such as the learning rate (`lr`), which determines how quickly the model updates its parameters during training  
+
+Remember that in this example the goal is to learn a mapping from **large-scale atmospheric predictors** to **high-resolution precipitation**.
+
+When executed, `d4p-train`:
+
+1. Loads the training and validation datasets from Zarr files  
+2. Applies normalization using precomputed statistics  
+3. Builds the specified deep learning model (here: DeepESD)  
+4. Trains the model over multiple epochs  
+5. Monitors validation performance  
+6. Saves the best-performing model (or selected models) and training logs  
+
+This ensures a **fully reproducible training pipeline** driven by configuration.
 
 ```python
 # Show example training config
@@ -237,7 +299,7 @@ dataloader:
   num_workers: 0
 
 
-##### REGRESSOR CONFIGURATION #####
+##### MODEL CONFIGURATION #####
 model_info: 
   saving_params:
     model_save_name: DeepESD_BerGamma
@@ -268,44 +330,63 @@ model_info:
       lr: 0.0001
 ```
 
-Train the model:
+Once the configuration file is defined, we train the model: `d4p-train`.
 
 ```bash
-!d4p-train ./training/configs/deepesd.yaml
+d4p-train ./training/configs/deepesd.yaml
 ```
 
 ---
 
 ## 6. Run Inference with `d4p-predict`
 
-Prepare a YAML configuration for prediction.
+Once the model has been trained, we can use it to generate predictions on new (or held-out) data. This step is controlled via a YAML configuration file, which specifies:
+
+- The **input data** to run inference on, which has to be in `Zarr`. See `input_data` in YAML. 
+- The **trained model** to use. See `model_file` parameter in YAML. 
+- The **output format and storage** of predictions. See `saving_info` in YAML. 
+
+---
+
+### What does `d4p-predict` do?
+
+When executed, `d4p-predict`:
+
+1. Loads the trained model from the specified directory  
+2. Reads the input predictor data from Zarr files  
+3. Applies the same preprocessing and normalization used during training  
+4. Runs the model in inference mode  
+5. Optionally generates multiple realizations (ensemble)  
+6. Saves the predictions to disk (typically in NetCDF format)  
+
+This ensures that inference is **fully consistent with the training pipeline**.
 
 ```python
 # Show example prediction config
-id_dir: ./outputs/deepesd
+id_dir: ./outputs/deepesd # Points to the directory where training outputs are stored. The model file is expected inside id_dir/models/
 
-input_data: 
+input_data: # Defines the dataset used for prediction
   paths: 
     - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
   years: [1980]
   load_in_memory: true
 
-graph: null
-ensemble_size: 2
+graph: null # For graph-based downscaling models only.
+ensemble_size: 2 # Controls how many predictions are generated per input sample.
 
 model_file: DeepESD_BerGamma_best.pt # Model at: id_dir/models/
 
-saving_info:
+saving_info: # Defines how predictions are written to disk
   file: 1980.nc # Predictions will be saved at: id_dir/predictions/
   template: null
   formatting: null
 
 ```
 
-Run prediction:
+Once the configuration file is defined, we perform inference: `d4p-predict`.
 
 ```bash
-!d4p-predict ./inference/configs/deepesd.yaml
+d4p-predict ./inference/configs/deepesd.yaml
 ```
 
 ---
