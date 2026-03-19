@@ -24,6 +24,59 @@ All steps are controlled via **YAML configuration files**, ensuring:
 Please see installation instructions at: 
 https://github.com/SantanderMetGroup/deep4production/tree/master
 
+
+# Project structure
+
+The `deep4production` workflow relies on a well-defined directory structure to organize data, configurations, models, and outputs. Each step of the pipeline (dataset creation, training, inference) reads from and writes to specific locations.
+
+A typical project structure looks like:
+
+example/
+├── AI_ready_datasets/
+│ ├── configs/ # YAML configs for dataset creation
+│ │ ├── config_predictor.yaml # e.g., UPSRCM_1961-1980
+│ │ └── config_predictand.yaml # e.g., RCM_1961-1980
+│ └── files/ # Generated Zarr datasets
+│ ├── UPSRCM_1961-1980.zarr # Created with: d4p-create /example/AI_ready_datasets/configs/UPSRCM_1961-1980.yaml
+│ └── RCM_1961-1980.zarr # Created with: d4p-create /example/AI_ready_datasets/configs/RCM_1961-1980.yaml
+│
+├── source_files/ # Raw downloaded data storing the netcdf files.
+│ └── data_zenodo/
+│
+├── training/
+│ ├── configs/ # Training configuration files. There could be as many YAML configs as models you would like to test.
+│ │ └── deepesd.yaml 
+│ └── logs/ # Training logs
+│
+├── inference/
+│ ├── configs/ # Inference configuration files. There could be as many YAML configs as models you would like to test.
+│ │ └── deepesd.yaml
+│ └── logs/ # Inference logs
+│
+├── outputs/ # Automatically generated at training.
+│ └── deepesd/ # Outputs for a given run_ID
+│   ├── models/ # Trained models (.pt files)
+│   ├── predictions/ # Model predictions (.nc files)
+    └── aux_files/ # Additional metadata or artifacts
+│
+├── templates/ # Optional templates for output formatting
+│ └── pr_template.nc
+│
+└── *.sh # Bash scripts calling the deep4production CLI commands.
+
+The following directories have to be created manually: 
+* `/example/AI_ready_datasets/` 
+* `/example/AI_ready_datasets/configs/`
+* `/example/AI_ready_datasets/files/`
+* `/example/source_files/`
+* `/example/training/`
+* `/example/training/configs/`
+* `/example/training/logs/`
+* `/example/inference/`
+* `/example/inference/configs/`
+* `/example/inference/logs/`
+* `/example/templates`
+
 ---
 
 ## 2. Case study: CORDEX-BENCH
@@ -80,19 +133,19 @@ import os
 import zipfile
 import shutil
 
-os.makedirs("./data_zenodo/", exist_ok=True)
+os.makedirs("./source_files/data_zenodo/", exist_ok=True)
 
 ##################################
 ###### This line is on bash ######
 !wget -P ./data_zenodo/ https://zenodo.org/records/15797226/files/ALPS_domain.zip?download=1
 ##################################
 
-shutil.move("./data_zenodo/ALPS_domain.zip?download=1", "./data_zenodo/ALPS_domain.zip")
+shutil.move("./source_files/data_zenodo/ALPS_domain.zip?download=1", "./data_zenodo/ALPS_domain.zip")
 
 with zipfile.ZipFile('./data_zenodo/ALPS_domain.zip', 'r') as zip_ref:
         zip_ref.extractall('./data_zenodo/')
     
-os.remove("./data_zenodo/ALPS_domain.zip")
+os.remove("./source_files/data_zenodo/ALPS_domain.zip")
 ```
 
 ---
@@ -150,8 +203,8 @@ overwrite: True
 Once the configuration files are defined, we generate the AI-ready-datasets using: `d4p-create`. Each command reads the corresponding YAML file and executes the full preprocessing pipeline automatically, producing ready-to-use `.zarr` datasets for training and inference.
 
 ```bash
-d4p-create ./configs/UPSRCM_1961-1980.yaml # Predictors
-d4p-create ./configs/RCM_1961-1980.yaml # Predictands and forcings
+d4p-create ./AI_ready_datasets/configs/UPSRCM_1961-1980.yaml # Predictors
+d4p-create ./AI_ready_datasets/configs/RCM_1961-1980.yaml # Predictands and forcings
 ```
 
 ---
@@ -387,6 +440,7 @@ Below is an example of inference output:
 ![d4p-inspect](./images/d4p-predict-output.png)
 
 Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
+
 ![d4p-inspect](./images/d4p-predict-pred.png)
 
 ... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
