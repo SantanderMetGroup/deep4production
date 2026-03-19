@@ -31,6 +31,7 @@ The `deep4production` workflow relies on a well-defined directory structure to o
 
 A typical project structure looks like:
 
+```
 example/
 ├── AI_ready_datasets/
 │ ├── configs/ # YAML configs for dataset creation
@@ -45,12 +46,12 @@ example/
 │
 ├── training/
 │ ├── configs/ # Training configuration files. There could be as many YAML configs as models you would like to test.
-│ │ └── deepesd.yaml 
+│ │ └── deepesd.yaml # Use d4p-train your_yaml.yaml to train the model
 │ └── logs/ # Training logs
 │
 ├── inference/
 │ ├── configs/ # Inference configuration files. There could be as many YAML configs as models you would like to test.
-│ │ └── deepesd.yaml
+│ │ └── deepesd.yaml # Use d4p-predict your_yaml.yaml to perform inference
 │ └── logs/ # Inference logs
 │
 ├── outputs/ # Automatically generated at training.
@@ -63,6 +64,7 @@ example/
 │ └── pr_template.nc
 │
 └── *.sh # Bash scripts calling the deep4production CLI commands.
+```
 
 The following directories have to be created manually: 
 * `/example/AI_ready_datasets/` 
@@ -76,6 +78,8 @@ The following directories have to be created manually:
 * `/example/inference/configs/`
 * `/example/inference/logs/`
 * `/example/templates`
+
+For this tutorial, commands and scripts are run from `./example`, so all paths are relative to that directory.
 
 ---
 
@@ -126,7 +130,7 @@ For simplicity, the CNRM-CM5-ALADIN-63 Regional Climate Model and its upscaled v
 
 ## 3. Download CORDEX-BENCH Alps Data
 
-We will use the Alps domain data from CORDEX-BENCH, available on Zenodo. Estimated size of files is: 4 GB
+We download the data from CORDEX-BENCH Zenodo and place it in `/example/source_files/data_zenodo/`. Estimated size of files is: 4 GB.
 
 ```python
 import os
