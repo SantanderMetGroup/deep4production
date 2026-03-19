@@ -15,7 +15,67 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/y
 
 All tools (except `d4p-inspect`) use YAML configuration files for reproducibility.
 
-CORDEX-BENCH is a ...
+
+---
+
+## 2. Case study: CORDEX-BENCH
+
+**CORDEX-BENCH** is a community benchmark dataset designed to evaluate machine learning methods for climate downscaling in a standardized and reproducible way. 
+
+It builds on the broader **CORDEX (Coordinated Regional Climate Downscaling Experiment)** initiative, but introduces key features tailored for ML:
+
+**Key ideas behind CORDEX-BENCH:**
+
+* **Pseudo-reality setup**: Instead of using observations directly, CORDEX-BENCH treats data from **Regional Climate Models** as the "groundtruth" and a corresponding coarse-resolution version.
+
+* **Predictors vs Predictands**
+
+  * **Predictors (X):** Large-scale atmospheric variables (e.g., winds, temperature, geopotential height)
+
+  * **Predictands (Y):** Local surface variables (e.g., precipitation, temperature)
+
+* **Standardized domains**: Includes three geographic regions (Central Europe, New Zealand, and South Africa), enabling fair comparison across methods.
+
+* **Consistent splits**: Training, validation, and testing periods are predefined.
+
+The reader is referred to CORDEX-BENCH official site for more details. https://github.com/WCRP-CORDEX/ml-benchmark
+Here for the purpose of simplicity since the objective is to illustrate the functionining of `deep4production`, we plan to conduct a simplified experiment from CORDEX-BENCH with the following characteristics:
+
+* **Domain:** Central Europe
+* **Predictors:**
+  * **Dataset**: Upscaled CNRM-CM5-ALADIN-63 Regional Climate Model
+  * **Spatial resolution (dimensions)**: 2-degrees (16 x 16)
+  * **Temporal resolution**: daily
+  * **Variables:** 15
+    * `z_850`: geopotential at 850 hPa
+    * `z_700`: geopotential at 700 hPa
+    * `z_500`: geopotential at 500 hPa
+    * `t_850`: air temperature at 850 hPa
+    * `t_700`: air temperature at 700 hPa
+    * `t_500`: air temperature at 500 hPa
+    * `q_850`: specific humidity at 850 hPa
+    * `q_700`: specific humidity at 700 hPa
+    * `q_500`: specific humidity at 500 hPa
+    * `u_850`: zonal wind at 850 hPa
+    * `u_700`: zonal wind at 700 hPa
+    * `u_500`: zonal wind at 500 hPa
+    * `v_850`: meridional wind at 850 hPa
+    * `v_700`: meridional wind at 700 hPa
+    * `v_500`: meridional wind at 500 hPa
+* **Predictands:** 
+  * **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
+  * **Spatial resolution (dimensions)**: 0.11-degrees (128 x 128)
+  * **Temporal resolution**: daily
+  * **Variables:** 1
+    * `pr`: precipitation
+* **Forcings:** 
+  * **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
+  * **Spatial resolution (dimensions)**: 0.11-degrees (128 x 128)
+  * **Temporal resolution**: daily
+  * **Variables:** 1
+    * `orog`: orography
+
+For the sake of simplicity hereafet CNRM-CM5-ALADIN-63 Regional Climate Model and Upscaled CNRM-CM5-ALADIN-63 Regional Climate Model will be reffered to as RCM and UPSRCM, respectively
 
 ---
 
