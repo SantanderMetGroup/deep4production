@@ -6,12 +6,12 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/y
 
 ## 1. Introduction
 
-**deep4production** is a modular command-line framework designed to operationalize deep learning workflows for climate downscaling applications It operates with four main tools:
+**deep4production** is a modular command-line framework designed to operationalize deep learning workflows for climate downscaling applications. It operates with four main tools:
 
-1. **d4p-datasets**: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
-2. **d4p-inspect**: Inspects the created Zarr file for basic QA/QC.
-3. **d4p-train**: Trains a deep learning downscaling model.
-4. **d4p-predict**: Runs inference using trained model.
+1. `d4p-datasets`: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
+2. `d4p-inspect`: Inspects the created Zarr file for basic QA/QC.
+3. `d4p-train`: Trains a deep learning downscaling model.
+4. `d4p-predict`: Runs inference using trained model.
 
 All steps are controlled via **YAML configuration files**, ensuring:
 
@@ -21,8 +21,8 @@ All steps are controlled via **YAML configuration files**, ensuring:
 
 * **Easy experimentation**
 
-CORDEX-BENCH is a ...
-
+Please see installation instructions at: 
+https://github.com/SantanderMetGroup/deep4production/tree/master
 
 ---
 
@@ -38,7 +38,7 @@ To keep the focus on illustrating the workflow of `deep4production`, we use a **
 * **Domain:** Central Europe (Alps)
 * **AI-model (loss function):** DeepESD (negative log-likelihood of a Bernoulli-Gamma)
 
-The following variables are used as predictors, predictands and forcings:
+Information from predictors, predictands and forcings sources is explained below:
 * **Predictors:**
   * **Dataset**: Upscaled CNRM-CM5-ALADIN-63 Regional Climate Model
   * **Spatial resolution (dimensions)**: 2-degrees (16 x 16)
@@ -68,11 +68,12 @@ The following training, validation and testing periods are considered:
 * **Testing period**: 1980
 
 For simplicity, the CNRM-CM5-ALADIN-63 Regional Climate Model and its upscaled version will hereafter be referred to as **RCM** and **UPSRCM**, respectively.
+
 ---
 
 ## 3. Download CORDEX-BENCH Alps Data
 
-We will use the Alps domain data from CORDEX-BENCH, available on Zenodo. Estimated size of files is: XXX GB
+We will use the Alps domain data from CORDEX-BENCH, available on Zenodo. Estimated size of files is: 4 GB
 
 ```python
 import os
@@ -98,8 +99,25 @@ os.remove("./data_zenodo/ALPS_domain.zip")
 
 ## 3. Prepare AI-Ready Datasets with `d4p-create`
 
-We will use YAML configuration files to convert the NetCDF files into Zarr format. Example configs are in `./AI_ready_datasets/configs/`.
+We use YAML configuration files to convert raw NetCDF data into **AI-ready Zarr datasets** using `d4p-create`. This step is essential because it standardizes the data format, extracts only the required variables, and computes normalization statistics that will be reused during training.
 
+Each YAML file fully defines how the dataset is built, including:
+- The **time period** to extract (`date_init`, `date_end`, `freq`)
+- The **input NetCDF files** (`data.paths`)
+- The **variables** to include (`data.vars`)
+- The **output location** (`output_path`)
+- Whether to **overwrite** existing datasets
+
+Importantly, the configuration can accept **multiple NetCDF files**, which is useful when variables are stored in different files.
+
+During execution, `d4p-create` will:
+1. Load the specified NetCDF files  
+2. Select and align variables across files  
+3. Subset the requested time range  
+4. Compute summary statistics (e.g., mean, standard deviation)  
+5. Store everything in a **Zarr dataset optimized for deep learning workflows**  
+
+Example configuration files are available in `./AI_ready_datasets/configs/`.
 ```python
 # Show example YAML config for UPSRCM (predictor)
 date_init: 1961-01-01 12:00:00
@@ -129,23 +147,40 @@ output_path: ./AI_ready_datasets/files/RCM_1961-1980.zarr
 overwrite: True
 ```
 
-Now, we produce the AI-ready datasets by running `d4p-create`:
+Once the configuration files are defined, we generate the AI-ready-datasets using: `d4p-create`. Each command reads the corresponding YAML file and executes the full preprocessing pipeline automatically, producing ready-to-use `.zarr` datasets for training and inference.
 
 ```bash
-!d4p-create ./configs/UPSRCM_1961-1980.yaml # Predictors
-!d4p-create ./configs/RCM_1961-1980.yaml # Predictands
+d4p-create ./configs/UPSRCM_1961-1980.yaml # Predictors
+d4p-create ./configs/RCM_1961-1980.yaml # Predictands and forcings
 ```
 
 ---
 
 ## 4. Inspect the Zarr Datasets with `d4p-inspect`
 
-Inspect the generated Zarr files to ensure they are correct.
+Once the AI-ready datasets have been created, it is good practice to inspect them to ensure everything has been processed correctly.
+
+The `d4p-inspect` command provides a quick summary of the dataset, including:
+- Available variables  
+- Spatial and temporal dimensions  
+- Data shapes (useful for model configuration)  
+- Stored normalization statistics  
+- Missing values
+
+This step is particularly important to:
+- Verify that all expected variables are present  
+- Check that predictor and predictand dimensions are consistent  
+- Check that predictor and predictand min, max values are consistent.
+- Check whether there are missing values in the datasets that´d need to be replaced.
 
 ```bash
-!d4p-inspect ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Predictors
-!d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
+d4p-inspect ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Predictors
+d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
 ```
+
+![d4p-inspect](./images/d4p-inspect-predictors.png)
+![d4p-inspect](./images/d4p-inspect-predictands.png)
+
 
 ---
 
