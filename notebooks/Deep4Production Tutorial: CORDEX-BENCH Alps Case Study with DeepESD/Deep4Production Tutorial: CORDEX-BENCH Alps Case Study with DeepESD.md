@@ -242,7 +242,7 @@ The output should look like this for the predictors:
 ![d4p-inspect](./images/d4p-inspect-predictors.png)
 
 ... and like this for the predictands:
-![d4p-inspect](./images/d4p-inspect-predictands.png)
+![d4p-inspect-2](./images/d4p-inspect-predictands.png)
 
 
 ---
@@ -394,6 +394,122 @@ d4p-train ./training/configs/deepesd.yaml
 Below is an example of training output:
 ![d4p-train-1](./images/d4p-train-output.png)
 ![d4p-train-2](./images/d4p-train-output-v2.png)
+
+
+---
+### Enabling MLflow in `deep4production`
+
+**MLflow** is an open-source platform for managing the machine learning lifecycle, including:
+- Experiment tracking  
+- Logging metrics and parameters  
+- Storing artifacts (models, plots, diagnostics)  
+
+`deep4production` natively integrates with MLflow, allowing you to automatically log training runs, metrics, and outputs. This is particularly useful for:
+- Comparing multiple experiments  
+- Tracking model performance over time  
+- Sharing results across teams  
+
+
+To activate MLflow logging, add an `Mlflow` section at the end of your training YAML configuration:
+
+```
+##### MLFlow #####
+Mlflow:
+  tracking_uri: ???
+  username: ???
+  password: ???
+  experiment: tutorial
+  run: deepesd
+  tags:
+    domain: alps
+    rcm: cnrm-aladin-6.3
+    gcm: cnrm-cm5
+    framework: perfect
+    model: deepesd
+    loss: bergamma
+  save_checkpoint_every_n_epochs: null
+  compute_diagnostics_every_n_epochs: 3
+  diagnostics:
+    scalars:
+      default:
+        - rmse
+      pr:
+        - [R01, relbiasAbs]
+        - [R20, relbiasAbs]
+        - [Rx1day, relbiasAbs]
+        - [SDII, relbiasAbs]
+        - [P98Wet, relbiasAbs]
+    figures:
+      on_best: true
+      default:
+        figure_1:
+          module: deep4production.visualization.xyplots
+          name: plot_psd_spatial
+          kwargs:
+            reshape_spatial_dims: [128, 128]
+      pr:
+        figure_2:
+          module: deep4production.visualization.spatial
+          name: plot_date_from_1D_spatial_field
+          kwargs:
+            date: 1967-01-01
+            vmin: 0
+            vmax: 10
+            set_extent: [5, 15, 44, 48]
+            central_longitude: 0
+            cbar_label: Precipitation (mm)
+            titles: [target, prediction]
+            diff: True
+            vminDiff: -5
+            vmaxDiff: 5
+            cmapDiff: BrBG
+```
+
+- **Tracking configuration**
+  - `tracking_uri`: URL of the MLflow server (e.g., a remote server or local instance such as `http://localhost:5000`)  
+  - `username` / `password`: Credentials for authentication, if required by the tracking server  
+
+
+- **Experiment and run metadata**
+  - `experiment`: Name of the MLflow experiment used to group multiple runs  
+  - `run`: Name of the specific training run  
+  - `tags`: Key-value metadata used to describe and organize runs (e.g., domain, model, dataset, loss)  
+    → Particularly useful for filtering and comparing experiments in the MLflow UI  
+
+
+- **Checkpointing**
+  - `save_checkpoint_every_n_epochs`: Controls how often intermediate model checkpoints are uploaded to MLflow  
+    - `null` → only the best-performing model is stored  
+    - Integer value → save a checkpoint every *N* epochs  
+
+
+- **Diagnostics frequency**
+  - `compute_diagnostics_every_n_epochs`: Defines how often metrics and figures are computed during training
+    - Lower values → more frequent monitoring (higher computational cost)  
+    - Higher values → reduced overhead but less frequent feedback  
+
+
+- **Diagnostics configuration**
+
+  This section defines what **evaluation metrics** (available at `deep4production.utils.diagnostics`) and **visualizations** (available at `deep4production.visualization`) are logged to MLflow.
+
+  - **Scalars (metrics)**
+    - `default`: Metrics computed for all variables (e.g., `rmse`)  
+    - Variable-specific entries (e.g., `pr`): Metrics tailored to a given variable  
+    - Example metrics:
+      - `R01`: frequency of days exceeding 1 mm of rain
+      - `relbiasAbs`: Absolute relative bias for specific climate indices  
+
+  - **Figures (visual diagnostics)**
+    - `on_best`: If `true`, figures are generated only for the best model  
+    - Each figure is defined by:
+      - `module`: Python module containing the plotting function, i.e., `deep4production.visualization.***`
+      - `name`: Function name to call . A function within `deep4production.visualization.***` 
+      - `kwargs`: Arguments passed to the plotting function  
+
+    - Figures can be:
+      - **Default** (applied to all variables)  
+      - **Variable-specific** (e.g., tailored diagnostics for precipitation)  
 
 ---
 

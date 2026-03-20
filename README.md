@@ -57,6 +57,8 @@ The typical workflow consists of four main steps:
    d4p-predict predict_config.yaml
    ```
 
+Example YAML configuration files are available in the `recipes` directory and can be used as templates for your own configurations.
+
 ### Model Selection and Experiment Tracking
 
 `deep4production` integrates with **MLflow** for experiment tracking and model management. By synchronizing training artifacts and logs with MLflow, users can:
@@ -81,9 +83,9 @@ The framework provides four main console commands:
 
 | Command       | Purpose                                             |
 | ------------- | --------------------------------------------------- |
-| `d4p-create`  | Convert raw datasets to AI-ready Zarr format        |
+| `d4p-create`  | Convert raw NetCDF datasets to AI-ready Zarr format |
 | `d4p-inspect` | Inspect generated AI-ready datasets                 |
-| `d4p-train`   | Train deep learning models using `deep4downscaling` |
+| `d4p-train`   | Train deep learning models                          |
 | `d4p-predict` | Generate predictions using trained models           |
 
 Together, these commands implement a **complete pipeline for preparing data, training models, and deploying predictions in operational workflows**.
