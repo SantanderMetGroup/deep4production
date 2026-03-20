@@ -1,0 +1,38 @@
+id_dir: ./outputs/gnn4cd_qmse
+
+d4d_downscaler:
+  name: d4d_downscaler_custom
+  module: deep4production.core.downscalers.downscaler_gnn4cd
+
+input_data:
+  paths:
+    - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+    - ./AI_ready_datasets/files/UPSRCM_2080-2099.zarr
+  years: [1980]
+  load_in_memory: true
+
+ensemble_size: 2
+model_file: gnn4cd_qmse_best.pt # Model at: id_dir/models/
+
+graph: 
+  path: edge_index.pt
+  ## Apply model to a different graph?
+  # path: null
+  # name: build_graph
+  # module: deep4production.deep.models.gnn.GNN4CD
+  # # kwargs
+  # kwargs:
+  #   data_high: ./AI_ready_datasets/files/RCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the high-res nodes
+  #   data_low: ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the low-res nodes
+  #   nearest_neighbours_high_to_high: 6 # 8 # Self included
+  #   nearest_neighbours_low_to_high: 2 # 4 
+
+saving_info:
+  file: 1980.nc # Predictions will be saved at: id_dir/predictions/
+  template: null
+
+
+
+
+
+

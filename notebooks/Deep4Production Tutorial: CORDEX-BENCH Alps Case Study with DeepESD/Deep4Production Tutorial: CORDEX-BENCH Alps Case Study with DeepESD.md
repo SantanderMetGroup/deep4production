@@ -1,6 +1,6 @@
 # Deep4Production Tutorial: CORDEX-BENCH Alps Case Study with DeepESD
 
-This tutorial demonstrates how to use the [deep4production](https://github.com/yourorg/deep4production) framework for climate downscaling, using the CORDEX-BENCH Alps domain as a case study. We will walk through the full workflow: preparing AI-ready datasets, inspecting datasets, training a model, and running inference.
+This tutorial demonstrates how to use the [deep4production](https://github.com/SantanderMetGroup/deep4production) framework for climate downscaling, using the CORDEX-BENCH Alps domain as a case study. We will walk through the full workflow: preparing AI-ready datasets, inspecting datasets, training a model, and running inference.
 
 ---
 
@@ -293,8 +293,6 @@ We now train a deep learning model using the preprocessed Zarr datasets. This st
     - **Early stopping**, which halts training if validation performance does not improve after a given number of epochs  
     - The **optimizer settings**, such as the learning rate (`lr`), which determines how quickly the model updates its parameters during training  
 
-Remember that in this example the goal is to learn a mapping from **large-scale atmospheric predictors** to **high-resolution precipitation**.
-
 When executed, `d4p-train`:
 
 1. Loads the training and validation datasets from Zarr files  
@@ -305,6 +303,8 @@ When executed, `d4p-train`:
 6. Saves the best-performing model (or selected models) and training logs  
 
 This ensures a **fully reproducible training pipeline** driven by configuration.
+
+Below is an example of a YAML configuration used to train the DeepESD model. Additional training configurations (referred to as *recipes*) are available [here](https://github.com/SantanderMetGroup/deep4production/tree/master/deep4production/recipes/training), showcasing possible different model setups and use cases.
 
 ```python
 # Show example training config

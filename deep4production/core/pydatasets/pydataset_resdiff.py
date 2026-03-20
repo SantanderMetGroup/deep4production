@@ -7,12 +7,12 @@ import zarr
 import yaml
 from torch import from_numpy
 ## Deep4production
-from deep4production.classes.d4d_dataset import d4d_dataset
-from deep4production.classes.d4d_pydataset import d4d_pydataset
+from deep4production.core.datasets.dataset import dataset
+from deep4production.core.pydatasets.pydataset import pydataset
 from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.deep.utils import load_model
 ########################################################################################################
-class d4d_pydataset_custom(d4d_pydataset):
+class pydataset_custom(pydataset):
     """
     Custom dataset class for residual-based deep learning models.
     Purpose: Loads predictors, predictands, regressor model, computes and stores residuals, and provides context for model training.
@@ -66,7 +66,7 @@ class d4d_pydataset_custom(d4d_pydataset):
                 # Netcdf
                 self.forward_pass_regressor(f"./aux_residuals_{idx}.nc", date = date)
             # Zarr
-            d4d_dataset(date_init = self.dates_common[0], 
+            dataset(date_init = self.dates_common[0], 
                         date_end = self.dates_common[-1], 
                         freq = self.freq, 
                         data = {"paths": [f"./aux_residuals_{idxn}.nc" for idxn, date in enumerate(self.dates_common)], "vars": variables_residuals}).to_disk(path_residuals_zarr)

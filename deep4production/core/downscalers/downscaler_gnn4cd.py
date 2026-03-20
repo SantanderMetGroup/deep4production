@@ -2,9 +2,9 @@
 import torch
 from torch_geometric.data import HeteroData
 ## Deep4production
-from deep4production.classes.d4d_downscaler import d4d_downscaler
+from deep4production.core.downscalers.downscaler import downscaler
 ##################################################################################################################################
-class d4d_downscaler_custom(d4d_downscaler):
+class downscaler_custom(downscaler):
     """
     Custom downscaler class for GNN4CD models using PyTorch Geometric.
     Purpose: Builds HeteroData structures for graph-based inference and generates predictions using GNN models.
@@ -19,7 +19,7 @@ class d4d_downscaler_custom(d4d_downscaler):
     """
     def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
         """
-        Initializes D4D GNN4CD's downscaler.
+        Initializes D4P GNN4CD's downscaler.
         """
         ######### Call parent constructor to initialize common attributes #########
         super().__init__(

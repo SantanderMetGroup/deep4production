@@ -3,10 +3,10 @@ import os
 import numpy as np
 import torch
 ## Deep4production
-from deep4production.classes.d4d_trainer import d4d_trainer
-from deep4production.classes.subclasses_diff.d4d_pydataset_resdiff import d4d_pydataset_custom
+from deep4production.core.trainers.trainer import trainer
+from deep4production.core.pydatasets.pydataset_resdiff import pydataset_custom
 ##################################################################################################################################
-class d4d_trainer_custom(d4d_trainer):
+class trainer_custom(trainer):
     """
     Custom trainer class for residual-based deep learning models.
     Purpose: Handles noise scheduling, regressor context, metadata updates, and batch training for residual denoising models.
@@ -83,11 +83,11 @@ class d4d_trainer_custom(d4d_trainer):
         kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True)}
         kwargs_pydataset.update(**self.d4dpy)
         kwargs_pydataset.update({"dataset": "training"})
-        train_dataset = self.d4d_pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
+        train_dataset = self.pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
         valid_dataset = None
         if self.data.get("validation_period", None) is not None:
             kwargs_pydataset.update({"dataset": "validation"})
-            valid_dataset = self.d4d_pydataset(temporal_period = self.data["validation_period"], **kwargs_pydataset)
+            valid_dataset = self.pydataset(temporal_period = self.data["validation_period"], **kwargs_pydataset)
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset) 
         # self.save_metadata(self.metadata_path)

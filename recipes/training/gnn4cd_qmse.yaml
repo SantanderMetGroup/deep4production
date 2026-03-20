@@ -1,0 +1,90 @@
+##### GENERAL INFO #####
+run_ID: gnn4cd_qmse
+output_dir: ./outputs
+overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
+
+##### Call subclasses of deep4production.classes with specific ones #####
+d4d_trainer:
+  name: d4d_trainer_custom
+  module: deep4production.core.trainers.trainer_gnn4cd
+
+##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
+data:
+  load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1967, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978]
+  validation_period: [1979, 1980]
+
+  predictors:
+    paths:
+      - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+    variables: null  # If null, uses all variables available in the zarrs.
+    normalizer:
+      path_reference: ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+      default: mean_std # Applies this type of standardization to all the variables in the predictor set
+    transform_to_2D: false
+
+  predictands:
+    paths:
+      - ./AI_ready_datasets/files/RCM_1961-1980.zarr # If null, uses all variables available in the zarrs.
+    variables:
+      - pr
+    transform_to_2D: false
+    operator: log1p
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 1
+  shuffle: false
+  num_workers: 0
+
+
+##### BUILD GRAPH CONFIGURATION (ONLY FOR GNNs) #####
+graph:
+  name: build_graph
+  module: deep4production.deep.models.gnn.GNN4CD
+  # kwargs
+  kwargs:
+    data_high: ./AI_ready_datasets/files/RCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the high-res nodes
+    data_low: ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the low-res nodes
+    nearest_neighbours_high_to_high: 8 # Self included
+    nearest_neighbours_low_to_high: 4 
+
+##### TRAINING CONFIGURATION #####
+model_info: 
+  saving_params:
+    model_save_name: gnn4cd_qmse
+  loss_params: 
+    name: QuantisedMSELoss
+    module: deep4production.deep.loss
+    # kwargs (loss function)
+    kwargs:
+      zarr_path: ./AI_ready_datasets/files/RCM_1961-1980.zarr
+      alpha: 1.0
+      n_quantiles: 10
+      var: pr
+      ignore_nans: True
+  model_params:
+    name: GNN4CD
+    module: deep4production.deep.models.gnn.GNN4CD
+    # kwargs model
+    kwargs:
+      c_low: 15           # Number of low-res input features, i.e., predictor variables
+      c_high: null          # Number of high-res input features, i.e., high-res forcing variables such as elevation
+      c_rnn_out: 15
+      num_layers_rnn: 2
+      num_lagged_predictors: 1
+      channels_downscaler_low_in: 64
+      channels_downscaler_out: 128
+      channels_downscaler_base: 64
+      pred_dim: 1         # Number of high-res target features, i.e., predictand variables
+  training_params:
+    num_epochs: 500
+    patience_early_stopping: 20
+    optimizer_params:
+      lr: 0.0001
+
+
+
+
+
