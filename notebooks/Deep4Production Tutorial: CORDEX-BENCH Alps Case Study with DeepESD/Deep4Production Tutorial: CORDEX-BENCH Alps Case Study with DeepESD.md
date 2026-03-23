@@ -443,13 +443,13 @@ Mlflow:
       on_best: true
       default:
         figure_1:
-          module: deep4production.visualization.xyplots
+          module: deep4production.viz.xyplots
           name: plot_psd_spatial
           kwargs:
             reshape_spatial_dims: [128, 128]
       pr:
         figure_2:
-          module: deep4production.visualization.spatial
+          module: deep4production.viz.spatial
           name: plot_date_from_1D_spatial_field
           kwargs:
             date: 1967-01-01
@@ -491,7 +491,7 @@ Mlflow:
 
 - **Diagnostics configuration**
 
-  This section defines what **evaluation metrics** (available at `deep4production.utils.diagnostics`) and **visualizations** (available at `deep4production.visualization`) are logged to MLflow.
+  This section defines what **evaluation metrics** (available at `deep4production.utils.diagnostics`) and **visualizations** (available at `deep4production.viz`) are logged to MLflow.
 
   - **Scalars (metrics)**
     - `default`: Metrics computed for all variables (e.g., `rmse`)  
@@ -503,8 +503,8 @@ Mlflow:
   - **Figures (visual diagnostics)**
     - `on_best`: If `true`, figures are generated only for the best model  
     - Each figure is defined by:
-      - `module`: Python module containing the plotting function, i.e., `deep4production.visualization.***`
-      - `name`: Function name to call . A function within `deep4production.visualization.***` 
+      - `module`: Python module containing the plotting function, i.e., `deep4production.viz.***`
+      - `name`: Function name to call . A function within `deep4production.viz.***` 
       - `kwargs`: Arguments passed to the plotting function  
 
     - Figures can be:
@@ -575,18 +575,18 @@ Once predicted, you can open the files easily with e.g., `xarray`. The predictio
 
 ## 8. Visualization
 
-Finally, in this section, we demonstrate how to visualize the model outputs using a built-in function from `deep4production`. Specifically, we use `plot_date_from_1D_spatial_field` from the `deep4production.visualization.spatial` module to create a simple, illustrative example of the predicted fields.
+Finally, in this section, we demonstrate how to visualize the model outputs using a built-in function from `deep4production`. Specifically, we use `plot_date_from_1D_spatial_field` from the `deep4production.viz.spatial` module to create a simple, illustrative example of the predicted fields.
 
 This example plots a single date, showing the model prediction, the reference observation, and their difference, providing a **quick qualitative assessment of model performance**.
 
 ```
 # This example demonstrates how to plot a random date from the model, groundtruth, and difference 
-# between the two using the `plot_date_from_1D_spatial_field` function from the `dee4production.visualization` module.
+# between the two using the `plot_date_from_1D_spatial_field` function from the `dee4production.viz` module.
 
 # Import the necessary libraries
 import xarray as xr
 import numpy as np
-from deep4production.visualization.spatial import plot_date_from_1D_spatial_field
+from deep4production.viz.spatial import plot_date_from_1D_spatial_field
 
 # Define the plotting parameters.
 kwargs = {

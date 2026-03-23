@@ -58,14 +58,16 @@ class trainer_custom(trainer):
         data_graph = HeteroData()
         data_graph["low", "to", "high"].edge_index = edge_index[0].to(device)
         data_graph["high", "within", "high"].edge_index = edge_index[1].to(device)
+        # print(x.shape, y.shape)
         data_graph['low'].x  = torch.permute(x[0].to(device), (2,0,1))   # permute to shape: (N_low, seq, c_low)
         if f[0] == "N/A":
             data_graph['high'].x = torch.zeros(y.shape[2], 1, device = device) # shape: (N_high, c_high)
         else: 
             data_graph['high'].x = f[0].to(device) # permute to shape: (N_high, c_high)
         
-        # --- Feed features to the denoiser deep learning model ---
+        # --- Feed features to the GNN4CD deep learning model ---
         prediction = model(data_graph)
+        # print(prediction.shape, y.shape)
 
         # --- Compute loss ---
         optimizer.zero_grad()

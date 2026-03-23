@@ -29,7 +29,8 @@ data:
     variables:
       - pr
     transform_to_2D: false
-    operator: log1p
+    operator: 
+      pr: log1p
 
 
 ##### DATA LOADER CONFIGURATION #####
