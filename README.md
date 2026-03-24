@@ -111,7 +111,7 @@ It is recommended to install the library inside a clean environment (e.g., `cond
 
 Example using conda:
 ```bash
-conda create -n deep4production python=3.15
+conda create -n deep4production python=3.13
 conda activate deep4production
 ```
 
