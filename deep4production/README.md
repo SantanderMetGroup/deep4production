@@ -6,7 +6,7 @@ This section provides an overview of the internal structure of the `deep4product
 
 ### Overview
 
-The package is organized into three main layers:
+The package is organized into four main layers:
 
 - **CLI layer (`cli/`)** → User-facing commands  
 - **Core layer (`core/`)** → Main application logic  
@@ -21,10 +21,10 @@ This modular design separates responsibilities, making the codebase easier to ma
 
 The `cli/` module provides entry points for interacting with the library from the command line:
 
-- `d4p-create` → Prepare datasets  
+- `d4p-create` → Prepare AI ready datasets
+- `d4p-inspect` → Inspect AI ready datasets
 - `d4p-train` → Train deep learning models  
 - `d4p-predict` → Run inference using trained models  
-- `d4p-inspect` → Inspect datasets or results  
 
 These commands orchestrate workflows and call into the `core/` modules.
 

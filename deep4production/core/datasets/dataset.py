@@ -128,7 +128,7 @@ class dataset(Dataset):
                     available_dates.append(times_str)
             except Exception as e:
                 print(f"⚠️ Warning: Could not read {p}: {e}")
-        return np.array( np.concat(available_dates), dtype='datetime64[ns]')
+        return np.array( np.concatenate(available_dates), dtype='datetime64[ns]')
 
     # ---------------------------------------------------------------
     def compute_mean_std_per_channel(self, zarr_path):

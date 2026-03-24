@@ -57,6 +57,7 @@ def main():
     else:
       d4p_trainer = get_func_from_string(d4dt["module"], d4dt["name"])
     d4dpy = config.get("d4p_pydataset", {})
+    kwargs_trainer = config.get("d4p_trainer", {}).get("kwargs", {})
 
     # --- Start Mlflow and log config ----------------------------------
     if Mlflow is not None:
@@ -106,7 +107,8 @@ def main():
     # --- Train ----------------------------------
     model_path=f"{model_dir}/{model_info["saving_params"]["model_save_name"]}.pt"
     if not os.path.exists(model_path) or overwrite:
-      trainer = d4p_trainer(data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow)
+      kwargs_trainer = {**kwargs_trainer, "data": data, "dataloader": dataloader, "id_dir": id_dir, "model_info": model_info, "graph": graph, "d4dpy": d4dpy, "Mlflow": Mlflow}
+      trainer = d4p_trainer(**kwargs_trainer)
       train_dataset, valid_dataset = trainer.get_pydatasets()
       train_dataloader, valid_dataloader = trainer.get_dataloaders(train_dataset, valid_dataset)
       trainer.train(train_dataloader, valid_dataloader) 

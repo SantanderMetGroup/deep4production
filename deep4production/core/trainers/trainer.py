@@ -9,7 +9,8 @@ import zarr
 import importlib
 import numpy as np
 from functools import partial
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader as PyGDataLoader
+from torch.utils.data import DataLoader as TorchDataLoader
 ## MLFlow
 import mlflow
 import mlflow.pytorch
@@ -69,7 +70,6 @@ class trainer:
         self.graph_loc = {}
         if graph is not None:
             edge_index = get_func_from_string(module_string=graph["module"],func_string=graph["name"], kwargs=graph.get("kwargs", None))
-            self.kwargs_training.update({"edge_index": edge_index})
             self.graph_loc["path"] = "edge_index.pt"
             torch.save(edge_index, f"{self.aux_dir}/{self.graph_loc["path"]}")
             print(f"📦 GRAPH READY: function {graph['name']} from {graph['module']}")
@@ -238,10 +238,14 @@ class trainer:
             print("⚠️ WARNING: Batch size not specified in YAML. Using batch_size=1")
         kwargs_dataloader = {"batch_size": batch_size, "shuffle": shuffle, "num_workers": num_workers}
         ## Create DataLoaders
-        train_dataloader = DataLoader(train_dataset, **kwargs_dataloader)
+        if self.graph is not None:
+            DL = PyGDataLoader
+        else:
+            DL = TorchDataLoader
+        train_dataloader = DL(train_dataset, **kwargs_dataloader)
         valid_dataloader = None
         if valid_dataset is not None:
-            valid_dataloader = DataLoader(valid_dataset, **kwargs_dataloader)
+            valid_dataloader = DL(valid_dataset, **kwargs_dataloader)
         print("📦 DATALOADERS READY")
         return train_dataloader, valid_dataloader
 
