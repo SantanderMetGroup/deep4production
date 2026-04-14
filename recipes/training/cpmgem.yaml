@@ -1,0 +1,97 @@
+##### GENERAL INFO #####
+run_ID: cpmgem
+output_dir: path_to_your_output_dir
+overwrite: true
+
+
+##### TRAINER SELECTION #####
+# Selects the sub-VP SDE diffusion trainer (direct generation, no residual).
+d4p_trainer:
+  name: trainer_custom
+  module: deep4production.core.trainers.trainer_cpmgem
+
+
+##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
+data:
+  load_in_memory: true
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  validation_period: [1967, 1975]
+
+  predictors:
+    paths:
+      - path_to_your_x_file_1.zarr
+      - path_to_your_x_file_2.zarr
+      - ...
+    variables: null         # null → all variables in the zarr
+    normalizer:
+      path_reference: path_to_your_x_file_1.zarr
+      default: mean_std     # standardise predictors to zero mean / unit variance
+    transform_to_2D: True   # flatten gridpoints → (C, H_x, W_x) spatial grid
+
+  predictands:
+    paths:
+      - path_to_your_y_file_1.zarr
+      - path_to_your_y_file_2.zarr
+      - ...
+    variables:
+      - pr                  # adjust to your target variable(s)
+    transform_to_2D: True   # target must also be on a 2D grid
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 16            # paper uses 16 (10 GB GPU); increase if memory allows
+  shuffle: true
+  num_workers: 4
+
+
+##### MODEL CONFIGURATION #####
+model_info:
+  saving_params:
+    model_save_name: CPMGEM
+
+  # ── Loss ────────────────────────────────────────────────────────────────────
+  # Simple MSE on the predicted noise ε.  No NaNs in noise → ignore_nans: false.
+  loss_params:
+    name: MseLoss
+    module: deep4production.deep.loss
+    kwargs:
+      ignore_nans: false
+
+  # ── Architecture ─────────────────────────────────────────────────────────────
+  # NCSN++ U-Net backbone (Addison et al. 2024 / Song et al. 2021).
+  #
+  # Key parameters to adjust for your data:
+  #   in_channels  → number of target variable channels (C_y)
+  #   cond_channels → number of predictor channels (C_x); check with d4p-inspect
+  #
+  # base_channels=128 + channel_mults=(1,2,4,8) ≈ 63 M params (paper default).
+  # Reduce base_channels to 64 for a lighter ~16 M param version.
+  model_params:
+    name: CPMGEM
+    module: deep4production.deep.models.diffusion.cpmgem
+    kwargs:
+      in_channels: 1              # (C_y)  e.g. 1 for a single precipitation field
+      cond_channels: 15           # (C_x)  use `d4p-inspect your_x.zarr` to get this
+      base_channels: 128          # U-Net base width; 64 for a lighter model
+      channel_mults: [1, 2, 4, 8] # channel multipliers per encoder level
+      num_res_blocks: 2           # ResBlocks per encoder/decoder level
+      attn_at_levels: [2, 3]      # 0-indexed levels where self-attention is used
+      num_groups: 32              # GroupNorm groups (must divide all channel counts)
+      dropout: 0.1
+
+  # ── Training ──────────────────────────────────────────────────────────────────
+  training_params:
+    num_epochs: 20
+    patience_early_stopping: 5
+    optimizer_params:
+      lr: 0.0002                  # Adam lr from the paper
+    ema_decay: 0.999              # Exponential Moving Average for weight stabilisation
+
+    # These are forwarded as **kwargs to model_backprop.
+    kwargs:
+      noise_params:
+        T: 1000                   # number of diffusion steps
+        beta_min: 0.0001          # β_1  (smallest noise level)
+        beta_max: 0.02            # β_T  (largest  noise level)
