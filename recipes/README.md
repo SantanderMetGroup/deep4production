@@ -49,17 +49,17 @@ Training and inference recipes for a graph neural network operating on a biparti
 
 ---
 
-### ResDiff — Residual diffusion (CorrDiff-style)
+### ResDiff — Residual diffusion (CorrDiff-inspired)
 **Files:** `training/resdiff.yaml` · `inference/resdiff.yaml`
 
-Training and inference recipes for a residual diffusion model. A separately trained deterministic regressor provides a mean prediction; the diffusion model (EDM preconditioner + SongUNet) learns the residual distribution. Requires a pre-trained regressor checkpoint. [[2]](#ref-2) [[4]](#ref-4)
+Training and inference recipes for a residual diffusion model inspired by CorrDiff from NVIDIA [[5]](#ref-5), though not an exact reimplementation. A separately trained deterministic regressor provides a mean prediction; the diffusion model (EDM preconditioner + SongUNet) learns the residual distribution. Requires a pre-trained regressor checkpoint. [[2]](#ref-2) [[4]](#ref-4)
 
 ---
 
 ### CPMGEM — Continuous-time sub-VP SDE diffusion
 **Files:** `training/cpmgem.yaml` · `inference/cpmgem.yaml`
 
-Training and inference recipes for a direct-generation diffusion model based on a continuous-time sub-variance-preserving SDE. Generates high-resolution fields in a single end-to-end diffusion process without a separate regressor. [[2]](#ref-2)
+Training and inference recipes for a direct-generation diffusion model based on a continuous-time sub-variance-preserving SDE. Generates high-resolution fields in a single end-to-end diffusion process without a separate regressor. [[2]](#ref-2) [[6]](#ref-6)
 
 ---
 
@@ -72,3 +72,7 @@ Training and inference recipes for a direct-generation diffusion model based on 
 <a id="ref-3"></a>[3] Blasone, V., Coppola, E., Sanguinetti, G., Arora, V., Di Gioia, S., & Bortolussi, L. (2025). Graph neural networks for hourly precipitation projections at the convection permitting scale with a novel hybrid imperfect framework. *Environmental Data Science*, 4, e47.
 
 <a id="ref-4"></a>[4] Karras, T., Aittala, M., Aila, T., & Laine, S. (2022). Elucidating the design space of diffusion-based generative models. *Advances in Neural Information Processing Systems*, 35, 26565–26577.
+
+<a id="ref-5"></a>[5] Mardani, M., Brenowitz, N., Cohen, Y., Pathak, J., Chen, C. Y., Liu, C. C., ... & Pritchard, M. (2025). Residual corrective diffusion modeling for km-scale atmospheric downscaling. *Communications Earth & Environment*, 6(1), 124.
+
+<a id="ref-6"></a>[6] Addison, H., Kendon, E. J., Ravuri, S., Aitchison, L., & Watson, P. A. (2026). Machine learning emulation of precipitation from km‐scale UK regional climate simulations using a diffusion model. *Journal of Advances in Modeling Earth Systems*, 18(3), e2025MS005140.
