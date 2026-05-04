@@ -12,7 +12,7 @@ Lightweight, fast-to-train CNN models suitable for deterministic downscaling.
 
 | Class | File | Description |
 |---|---|---|
-| `DeepESD` | `cnn/DeepESD.py` | Three-layer convolutional network for spatial downscaling. Configurable filter sizes, kernel size, and output activation. Supports ensemble-style multi-output heads when used with the DeepESD trainer. [[1]](#ref-1) |
+| `DeepESD` | `cnn/DeepESD.py` | Three-layer convolutional network for spatial downscaling. Configurable filter sizes, kernel size, and output activation. [[1]](#ref-1) |
 | `SMHICNN` | `cnn/smhi_cnn.py` | CNN with dilated convolutions and pixel-shuffle upscaling, following the SMHI design. Supports learnable pre-maps, multiple dilation rates, and configurable pixel-shuffle blocks. [[2]](#ref-2) |
 
 ---
@@ -24,7 +24,7 @@ Encoder-decoder networks with skip connections, suited for high-resolution spati
 | Class | File | Description |
 |---|---|---|
 | `SongUNet` | `unet/song_unet.py` | Generalized NCSN++ U-Net backbone. Accepts a noisy input `x`, a scalar noise label `t`, and optional low-res and high-res conditioning streams. Used as the backbone inside `EDMPrecond` for diffusion models, or standalone as a deterministic downscaler. Supports FIR-filtered up/downsampling, attention at configurable levels, and spatial positional embeddings. [[3]](#ref-3) |
-| `abad_unet` | `unet/abad_unet.py` | UNet-style encoder-decoder with transposed convolution or bilinear upsampling. Configurable base channels, batch normalisation, and output activation. Designed for deterministic regression on spatial grids. [[4]](#ref-4) |
+| `abad_unet` | `unet/abad_unet.py` | UNet-style encoder-decoder with transposed convolution or bilinear upsampling. Configurable base channels, batch normalisation, and output activation. [[4]](#ref-4) |
 
 ---
 
