@@ -4,7 +4,7 @@ import numcodecs
 import cftime
 import numpy as np
 import pandas as pd
-import xarray as xr 
+import xarray as xr
 import zarr
 import yaml
 from torch.utils.data import Dataset
@@ -13,11 +13,29 @@ from deep4production.utils.forcings import *
 from deep4production.utils.trans import xarray_to_numpy
 from deep4production.utils.general import is_grid_regular
 from deep4production.utils.imputers import d4dimputers
+from deep4production.utils.log import get_logger
+
+log = get_logger("dataset")
+
+# Variables that are always computed analytically from coordinates / date.
+# constant_in_time=True  → identical across all time steps (e.g. sin(lat))
+# constant_in_time=False → changes per time step but is never read from NetCDF
+_KNOWN_COMPUTED_FORCINGS = {
+    "sin_lat":             {"computed_forcing": True,  "constant_in_time": True},
+    "cos_lat":             {"computed_forcing": True,  "constant_in_time": True},
+    "sin_lon":             {"computed_forcing": True,  "constant_in_time": True},
+    "cos_lon":             {"computed_forcing": True,  "constant_in_time": True},
+    "sin_julian_day":      {"computed_forcing": True,  "constant_in_time": False},
+    "cos_julian_day":      {"computed_forcing": True,  "constant_in_time": False},
+    "toa_solar_radiation": {"computed_forcing": True,  "constant_in_time": False},
+}
+
 ########################################################################################################
 class dataset(Dataset):
     """
     Dataset class for loading and processing NetCDF climate data.
-    Purpose: Handles spatial, temporal, and variable selection, imputation, and statistics computation for deep learning workflows.
+    Purpose: Handles spatial, temporal, and variable selection, imputation, and statistics
+    computation for deep learning workflows. Produces Zarr format v2 stores.
     Parameters:
         date_init (str): Start date for dataset.
         date_end (str): End date for dataset.
@@ -25,66 +43,57 @@ class dataset(Dataset):
         data (dict): Dataset configuration (paths, variables, imputer, etc).
     """
     def __init__(self, date_init, date_end, freq, data):
-    
-        # --- GENERAL INFO ------
-        # Self parameters
-        self.data = data
 
-        # Number of variables
-        self.variables = data["vars"] 
+        # --- GENERAL INFO ------
+        self.data = data
+        self.variables = data["vars"]
         self.num_vars = len(self.variables)
 
-        # Get sources of netcdf files
         raw_sources = self.data["paths"]
         self.source_files = []
         for source in raw_sources:
             if "*" in source:
                 matched_files = sorted(glob.glob(source))
                 if not matched_files:
-                    print(f"⚠️ Warning: No files matched pattern: {source}")
+                    log.warning("No files matched pattern: %s", source)
                 self.source_files.extend(matched_files)
             elif os.path.isfile(source):
                 self.source_files.append(source)
             else:
-                print(f"⚠️ Warning: File not found: {source}")
+                log.warning("File not found: %s", source)
         self.num_sources = len(self.source_files)
-        print(f"✅ Found {self.num_sources} source NetCDF files.")
+        log.info("Found %d source NetCDF files.", self.num_sources)
 
         # --- TEMPORAL INFORMATION ------
-        # Number of samples in the YAML
         self.date_init = pd.to_datetime(date_init)
-        self.date_end = pd.to_datetime(date_end)
+        self.date_end  = pd.to_datetime(date_end)
         self.freq = freq
         dates_yaml = pd.date_range(start=self.date_init, end=self.date_end, freq=self.freq).to_numpy()
         self.num_samples_yaml = len(dates_yaml)
-        # Number of samples in the source NETCDF files
         available_dates = self.get_available_dates_in_sources(self.source_files)
         self.dates = np.array([d for d in dates_yaml if d in available_dates])
         self.num_samples = len(self.dates)
-        # Print info
-        emoji = "🟢" if self.num_samples == self.num_samples_yaml else "⚠️"
-        print(f"{emoji} Found {self.num_samples} of {self.num_samples_yaml} requested samples from the YAML period in the source NetCDF files.")
+        msg = "Found %d of %d requested samples from the YAML period in the source NetCDF files."
+        if self.num_samples == self.num_samples_yaml:
+            log.info(msg, self.num_samples, self.num_samples_yaml)
+        else:
+            log.warning(msg, self.num_samples, self.num_samples_yaml)
 
         # --- SPATIAL INFORMATION ------
         with xr.open_dataset(self.source_files[0]) as temp:
             self.spatial_dims, self.is_regular = self.get_spatial_dims(temp)
             if self.is_regular:
-                # Store dimensions
                 self.H = len(temp[self.spatial_dims[0]].values)
                 self.W = len(temp[self.spatial_dims[1]].values)
-                # Flatten the spatial grid
                 temp = temp.stack(point=self.spatial_dims)
-            # Once mapped to irregular (or originally irregular), get number of gridpoints.
             self.number_gridpoints = len(temp[self.spatial_dims[0]].values)
-            # Extract flattened lat/lon
             self.lat = temp.lat.values
             self.lon = temp.lon.values
-            # Delete temporal file
             del temp
 
         # --- IMPUTE NANS (if any) ------
         self.imputer = data.get("imputer", None)
-        
+
     # ---------------------------------------------------------------
     def get_spatial_dims(self, dataset):
         """
@@ -94,19 +103,13 @@ class dataset(Dataset):
         Returns:
             tuple: (spatial_dims, is_regular)
         """
-        # Detect grid type and spatial dims
         if {"x", "y"}.issubset(dataset.dims):
             spatial_dims = ["y", "x"]
         elif {"lat", "lon"}.issubset(dataset.dims):
             spatial_dims = ["lat", "lon"]
-        else: 
+        else:
             spatial_dims = ["point"]
-        # Check regularity
         grid_type = is_grid_regular(dataset)
-        # # Change order of spatial dimensions 
-        # var_name = list(dataset.data_vars.keys())[0]
-        # # get the coordinates associated with that variable
-        # var_coords = list(dataset[var_name].dims)[1:]
         return spatial_dims, grid_type
 
     # ---------------------------------------------------------------
@@ -123,153 +126,131 @@ class dataset(Dataset):
             try:
                 with xr.open_dataset(p) as ds:
                     times = ds["time"].values
-                    # Convert to ISO strings regardless of datetime type
                     times_str = [str(t) for t in times]
                     available_dates.append(times_str)
             except Exception as e:
-                print(f"⚠️ Warning: Could not read {p}: {e}")
-        return np.array( np.concatenate(available_dates), dtype='datetime64[ns]')
+                log.warning("Could not read %s: %s", p, e)
+        return np.array(np.concatenate(available_dates), dtype='datetime64[ns]')
 
     # ---------------------------------------------------------------
-    def compute_mean_std_per_channel(self, zarr_path):
+    def compute_stats_per_channel(self, zarr_group):
         """
-        Computes mean and standard deviation for each variable/channel in a Zarr file.
-        Parameters:
-            zarr_path (str): Path to Zarr file.
-        Returns:
-            tuple: (mean_dict, std_dict)
-        """
-        z = zarr.open(zarr_path, mode='r')
-        C = z.shape[1]
-        count = np.zeros(C, dtype=np.int64)
-        sum_ = np.zeros(C, dtype=np.float64)
-        delta_squared = np.zeros(C, dtype=np.float64)
-        # -- Mean --
-        for i in range(z.shape[0]):
-            # Sample
-            x = z[i].astype(np.float64) # Shape (C, H*W)
-            # Count NaNs
-            nan_mask = np.isnan(x)
-            # Mean and count
-            sum_ += np.nansum(x, axis=1)
-            count += np.sum(~nan_mask, axis=1)
-        mean = sum_ / count
-        # -- Std --
-        for i in range(z.shape[0]):
-            # Sample
-            x = z[i].astype(np.float64) # Shape (C, H*W)
-            # Std
-            delta_squared += np.nansum( (x - mean[:, None]) ** 2, axis=1)
-        std = np.sqrt(delta_squared / (count - 1))
-        # Return
-        m_dict = { var: float(m) for var, m in zip(self.variables, mean.astype(np.float32)) }
-        std_dict = { var: float(m) for var, m in zip(self.variables, std.astype(np.float32)) }
-        return m_dict, std_dict
+        Single-pass NaN-aware mean, std, min, max per channel.
 
-    # ---------------------------------------------------------------
-    def compute_min_max_per_channel(self, zarr_path):
-        """
-        Computes min and max for each variable/channel in a Zarr file.
+        Uses sum-of-squares accumulation in float64 (var = E[X²] − E[X]²,
+        Bessel-corrected). Stable for climate magnitudes; one pass over the
+        store instead of three.
+
         Parameters:
-            zarr_path (str): Path to Zarr file.
+            zarr_group (zarr.Group): Opened zarr group (format v2).
         Returns:
-            tuple: (min_dict, max_dict)
+            tuple: (mean, std, min, max) — float32 arrays of shape (C,).
         """
-        z = zarr.open(zarr_path, mode='r')
-        C = z.shape[1]  # number of channels (variables)
-        min_vals = np.full(C, np.inf, dtype=np.float32)
+        z = zarr_group["data"]
+        S, C, _ = z.shape
+        n        = np.zeros(C, dtype=np.int64)
+        sum1     = np.zeros(C, dtype=np.float64)
+        sum2     = np.zeros(C, dtype=np.float64)
+        min_vals = np.full(C,  np.inf, dtype=np.float32)
         max_vals = np.full(C, -np.inf, dtype=np.float32)
-        for i in range(z.shape[0]):  # over time steps
-            x = z[i].astype(np.float32)  # Shape (C, H*W)
-            min_vals = np.minimum(min_vals, np.nanmin(x, axis=1))
-            max_vals = np.maximum(max_vals, np.nanmax(x, axis=1))
-        min_dict = { var: float(m) for var, m in zip(self.variables, min_vals.astype(np.float32)) }
-        max_dict = { var: float(m) for var, m in zip(self.variables, max_vals.astype(np.float32)) }
-        return min_dict, max_dict
+        for i in range(S):
+            x = z[i]                                  # (C, G) float32
+            nan_mask = np.isnan(x)
+            valid    = ~nan_mask
+            x_safe   = np.where(nan_mask, 0.0, x.astype(np.float64))
+            sum1    += x_safe.sum(axis=1)
+            sum2    += (x_safe * x_safe).sum(axis=1)
+            n       += valid.sum(axis=1)
+            # NaN-safe per-channel min/max
+            min_vals = np.minimum(min_vals, np.where(nan_mask,  np.inf, x).min(axis=1))
+            max_vals = np.maximum(max_vals, np.where(nan_mask, -np.inf, x).max(axis=1))
+        n_safe = np.maximum(n, 1)
+        mean   = sum1 / n_safe
+        var    = (sum2 - n * mean ** 2) / np.maximum(n - 1, 1)
+        std    = np.sqrt(np.maximum(var, 0.0))
+        return mean.astype(np.float32), std.astype(np.float32), min_vals, max_vals
 
     # ---------------------------------------------------------------
-    def count_nans(self, zarr_path):
+    def count_nans(self, zarr_group):
         """
-        Counts NaNs per channel and gridpoint in a Zarr file.
+        Counts NaNs per channel and gridpoint in the data sub-array.
         Parameters:
-            zarr_path (str): Path to Zarr file.
+            zarr_group (zarr.Group): Opened zarr group (format v2).
         Returns:
             tuple: (fixed_nan, dynamic_nan)
         """
-        z = zarr.open(zarr_path, mode='r')
+        z = zarr_group["data"]
         S, C, G = z.shape
-        # Track NaN count per (channel, gridpoint)
-        nan_count = np.zeros((C, G), dtype=np.int64)
-        # Track dynamic nan indices: {var: [[s, g], ...]}
+        nan_count   = np.zeros((C, G), dtype=np.int64)
         dynamic_nan = {c: [] for c in range(C)}
-        # First pass: count NaNs + record dynamic ones
         for s in range(S):
-            x = z[s]  # (C, G)
+            x = z[s]
             nan_mask = np.isnan(x)
-            # Count NaNs
             nan_count += nan_mask.astype(np.int64)
-            # Collect dynamic NaNs
             for c in range(C):
                 gp_idx = np.where(nan_mask[c])[0]
                 for g in gp_idx:
                     dynamic_nan[c].append([s, int(g)])
-
-        # Fixed NaNs
         fixed_nan = {c: np.where(nan_count[c] == S)[0] for c in range(C)}
-        # Remove fixed NaNs from dynamic lists
         for c in range(C):
             fixed_set = set(fixed_nan[c])
             dynamic_nan[c] = [pair for pair in dynamic_nan[c] if pair[1] not in fixed_set]
-        # Return
         return fixed_nan, dynamic_nan
 
     # ---------------------------------------------------------------
-    def impute_nans(self, data, zarr_attrs, lats, lons):
+    def impute_nans(self, zarr_group, zarr_attrs, lats, lons):
         """
-        Imputes dynamic NaNs in the dataset using specified imputer functions.
+        Imputes dynamic NaNs in the data sub-array using specified imputer functions.
+
+        For each (variable, timestep), the row is read once, all NaN gridpoints
+        in that row are imputed against that row, and the row is written back
+        once. Avoids the previous behaviour of re-reading the full row from disk
+        for every NaN gridpoint.
+
         Parameters:
-            data (zarr): Zarr data array.
-            zarr_attrs (dict): Dynamic NaN indices.
+            zarr_group (zarr.Group): Opened zarr group (format v2).
+            zarr_attrs (dict): Dynamic NaN indices keyed by variable name.
             lats (np.ndarray): Latitude values.
             lons (np.ndarray): Longitude values.
         Returns:
-            tuple: (data, zarr_attrs)
+            dict: Updated zarr_attrs with imputed entries cleared.
         """
+        variables_map = zarr_group.attrs['variables']
+        data_arr      = zarr_group["data"]
         for var in self.variables:
-            # Get the channel index for this variable
-            idx_var = data.attrs['variables'][var]
-            # Pick imputer
+            idx_var          = variables_map[var]
             imputer_default  = self.imputer.get("default")
             imputer_selected = self.imputer.get(var, imputer_default)
             imputer_name     = imputer_selected["name"]
             kwargs_imputer   = {k: v for k, v in imputer_selected.items() if k != "name"}
-            # Dynamic NaN list for this variable
             dyn_list = zarr_attrs.get(var, [])
-            if dyn_list and len(dyn_list) > 0:
-                print(f"🔧 [{var}] Starting dynamic NaN imputation using '{imputer_name}'")
-                # Loop directly over the list of [t, gp] pairs
-                for (t, gp) in dyn_list:
-                    print(lats[gp].dtype)
-                    print(lons[gp].dtype)
-                    print(f"   → Imputing at timestep {t} ({self.dates[t]}) gridpoint {gp}")
-                    # Build imputer instance for the specific timestep t
+            if not dyn_list:
+                log.info("[%s] No dynamic NaNs found, skipping imputation.", var)
+                continue
+
+            log.info("[%s] Starting dynamic NaN imputation using '%s'", var, imputer_name)
+            # Group gridpoints by timestep so each (t, idx_var) row is read once.
+            gps_by_t = {}
+            for t, gp in dyn_list:
+                gps_by_t.setdefault(int(t), []).append(int(gp))
+
+            for t, gps in gps_by_t.items():
+                row = data_arr[t, idx_var, :]                 # one read
+                log.debug("[%s] t=%d (%s): imputing %d gridpoint(s)", var, t, self.dates[t], len(gps))
+                for gp in gps:
                     imp = d4dimputers(
-                        data=data[t, idx_var, :],
+                        data=row,
                         lat_gp=lats[gp],
                         lon_gp=lons[gp],
                         lats_ref=lats,
                         lons_ref=lons,
                     )
-                    imputer_func = getattr(imp, imputer_name)
-                    data[t, idx_var, gp] = imputer_func(**kwargs_imputer)
-                # Store an empty list in zarr attrs (as in your original code)
-                zarr_attrs[var] = []
-            else:
-                print(f"⚠️  [{var}] No dynamic NaNs found → skipping imputation.")
-        # Return
-        return data, zarr_attrs
+                    row[gp] = getattr(imp, imputer_name)(**kwargs_imputer)
+                data_arr[t, idx_var, :] = row                 # one write
+            zarr_attrs[var] = []
+        return zarr_attrs
 
-    # ---------------------------------------------------------------        
+    # ---------------------------------------------------------------
     def get_units(self, ds, var):
         """
         Retrieves units attribute for a variable from an xarray dataset.
@@ -281,171 +262,199 @@ class dataset(Dataset):
         """
         units = ds[var].attrs.get("units", "N/A")
         if units == "N/A":
-            print(f"⚠️ Warning: no units attribute found for variable '{var}'")
+            log.warning("No units attribute found for variable '%s'", var)
         return units
 
     # ---------------------------------------------------------------
     def to_disk(self, zarr_path):
         """
-        Saves processed dataset to disk in Zarr format, including attributes and statistics.
+        Saves the processed dataset to disk as a Zarr v2 store.
+
+        Store layout
+        ------------
+        zarr_group/
+          data/          (T, C, G) float32  — all variable data, chunks (1, C, G)
+          dates/         (T,)      datetime64[s]
+          latitudes/     (G,)      float32
+          longitudes/    (G,)      float32
+          mean/          (C,)      float32  — per-channel statistics (NaN-aware)
+          std/           (C,)      float32
+          min/           (C,)      float32
+          max/           (C,)      float32
+
+        Group attributes (no large arrays)
+        -----------------------------------
+        format_version (int=2), variables {name:idx}, units {var:str},
+        frequency, shape [T,C,G], is_regular, H/W (if regular),
+        constant_fields (list[str]), variables_metadata {var:{computed_forcing,constant_in_time}},
+        idx_fixed_nan, idx_dynamic_nan, date_init_yaml, date_end_yaml,
+        num_samples, num_samples_yaml, name_dims.
+
         Parameters:
-            zarr_path (str): Output path for Zarr file.
+            zarr_path (str): Output path for the Zarr store.
         Returns:
             str: Confirmation message.
         """
-        # --- Initialize zarr ---------------------------------
-        zarr_store = zarr.open(
-            zarr_path,
-            mode='w',
+        blk = numcodecs.Blosc(cname='zstd', clevel=5)
+
+        # --- Open zarr GROUP ---
+        zarr_group = zarr.open_group(zarr_path, mode='w')
+
+        # --- Create data sub-array ---
+        data_arr = zarr_group.create_dataset(
+            "data",
             shape=(self.num_samples, self.num_vars, self.number_gridpoints),
             chunks=(1, self.num_vars, self.number_gridpoints),
             dtype="float32",
-            compressor=numcodecs.Blosc(cname='zstd', clevel=5),
-            zarr_format=2,
-            fill_value=np.nan
+            compressor=blk,
+            fill_value=np.nan,
         )
 
-        # --- Attributes ---------------------------------
-        zarr_store.attrs['dates'] = [str(date) for date in self.dates]
-        zarr_store.attrs['date_init_yaml'] = str(self.date_init)
-        zarr_store.attrs['date_end_yaml'] = str(self.date_end)
-        zarr_store.attrs['num_samples'] = self.num_samples
-        zarr_store.attrs['num_samples_yaml'] = self.num_samples_yaml
-        zarr_store.attrs['temporal_freq'] = self.freq
-        zarr_store.attrs['variables'] = {var: idx  for idx, var in enumerate(self.variables)}
-        zarr_store.attrs['units'] = {}
-        zarr_store.attrs['name_dims'] = ["time", "variable", "gridpoint"] 
-        zarr_store.attrs['shape'] = [len(self.dates), self.num_vars, self.number_gridpoints]
-        zarr_store.attrs['lats'] = [lat for lat in self.lat]
-        zarr_store.attrs['lons'] = [lon for lon in self.lon]
-        zarr_store.attrs['is_regular'] = self.is_regular
+        # --- Group-level attributes (no large arrays stored here) ---
+        zarr_group.attrs['format_version']   = 2
+        zarr_group.attrs['date_init_yaml']   = str(self.date_init)
+        zarr_group.attrs['date_end_yaml']    = str(self.date_end)
+        zarr_group.attrs['num_samples']      = self.num_samples
+        zarr_group.attrs['num_samples_yaml'] = self.num_samples_yaml
+        zarr_group.attrs['frequency']        = self.freq
+        zarr_group.attrs['variables']        = {var: idx for idx, var in enumerate(self.variables)}
+        zarr_group.attrs['name_dims']        = ["time", "variable", "gridpoint"]
+        zarr_group.attrs['shape']            = [self.num_samples, self.num_vars, self.number_gridpoints]
+        zarr_group.attrs['is_regular']       = self.is_regular
         if self.is_regular:
-            zarr_store.attrs['H'], zarr_store.attrs['W'] = self.H, self.W
+            zarr_group.attrs['H'] = self.H
+            zarr_group.attrs['W'] = self.W
 
-        # --- Data ---------------------------------
-        sources = self.source_files
-        for source in sources:
-            x = xr.open_dataset(source)      
+        # --- Sub-arrays: dates (datetime64[s], native), latitudes, longitudes ---
+        dates_dt = np.array(self.dates, dtype='datetime64[s]')
+        zarr_group.create_dataset(
+            "dates", data=dates_dt,
+            chunks=(len(dates_dt),), dtype='datetime64[s]', compressor=blk,
+        )
+        zarr_group.create_dataset(
+            "latitudes",  data=self.lat.astype(np.float32),
+            chunks=(len(self.lat),), dtype='float32', compressor=blk,
+        )
+        zarr_group.create_dataset(
+            "longitudes", data=self.lon.astype(np.float32),
+            chunks=(len(self.lon),), dtype='float32', compressor=blk,
+        )
+
+        # --- Write data from NetCDF sources ---
+        # constant_vars: variables with no time dimension (e.g. orography)
+        constant_vars = set()
+        units_dict    = {}
+
+        for source in self.source_files:
+            x = xr.open_dataset(source)
             for var in x.data_vars:
-                if var in self.variables:
-                    print(f"✅ Variable {var} from {source} matches target variables.")
-                    idx_var = zarr_store.attrs['variables'][var]
+                if var not in self.variables:
+                    log.debug("Skipping variable %s in %s, not in target variable list.", var, source)
+                    continue
 
-                    # Load data
-                    x_ = x[[var]]
+                log.info("Variable %s from %s matches target variables.", var, source)
+                idx_var = zarr_group.attrs['variables'][var]
+                x_ = x[[var]]
+                units_dict[var] = self.get_units(ds=x_, var=var)
 
-                    # Units
-                    units = self.get_units(ds=x_, var=var)
-                    zarr_store.attrs['units'][var] = units
-                    
-                    if "time" in x_.dims:
-
-                        # Temporal intersection
-                        avail_dates_in_source = x_.time.values.astype('datetime64[ns]')
-                        matching_dates = np.intersect1d(self.dates, avail_dates_in_source)
-
-                        if len(matching_dates) != 0:
-                            idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
-                            if isinstance(x_.time.values[0], cftime.DatetimeNoLeap): # If using cftime calendar, convert the time to standard gregorian calendar in datetime64 format
-                                x_ = x_.convert_calendar("standard")
-                            x_ = x_.sel(time=matching_dates)
-                            
-                            # Flatten spatial dimension
-                            if self.is_regular:
-                                x_ = x_.stack(point=self.spatial_dims)
-
-                            # From xarray to numpy
-                            xdata = xarray_to_numpy(x_).astype(np.float32)
-                            x_.close()
-                            del x_
-
-                            # Write data block
-                            for i, t_idx in enumerate(idx_samples):
-                                zarr_store[t_idx, idx_var, :] = xdata[i]
-                        else:
-                            print(f"⚠️ No dates in source requested. Skipping..")
-
-                    else: # e.g., orography
-                        # Flatten spatial dimension
-                        if self.is_regular:
-                            x_ = x_.stack(point=self.spatial_dims)
-
-                        # From xarray to numpy
-                        xdata = xarray_to_numpy(x_).astype(np.float32)
-                        x_.close()
-                        del x_
-                        # print(f"xdata: {xdata.shape}")
-                        zarr_store[:, idx_var, :] = np.tile(xdata, (self.num_samples, 1))
-
+                if "time" in x_.dims:
+                    avail_dates    = x_.time.values.astype('datetime64[ns]')
+                    matching_dates = np.intersect1d(self.dates, avail_dates)
+                    if len(matching_dates) == 0:
+                        log.warning("No dates in %s match the requested period; skipping.", source)
+                        continue
+                    idx_samples = [np.where(self.dates == t)[0][0] for t in matching_dates]
+                    if isinstance(x_.time.values[0], cftime.DatetimeNoLeap):
+                        x_ = x_.convert_calendar("standard")
+                    x_ = x_.sel(time=matching_dates)
+                    if self.is_regular:
+                        x_ = x_.stack(point=self.spatial_dims)
+                    xdata = xarray_to_numpy(x_).astype(np.float32)
+                    x_.close(); del x_
+                    for i, t_idx in enumerate(idx_samples):
+                        data_arr[t_idx, idx_var, :] = xdata[i]
                 else:
-                    print(f"⚠️ Skipping variable {var} in {source} not in target variable list.")
-            # Close files
-            x.close()        
+                    # No time dimension → constant field (e.g. orography)
+                    constant_vars.add(var)
+                    if self.is_regular:
+                        x_ = x_.stack(point=self.spatial_dims)
+                    xdata = xarray_to_numpy(x_).astype(np.float32)
+                    x_.close(); del x_
+                    data_arr[:, idx_var, :] = np.tile(xdata, (self.num_samples, 1))
+
+            x.close()
             del x
 
-        # --- Forcings (not from source) ---------------------------------
+        zarr_group.attrs['units'] = units_dict
+
+        # --- Computed forcings (analytical, no NetCDF read needed) ---
         for var in self.variables:
-            idx_var = zarr_store.attrs['variables'][var]
-            log = False
+            idx_var = zarr_group.attrs['variables'][var]
+            out = None
             if var == "sin_lat":
                 out = compute_sincos_coords(self.lat, type="sin", samples=self.num_samples)
-                # print(f"sin_lats: {out.shape}")
-                log = True
-            if var == "cos_lat":
+                constant_vars.add(var)
+            elif var == "cos_lat":
                 out = compute_sincos_coords(self.lat, type="cos", samples=self.num_samples)
-                # print(f"cos_lats: {out.shape}")
-                log = True
-            if var == "sin_lon":
+                constant_vars.add(var)
+            elif var == "sin_lon":
                 out = compute_sincos_coords(self.lon, type="sin", samples=self.num_samples)
-                # print(f"sin_lons: {out.shape}")
-                log = True
-            if var == "cos_lon":
+                constant_vars.add(var)
+            elif var == "cos_lon":
                 out = compute_sincos_coords(self.lon, type="cos", samples=self.num_samples)
-                # print(f"cos_lons: {out.shape}")
-                log = True
-            if var == "sin_julian_day":
-                out = compute_julian_day(dates=pd.to_datetime(self.dates), type="sin", points=self.number_gridpoints) 
-                # print(f"sinj: {out.shape}")
-                log = True
-            if var == "cos_julian_day":
+                constant_vars.add(var)
+            elif var == "sin_julian_day":
+                out = compute_julian_day(dates=pd.to_datetime(self.dates), type="sin", points=self.number_gridpoints)
+            elif var == "cos_julian_day":
                 out = compute_julian_day(dates=pd.to_datetime(self.dates), type="cos", points=self.number_gridpoints)
-                # print(f"cosj: {out.shape}")
-                log = True
-            if var == "toa_solar_radiation":
+            elif var == "toa_solar_radiation":
                 out = compute_toa_solar_radiation(dates=pd.to_datetime(self.dates), lats=self.lat)
-                # print(f"toa: {out.shape}") 
-                log = True
-            if log:
-                zarr_store[:, idx_var, :] = out[:,0,:]
-                print(f"✅ Forcing {var} READY.")
+            if out is not None:
+                data_arr[:, idx_var, :] = out[:, 0, :]
+                log.info("Forcing %s ready.", var)
 
-        # --- Stats and NaNs ---------------------------------
-        ## Count nans 
-        print(f"🕒 Counting NaNs..")
-        idx_fixed_nan, self.idx_dynamic_nan = self.count_nans(zarr_path)
-        zarr_store.attrs['idx_fixed_nan'] = {
+        # --- variables_metadata and constant_fields ---
+        variables_metadata = {}
+        for var in self.variables:
+            if var in _KNOWN_COMPUTED_FORCINGS:
+                variables_metadata[var] = _KNOWN_COMPUTED_FORCINGS[var].copy()
+            elif var in constant_vars:
+                variables_metadata[var] = {"computed_forcing": False, "constant_in_time": True}
+            else:
+                variables_metadata[var] = {"computed_forcing": False, "constant_in_time": False}
+
+        zarr_group.attrs['variables_metadata'] = variables_metadata
+        zarr_group.attrs['constant_fields']    = sorted(
+            v for v, m in variables_metadata.items() if m["constant_in_time"]
+        )
+
+        # --- Count NaNs ---
+        log.info("Counting NaNs.")
+        idx_fixed_nan, idx_dynamic_nan = self.count_nans(zarr_group)
+        zarr_group.attrs['idx_fixed_nan'] = {
             var: idx_fixed_nan[c].tolist() for c, var in enumerate(self.variables)
         }
-        # print(zarr_store.attrs['idx_fixed_nan'])
-        zarr_store.attrs['idx_dynamic_nan'] = {
-            var: self.idx_dynamic_nan[c] for c, var in enumerate(self.variables)
+        zarr_group.attrs['idx_dynamic_nan'] = {
+            var: idx_dynamic_nan[c] for c, var in enumerate(self.variables)
         }
-        # print(zarr_store.attrs['idx_dynamic_nan'])
-        print("----")
 
-        ## Impute NaNs?
+        # --- Impute NaNs (optional) ---
         if self.imputer is not None:
-            zarr_store, zarr_store.attrs['idx_dynamic_nan'] = self.impute_nans(data=zarr_store, zarr_attrs=zarr_store.attrs['idx_dynamic_nan'], lats=zarr_store.attrs['lats'], lons=zarr_store.attrs['lons'])
+            zarr_group.attrs['idx_dynamic_nan'] = self.impute_nans(
+                zarr_group=zarr_group,
+                zarr_attrs=zarr_group.attrs['idx_dynamic_nan'],
+                lats=zarr_group["latitudes"][:],
+                lons=zarr_group["longitudes"][:],
+            )
 
-        ## Compute mean/std, min/max
-        print(f"🕒 Computing stats..")
-        m, s = self.compute_mean_std_per_channel(zarr_path)
-        zarr_store.attrs['mean'] = m
-        zarr_store.attrs['std'] = s
-        mn, mx = self.compute_min_max_per_channel(zarr_path)
-        zarr_store.attrs['min'] = mn
-        zarr_store.attrs['max'] = mx
+        # --- Compute and store stats as (C,) sub-arrays (single pass) ---
+        log.info("Computing stats.")
+        mean_arr, std_arr, min_arr, max_arr = self.compute_stats_per_channel(zarr_group)
 
+        zarr_group.create_dataset("mean", data=mean_arr, chunks=(self.num_vars,), dtype='float32', compressor=blk)
+        zarr_group.create_dataset("std",  data=std_arr,  chunks=(self.num_vars,), dtype='float32', compressor=blk)
+        zarr_group.create_dataset("min",  data=min_arr,  chunks=(self.num_vars,), dtype='float32', compressor=blk)
+        zarr_group.create_dataset("max",  data=max_arr,  chunks=(self.num_vars,), dtype='float32', compressor=blk)
 
-        # --- Save to disk ---------------------------------
-        return f"⭐ Saved to disk...: {zarr_path}"
+        log.info("Saved store at %s", zarr_path)
+        return zarr_path

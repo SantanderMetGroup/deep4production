@@ -1,0 +1,154 @@
+##### GENERAL INFO #####
+run_ID: resdiff
+output_dir: path_to_your_output_dir
+overwrite: true
+
+
+##### TRAINER SELECTION #####
+# EDM residual-diffusion trainer (CorrDiff-style, Mardani et al. 2023).
+# Predicts the residual r = y - mean_pred where mean_pred is the output of a
+# separately trained deterministic regressor.
+d4p_trainer:
+  name: trainer_custom
+  module: deep4production.core.trainers.trainer_resdiff
+
+
+##### CUSTOM PYDATASET #####
+# Residual pydataset: loads predictors + predictands, runs the deterministic
+# regressor at init, caches residuals + regression means to a zarr, and
+# serves (r, c_low, c_high) triples. c_high is the regression mean.
+d4p_pydataset:
+  name: pydataset_custom
+  module: deep4production.core.pydatasets.pydataset_resdiff
+  kwargs:
+    # Path to the deterministic regressor checkpoint (d4p-format .pt file).
+    # Used to compute y_hat = regressor(x); the residual r = y - y_hat is the
+    # diffusion target, and y_hat itself is fed back as the high-res context.
+    path_regressor: path_to_your_regressor_best.pt
+    # Pass the regressor's mean prediction to the diffusion UNet as cond_high.
+    # Must stay `true` for CorrDiff; setting `false` falls back to
+    # low-res-only conditioning (not the published CorrDiff configuration).
+    add_pred_mean: true
+    # Also feed the raw low-res predictors to the UNet as cond_low.
+    add_context_lowres: true
+    # Residuals cache (written once on first run, reused thereafter).
+    residuals:
+      path: path_to_your_residuals_dir/residuals.zarr
+      template: path_to_your_target_template.nc
+
+
+##### TRAINING DATA CONFIGURATION #####
+data:
+  load_in_memory: true
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  validation_period: [1967, 1975]
+
+  predictors:
+    paths:
+      - path_to_your_x_file_1.zarr
+      - path_to_your_x_file_2.zarr
+      - ...
+    variables: null
+    normalizer:
+      path_reference: path_to_your_x_file_1.zarr
+      default: mean_std
+    transform_to_2D: True
+
+  predictands:
+    paths:
+      - path_to_your_y_file_1.zarr
+      - path_to_your_y_file_2.zarr
+      - ...
+    variables:
+      - pr
+    transform_to_2D: True
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 16
+  shuffle: true
+  num_workers: 4
+
+
+##### MODEL CONFIGURATION #####
+model_info:
+  saving_params:
+    model_save_name: ResDiff
+
+  # ── Loss ────────────────────────────────────────────────────────────────────
+  # EDM-weighted DSM on the *denoised* prediction D_theta returned by the
+  # preconditioner. Loss weighting lambda(sigma) = (sigma_data^2 + sigma^2) /
+  # (sigma_data * sigma)^2; no c_skip/c_out inside — the preconditioner owns
+  # those. `sigma_data` must match the preconditioner's value.
+  loss_params:
+    name: WeightedDenoisingScoreMatchingLoss
+    module: deep4production.deep.loss
+    kwargs:
+      ignore_nans: false
+      sigma_data: 0.5
+
+  # ── Architecture ─────────────────────────────────────────────────────────────
+  # EDM preconditioner wrapping the shared SongUNet backbone. The factory
+  # `build_edm_model` instantiates the backbone from the nested `backbone`
+  # spec and wraps it — single flat YAML entry, but full configurability.
+  # The same metadata block is reloaded at inference by load_model (and by the
+  # CorrDiff downscaler), so train/inference stay in lockstep.
+  model_params:
+    name: build_edm_model
+    module: deep4production.deep.models.diffusion.edm_precond
+    kwargs:
+      sigma_data: 0.5             # EDM data sigma (must match loss.sigma_data)
+      backbone:
+        module: deep4production.deep.models.unet.song_unet
+        name: SongUNet
+        kwargs:
+          in_channels: 1            # C_r  — channels of the residual
+          cond_low_channels: 12     # C_x  — coarse ERA5 / predictor channels
+          cond_high_channels: 1     # C_yhat — regression mean as high-res context
+          nf: 128                   # base width (CorrDiff paper: ~80 M params at nf=128)
+          ch_mult: [1, 2, 2, 2, 2]  # 5 encoder levels (CorrDiff paper)
+          num_res_blocks: 4
+          attn_at_levels: [3, 4]    # attention at the two deepest levels
+          dropout: 0.13             # CorrDiff paper value
+          fir: true
+          fir_kernel: [1, 3, 3, 1]
+          skip_rescale: true
+          progressive_input: true
+          cond_upsample: fir        # anti-aliased upsampling of coarse inputs
+          # NeRF-style spatial positional embedding (Mardani et al. 2023).
+          # K=1 → 4 extra channels: sin/cos(2π·y/H), sin/cos(2π·x/W) (CorrDiff paper).
+          # K>1 → 4·K channels with geometrically increasing frequencies.
+          # K=0 disables. The PE is a pure function of (H, W), cached on the
+          # first forward, so the per-step cost is a single concat.
+          spatial_pe_freqs: 1
+
+  # ── Training ──────────────────────────────────────────────────────────────────
+  training_params:
+    num_epochs: 300
+    patience_early_stopping: 20
+    optimizer_params:
+      lr: 0.0002
+    ema_decay: 0.9999
+    grad_clip: 1.0
+
+    scheduler_params:
+      type: LambdaLR
+      lr_lambda: rampup_expdecay
+      kwargs:
+        base_lr: 0.0002
+        rampup_steps: 5000
+        decay_rate: 1.0
+        decay_interval: 1
+        terminal_value: 1.0e-6
+
+    # Forwarded as **kwargs to model_backprop.
+    # EDM log-normal noise sampling (Karras et al. 2022):
+    #   ln(sigma) ~ N(P_mean, P_std^2), clamped to [sigma_min, sigma_max].
+    kwargs:
+      noise_params:
+        P_mean: -1.2              # EDM default
+        P_std:  1.2               # EDM default
+        sigma_min: 0.002          # EDM default
+        sigma_max: 80.0           # EDM default

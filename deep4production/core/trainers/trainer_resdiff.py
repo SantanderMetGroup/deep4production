@@ -5,6 +5,9 @@ import torch
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
 from deep4production.core.pydatasets.pydataset_resdiff import pydataset_custom
+from deep4production.utils.log import get_logger
+
+log = get_logger("trainer.resdiff")
 ##################################################################################################################################
 class trainer_custom(trainer):
     """
@@ -13,13 +16,14 @@ class trainer_custom(trainer):
     Parameters:
         data (dict): Dataset configuration.
         dataloader (dict): Dataloader parameters.
-        output_dir (str): Output directory for experiment.
+        id_dir (str): Directory for experiment outputs.
         model_info (dict): Model, loss, saving, and training parameters.
         graph (dict): Graph configuration for GNN models.
         d4dpy (dict): Custom pydataset configuration.
         Mlflow (dict): MLflow tracking configuration.
     """
-    def __init__(self, data, dataloader, output_dir, model_info, graph, d4dpy, Mlflow):
+    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
         """
         Initializes the Residual Generator trainer.
         """
@@ -27,11 +31,14 @@ class trainer_custom(trainer):
         super().__init__(
             data=data,
             dataloader=dataloader,
-            output_dir=output_dir,
+            id_dir=id_dir,
             model_info=model_info,
             graph=graph,
             d4dpy=d4dpy,
-            Mlflow=Mlflow
+            Mlflow=Mlflow,
+            normalizer_info_x=normalizer_info_x,
+            normalizer_info_y=normalizer_info_y,
+            normalizer_info_f=normalizer_info_f,
         )
 
         # --- UPDATE SELF PARAMETERS ---------------------------------------
@@ -44,7 +51,7 @@ class trainer_custom(trainer):
         # self.add_pred_mean = bool(chh)
         # chh = self.model_params["kwargs"].get("cond_channels_low")
         # self.add_context_lowres = bool(chh)
-        print("📦 SELF UPDATED")
+        log.debug("ResDiff trainer self-update complete")
 
         # --- UPDATE METADATA ---------------------------------------
         self.update_metadata()
@@ -80,8 +87,14 @@ class trainer_custom(trainer):
             tuple: (train_dataset, valid_dataset)
         """
         ## Create pydatasets
-        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True)}
+        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True), "cache_mb": self.data.get("zarr_cache_mb", None)}
         kwargs_pydataset.update(**self.d4dpy)
+        # The resdiff pydataset needs to normalize x and y on CPU for the
+        # one-shot residuals precomputation (the regressor and its training
+        # data both live in normalized space). Pass the recipe dicts down so
+        # it can build its own local InputNormalizer instances.
+        kwargs_pydataset["normalizer_info_x"] = self.normalizer_info_x
+        kwargs_pydataset["normalizer_info_y"] = self.normalizer_info_y
         kwargs_pydataset.update({"dataset": "training"})
         train_dataset = self.pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
         valid_dataset = None
@@ -91,7 +104,7 @@ class trainer_custom(trainer):
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset) 
         # self.save_metadata(self.metadata_path)
-        print("📦 PYDATASETS READY")
+        log.info("Pydatasets ready")
         return train_dataset, valid_dataset
         
     # -------------------------------------------------------------------------
@@ -116,59 +129,78 @@ class trainer_custom(trainer):
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, noise_params, is_this_training=True):
         """
-        Performs a single forward and backward pass for a batch, including noise scheduling and conditioning.
-        Purpose: Handles core training step for residual denoising models, including noise injection and loss computation.
-        Parameters:
-            model: PyTorch model.
-            data: Tuple of residual, context low-res, context high-res arrays.
-            optimizer: PyTorch optimizer.
-            loss_function: Loss function callable.
-            device: Device string ('cpu' or 'cuda').
-            noise_params (dict): Noise scheduling parameters.
-            is_this_training (bool): Whether to perform backpropagation.
-        Returns:
-            float: Loss value for the batch.
+        Performs a single forward and backward pass for a batch.
+
+        `model` is expected to be an EDM-preconditioned backbone (e.g.
+        deep4production.deep.models.diffusion.edm_precond.EDMPrecond wrapping a
+        SongUNet). It accepts forward(x=r_t, sigma=sigma_t, cond_low, cond_high)
+        and returns the denoised prediction D_theta. All EDM preconditioning
+        (c_in, c_skip, c_out, c_noise) lives inside the preconditioner.
+
+        Parameters
+        ----------
+        model : nn.Module
+            Preconditioned denoiser. forward(x, sigma, cond_low, cond_high) -> D_theta.
+        data : tuple
+            (residual, context_low_res, context_high_res).
+        optimizer : torch.optim.Optimizer
+        loss_function : callable
+            Signature: (target, output, sigma_t) -> scalar. The EDM λ(σ) weighting
+            is applied inside the loss.
+        device : str
+        noise_params : dict
+            Expected keys: P_mean, P_std, sigma_min, sigma_max. `sigma_data`
+            is owned by the preconditioner buffer and the loss.
+        is_this_training : bool
+            If True, run loss.backward().
+
+        Returns
+        -------
+        float : batch loss value.
         """
-        # --- Get noise scheduler parameters ---
-        P_mean, P_std, sigma_min, sigma_max, sigma_data = noise_params["P_mean"], noise_params["P_std"], noise_params["sigma_min"], noise_params["sigma_max"], noise_params["sigma_data"]
+        # --- Noise schedule parameters ---
+        P_mean = noise_params["P_mean"]
+        P_std = noise_params["P_std"]
+        sigma_min = noise_params["sigma_min"]
+        sigma_max = noise_params["sigma_max"]
 
-        # --- Get arrays as defined in the pydataset class. ---
+        # --- Unpack batch ---
         r, c_low, c_high = data
-
-        # --- Get batch size ---
         batch_size = r.shape[0]
-    
-        # --- Condition features and target ---
-        r = r.to(device)
-        # print(f"r {r.shape}")
-        c_high = c_high.to(device)
-        # print(f"c_high {c_high.shape}")
-        c_low = c_low.to(device)
-        # print(f"c_low {c_low.shape}")
+        non_blocking = (self.device == "cuda")
 
-        # --- Sample noise and forward pass ---
+        r = r.to(device, non_blocking=non_blocking)
+        if c_low is not None:
+            c_low = c_low.to(device, non_blocking=non_blocking)
+        if c_high is not None:
+            c_high = c_high.to(device, non_blocking=non_blocking)
+
+        # --- GPU-side normalization ---
+        # Only c_low needs normalization here: r is the residual of normalized
+        # values (clean target ≈ N(0, sigma_data) by construction) and c_high
+        # is the regressor's prediction in normalized space — both were stored
+        # to the residuals zarr already in normalized space by
+        # pydataset_resdiff._forward_pass_regressor (variable names are
+        # suffixed *_residual / *_normalized respectively).
+        if c_low is not None and self.norm_x is not None:
+            c_low = self.norm_x(c_low)
+
+        # --- Sample noise level and corrupt the clean target — kept in fp32 ---
         sigma_t = self.sigma(P_mean, P_std, sigma_min=sigma_min, sigma_max=sigma_max, batch_size=batch_size).to(device)
-        # print(f"sigma_t {sigma_t.shape}")
-        z = torch.randn_like(r)  # ε ~ N(0, I)
-        r_t = r + sigma_t * z  # x_t = x_0 + σ_t * ε
-        # print(f"r_t {r_t.shape}")
+        z = torch.randn_like(r)
+        r_t = r + sigma_t * z
 
-        # --- Compute conditioning scalars ---
-        c_in = 1.0 / torch.sqrt(sigma_data ** 2 + sigma_t ** 2)
-        # c_noise = 0.25 * torch.log(sigma_t)
-        # print(f"c_noise {c_noise.shape}")
-        r_t_scaled = c_in * r_t
-        r_t_scaled = r_t_scaled.to(device)
-        # print(f"r_t_scaled {r_t_scaled.shape}")
+        optimizer.zero_grad(set_to_none=True)
 
-        # --- Feed features to the denoiser deep learning model ---
-        optimizer.zero_grad()
-        denoiser_output = model(x=r_t_scaled, context_low=c_low, context_high=c_high)
+        # --- Forward through the EDM-preconditioned model + loss under AMP autocast ---
+        with self._amp_ctx():
+            D_theta = model(x=r_t, sigma=sigma_t, cond_low=c_low, cond_high=c_high)
+            loss = loss_function(target=r, output=D_theta, sigma_t=sigma_t)
 
-        # --- Compute loss ---
-        loss = loss_function(target=r, output=denoiser_output, sigma_t=sigma_t, r_t=r_t)
         if is_this_training:
-            loss.backward()
+            if self._scaler is not None:
+                self._scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-        # --- Return ---
-        return loss.item()
+        return loss.detach()

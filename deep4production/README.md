@@ -24,7 +24,7 @@ The `cli/` module provides entry points for interacting with the library from th
 - `d4p-create` → Prepare AI ready datasets
 - `d4p-inspect` → Inspect AI ready datasets
 - `d4p-train` → Train deep learning models  
-- `d4p-predict` → Run inference using trained models  
+- `d4p-downscale` → Run inference using trained models  
 
 These commands orchestrate workflows and call into the `core/` modules.
 

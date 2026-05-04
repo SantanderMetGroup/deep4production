@@ -13,7 +13,7 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/S
 1. `d4p-create`: Converts NetCDF source files into AI-ready Zarr datasets containing precomputed statistics.
 2. `d4p-inspect`: Inspects the created Zarr file for basic QA/QC.
 3. `d4p-train`: Trains a deep learning downscaling model.
-4. `d4p-predict`: Runs inference using trained model.
+4. `d4p-downscale`: Runs inference using trained model.
 
 All steps are controlled via **YAML configuration files**, ensuring:
 
@@ -53,7 +53,7 @@ example/
 │
 ├── inference/
 │ ├── configs/ # Inference configuration files. There could be as many YAML configs as models you would like to test.
-│ │ └── deepesd.yaml # Use d4p-predict your_yaml.yaml to perform inference
+│ │ └── deepesd.yaml # Use d4p-downscale your_yaml.yaml to perform inference
 │ └── logs/ # Inference logs
 │
 ├── outputs/ # Automatically generated at training.
@@ -317,6 +317,11 @@ overwrite: true # trains deep learning model from scratch even if a model alread
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
+  # Optional: when load_in_memory=false, wrap each Zarr store in an
+  # LRU cache of this many MB. Useful on slow / shared HPC filesystems
+  # to keep recently-touched chunks warm without materialising the whole
+  # dataset. Omit (or set null) to disable caching.
+  # zarr_cache_mb: 512
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
   validation_period: [1967, 1975]
 
@@ -353,6 +358,10 @@ dataloader:
   batch_size: 64
   shuffle: true
   num_workers: 0
+  # Optional: how many batches each worker pre-fetches ahead of the GPU.
+  # Default 2 (PyTorch built-in). Increase to ~4 for high-throughput training
+  # on slow filesystems; ignored when num_workers=0.
+  # prefetch_factor: 2
 
 
 ##### MODEL CONFIGURATION #####
@@ -513,7 +522,7 @@ Mlflow:
 
 ---
 
-## 7. Run Inference with `d4p-predict`
+## 7. Run Inference with `d4p-downscale`
 
 Once the model has been trained, we can use it to generate predictions on new (or held-out) data. This step is controlled via a YAML configuration file, which specifies:
 
@@ -521,7 +530,7 @@ Once the model has been trained, we can use it to generate predictions on new (o
 - The **trained model** to use. See `model_file` parameter in YAML. 
 - The **output format and storage** of predictions. See `saving_info` in YAML. 
 
-When executed, `d4p-predict`:
+When executed, `d4p-downscale`:
 
 1. Loads the trained model from the specified directory  
 2. Reads the input predictor data from Zarr files  
@@ -554,20 +563,20 @@ saving_info: # Defines how predictions are written to disk
 
 ```
 
-Once the configuration file is defined, we perform inference: `d4p-predict`.
+Once the configuration file is defined, we perform inference: `d4p-downscale`.
 
 ```bash
-d4p-predict ./inference/configs/deepesd.yaml
+d4p-downscale ./inference/configs/deepesd.yaml
 ```
 Below is an example of inference output:
-![d4p-predict-1](./images/d4p-predict-output.png)
+![d4p-downscale-1](./images/d4p-downscale-output.png)
 
 Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
 
-![d4p-predict-2](./images/d4p-predict-pred.png)
+![d4p-downscale-2](./images/d4p-downscale-pred.png)
 
 ... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
-![d4p-predict-3](./images/d4p-predict-pred-template.png)
+![d4p-downscale-3](./images/d4p-downscale-pred-template.png)
 
 
 

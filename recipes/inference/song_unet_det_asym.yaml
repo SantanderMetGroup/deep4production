@@ -1,0 +1,50 @@
+##### GENERAL INFO #####
+# Directory created by d4p-train for this run_ID.
+# Expected layout:
+#   models/      — SongUNet_det_asym_best.pt  (and optional epoch checkpoints)
+#   predictions/ — output NetCDF files written here
+#   aux_files/   — cached Gamma parameters (shape.npy, scale.npy, loc.npy)
+id_dir: path_to_your_output_dir/song_unet_det_asym
+
+
+##### INPUT DATA #####
+input_data:
+  paths:
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    # Must match the zarr files used at training time (same variables and order)
+  years: [1980, 1981]   # years to downscale
+  load_in_memory: true
+
+
+##### ENSEMBLE SIZE #####
+# The deterministic SongUNet produces a single output per date.
+# Setting ensemble_size > 1 re-runs the same forward pass (all members are
+# identical), which is only useful for debugging. Keep this at 1 for production.
+ensemble_size: 1
+
+graph: null
+
+
+##### MODEL CHECKPOINT #####
+model_file: SongUNet_det_asym_best.pt   # relative to id_dir/models/
+
+
+##### DOWNSCALER CLASS #####
+# Custom subclass that wires the SongUNet signature (x_in=0, t=0, cond_low=x)
+# instead of the default (x, f) used by CNN-based downscalers.
+d4p_downscaler:
+  name: downscaler_custom
+  module: deep4production.core.downscalers.downscaler_song_unet_det
+
+
+##### OUTPUT #####
+saving_info:
+  file: SongUNet_det_asym_1980-1981.nc   # saved at id_dir/predictions/
+  template: null  # optional NetCDF template for output coordinates;
+                  # if null, lats/lons are taken from the checkpoint metadata
+  # formatting:
+  #   name: cordex_ml   # uncomment to apply CORDEX-ML output conventions
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: CORDEX-ML

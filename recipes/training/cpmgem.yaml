@@ -5,7 +5,7 @@ overwrite: true
 
 
 ##### TRAINER SELECTION #####
-# Selects the sub-VP SDE diffusion trainer (direct generation, no residual).
+# Continuous-time sub-VP SDE diffusion trainer (direct generation, no residual).
 d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_cpmgem
@@ -14,6 +14,11 @@ d4p_trainer:
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true
+  # Optional: when load_in_memory=false, wrap each Zarr store in an
+  # LRU cache of this many MB. Useful on slow / shared HPC filesystems
+  # to keep recently-touched chunks warm without materialising the whole
+  # dataset. Omit (or set null) to disable caching.
+  # zarr_cache_mb: 512
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
                     1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
@@ -23,11 +28,11 @@ data:
       - path_to_your_x_file_1.zarr
       - path_to_your_x_file_2.zarr
       - ...
-    variables: null         # null → all variables in the zarr
+    variables: null        # null → all variables in the zarr
     normalizer:
       path_reference: path_to_your_x_file_1.zarr
-      default: mean_std     # standardise predictors to zero mean / unit variance
-    transform_to_2D: True   # flatten gridpoints → (C, H_x, W_x) spatial grid
+      default: mean_std    # standardise predictors to zero mean / unit variance
+    transform_to_2D: True  # flatten gridpoints → (C, H_x, W_x) spatial grid
 
   predictands:
     paths:
@@ -35,15 +40,29 @@ data:
       - path_to_your_y_file_2.zarr
       - ...
     variables:
-      - pr                  # adjust to your target variable(s)
-    transform_to_2D: True   # target must also be on a 2D grid
+      - pr                 # adjust to your target variable(s)
+    # Paper transform: pr  →  sqrt(pr)  →  linearly rescale to [-1, 1].
+    # The operator is applied first, then the normalizer. Because sqrt is
+    # monotone on pr ≥ 0, the post-operator min/max are derived automatically
+    # from the raw zarr stats (sqrt(min_raw), sqrt(max_raw)); no need to
+    # recompute the zarr.
+    operator:
+      default: sqrt
+    normalizer:
+      path_reference: path_to_your_y_file_1.zarr
+      default: minmax_neg1_1  # 2*(x-min)/(max-min) - 1
+    transform_to_2D: True
 
 
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
-  batch_size: 16            # paper uses 16 (10 GB GPU); increase if memory allows
+  batch_size: 16           # paper value (10 GB GPU); increase if memory allows
   shuffle: true
   num_workers: 4
+  # Optional: how many batches each worker pre-fetches ahead of the GPU.
+  # Default 2 (PyTorch built-in). Increase to ~4 for high-throughput training
+  # on slow filesystems; ignored when num_workers=0.
+  # prefetch_factor: 2
 
 
 ##### MODEL CONFIGURATION #####
@@ -52,7 +71,7 @@ model_info:
     model_save_name: CPMGEM
 
   # ── Loss ────────────────────────────────────────────────────────────────────
-  # Simple MSE on the predicted noise ε.  No NaNs in noise → ignore_nans: false.
+  # MSE on predicted noise ε. No NaNs in noise → ignore_nans: false.
   loss_params:
     name: MseLoss
     module: deep4production.deep.loss
@@ -60,38 +79,59 @@ model_info:
       ignore_nans: false
 
   # ── Architecture ─────────────────────────────────────────────────────────────
-  # NCSN++ U-Net backbone (Addison et al. 2024 / Song et al. 2021).
-  #
-  # Key parameters to adjust for your data:
-  #   in_channels  → number of target variable channels (C_y)
-  #   cond_channels → number of predictor channels (C_x); check with d4p-inspect
-  #
-  # base_channels=128 + channel_mults=(1,2,4,8) ≈ 63 M params (paper default).
-  # Reduce base_channels to 64 for a lighter ~16 M param version.
+  # Conditioned NCSN++ U-Net (Addison et al. 2024 / Song et al. 2021).
+  # Uses the shared SongUNet backbone with only the low-res conditioning
+  # stream enabled (cond_high_channels: 0). The CorrDiff/resdiff recipe uses
+  # the same backbone with cond_high_channels > 0 and an EDM preconditioner.
   model_params:
-    name: CPMGEM
-    module: deep4production.deep.models.diffusion.cpmgem
+    name: SongUNet
+    module: deep4production.deep.models.unet.song_unet
     kwargs:
-      in_channels: 1              # (C_y)  e.g. 1 for a single precipitation field
-      cond_channels: 15           # (C_x)  use `d4p-inspect your_x.zarr` to get this
-      base_channels: 128          # U-Net base width; 64 for a lighter model
-      channel_mults: [1, 2, 4, 8] # channel multipliers per encoder level
-      num_res_blocks: 2           # ResBlocks per encoder/decoder level
-      attn_at_levels: [2, 3]      # 0-indexed levels where self-attention is used
-      num_groups: 32              # GroupNorm groups (must divide all channel counts)
+      in_channels: 1              # C_y  — e.g. 1 for a single precipitation field
+      cond_low_channels: 15       # C_x  — use `d4p-inspect your_x.zarr` to get this
+      cond_high_channels: 0       # CPMGEM does not use high-res conditioning
+      nf: 128                     # base channel width
+      ch_mult: [1, 2, 2, 2]       # channel multipliers per encoder level
+      num_res_blocks: 4           # ResBlocks per encoder/decoder level
+      attn_at_levels: [3]         # levels (0-indexed) with self-attention
+                                  # (paper: attention at 16×16 only → deepest level)
       dropout: 0.1
+      fir: true                   # FIR up/downsampling inside the UNet ResBlocks
+      fir_kernel: [1, 3, 3, 1]    # Binomial-4 FIR prototype
+      skip_rescale: true          # divide residual connections by √2
+      progressive_input: true     # add downsampled input at each encoder level
+      # Upsampling method for the low-res conditioning before concatenation with y_t.
+      # Independent of `fir`, which only affects internal UNet resampling.
+      #   "nearest" – nearest-neighbour (Addison et al. 2024, paper-exact)
+      #   "fir"     – anti-aliased FIR (smoother alternative)
+      cond_upsample: nearest
 
   # ── Training ──────────────────────────────────────────────────────────────────
   training_params:
     num_epochs: 20
     patience_early_stopping: 5
     optimizer_params:
-      lr: 0.0002                  # Adam lr from the paper
-    ema_decay: 0.999              # Exponential Moving Average for weight stabilisation
+      lr: 0.0002                  # Adam lr (paper value)
+    ema_decay: 0.9999             # EMA for weight stabilisation (paper value)
+    grad_clip: 1.0                # L2-norm gradient clipping (paper / mlde value)
 
-    # These are forwarded as **kwargs to model_backprop.
+    # Linear warm-up over 5000 steps then constant LR (mlde default for sub-VP).
+    # rampup_expdecay returns a *multiplier* for the optimizer LR; decay_rate=1.0
+    # disables the exponential decay, so LR stays at base after warm-up.
+    scheduler_params:
+      type: LambdaLR
+      lr_lambda: rampup_expdecay
+      kwargs:
+        base_lr: 0.0002           # must match optimizer_params.lr (used only
+                                  # as a placeholder inside the lambda)
+        rampup_steps: 5000        # paper / mlde value
+        decay_rate: 1.0           # 1.0 → no decay (constant LR after warm-up)
+        decay_interval: 1
+        terminal_value: 1.0e-6
+
+    # Forwarded as **kwargs to model_backprop.
     kwargs:
       noise_params:
-        T: 1000                   # number of diffusion steps
-        beta_min: 0.0001          # β_1  (smallest noise level)
-        beta_max: 0.02            # β_T  (largest  noise level)
+        beta_min: 0.1             # sub-VP SDE β at t=0  (paper / mlde default)
+        beta_max: 20.0            # sub-VP SDE β at t=1  (paper / mlde default)
+        t_min: 1.0e-5             # lower bound for continuous-time sampling

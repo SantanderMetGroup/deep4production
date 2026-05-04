@@ -6,6 +6,9 @@ from torch_geometric.data import HeteroData
 from torch_geometric.utils import to_dense_batch
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
+from deep4production.utils.log import get_logger
+
+log = get_logger("trainer.gnn4cd")
 ##################################################################################################################################
 class trainer_custom(trainer):
     """
@@ -22,7 +25,8 @@ class trainer_custom(trainer):
         edge_index_path (str): Path to the pre-computed edge index file for the static graph.
     """
 
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow, edge_index_path):
+    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow, edge_index_path,
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
         """
         Initializes the Residual Generator trainer.
         """
@@ -34,11 +38,14 @@ class trainer_custom(trainer):
             model_info=model_info,
             graph=graph,
             d4dpy=d4dpy,
-            Mlflow=Mlflow
+            Mlflow=Mlflow,
+            normalizer_info_x=normalizer_info_x,
+            normalizer_info_y=normalizer_info_y,
+            normalizer_info_f=normalizer_info_f,
         )
 
         # ---- Build ONE static graph ----
-        print("⚙️ Building static graph for GNN4CD...")
+        log.info("Building static graph for GNN4CD")
         edge_index = torch.load(edge_index_path)
 
         self.graph = HeteroData()
@@ -64,17 +71,32 @@ class trainer_custom(trainer):
         """
 
         x, y, f = data
-        if f[0] == "N/A":
+        f_is_real = (f[0] != "N/A")
+        if not f_is_real:
             f = torch.zeros_like(y)
 
         if not self.graph_on_device:
             self.graph = self.graph.to(device)
             self.graph_on_device = True
 
-        # ---- Reshape inputs ----
-        x = x[0].permute(2, 0, 1).to(device)   # from (sample, seq, C, G_low) → (G_low, seq, C)
-        y = y[0].permute(1, 0).to(device)  # from (sample, C, G_low) → (G_high, C)
-        f = f[0].permute(1, 0).to(device)  # from (sample, C, G_low) → (G_high, C)
+        # --- Move to device first so we can normalize on GPU ---
+        x = x.to(device)
+        y = y.to(device)
+        f = f.to(device)
+
+        # --- GPU-side normalization (BEFORE the gnn-specific permute) ---
+        # x has shape (B=1, seq, C, G_low) when lagged or (B=1, C, G_low) otherwise.
+        # y/f have shape (B=1, C, G_high). Channel dim is 1 by default; for
+        # lagged x (4-D) it is dim 2.
+        cd_x = 2 if x.ndim == 4 else 1
+        x, y, _ = self._normalize_inputs(x=x, y=y, channel_dim_x=cd_x)
+        if f_is_real:
+            _, _, f = self._normalize_inputs(f=f)
+
+        # ---- Reshape inputs (now on device, normalized) ----
+        x = x[0].permute(2, 0, 1)   # from (sample, seq, C, G_low) → (G_low, seq, C)
+        y = y[0].permute(1, 0)      # from (sample, C, G_low) → (G_high, C)
+        f = f[0].permute(1, 0)      # from (sample, C, G_low) → (G_high, C)
 
         # ---- Attach features to static graph ----
         self.graph["low"].x = x

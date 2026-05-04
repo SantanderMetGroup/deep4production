@@ -1,17 +1,26 @@
 """
-Trainer for the CPMGEM diffusion model (Addison et al., 2024, arXiv:2407.14158).
+Trainer for the CPMGEM diffusion model (Addison et al. 2024, arXiv:2407.14158).
 
-Implements the sub-VP SDE forward diffusion process (discrete, DDPM-style):
-  β_t   = linspace(β_min, β_max, T)
-  ᾱ_t  = ∏_{s=1}^{t} (1 − β_s)
-  y_t   = √ᾱ_t · y₀  +  √(1 − ᾱ_t) · ε,    ε ~ N(0, I)
+Implements the sub-VP SDE forward diffusion process in **continuous time**,
+following Song et al. (2021) and the mlde repository
+(https://github.com/henryaddison/mlde).
 
-The model is trained to predict ε from (y_t, x_cond, t), supervised with
-MseLoss.  This is a direct-generation diffusion model — it learns the full
-high-resolution output, NOT a residual on top of a deterministic regressor
-(contrast with trainer_resdiff).
+Sub-VP SDE marginal distribution at time t ∈ (0, 1]:
+    B(t)    = β_min·t + ½(β_max − β_min)·t²
+    mean(t) = exp(−½ B(t)) · y₀
+    std(t)  = 1 − exp(−B(t))                 ← linear, NOT √. The square-root
+                                               form is the VP marginal; sub-VP
+                                               (Song 2021 Appx. B / yang-song's
+                                               score_sde_pytorch subVPSDE) has
+                                               variance (1−e^{−B})².
+    y_t     = mean(t) + std(t) · ε,   ε ~ N(0, I)
 
-The standard pydataset is used (no residual pre-computation needed).
+The model predicts the noise ε; the training objective is
+    L = E[ ‖ε̂(y_t, x_cond, t) − ε‖² ]
+supervised with MseLoss (equivalent to the score-matching objective used in
+the paper up to a constant weighting).
+
+The standard deep4production pydataset is used — no residual pre-computation.
 
 Authors:
     Jorge Baño-Medina
@@ -19,23 +28,28 @@ Authors:
 
 import torch
 from deep4production.core.trainers.trainer import trainer
+from deep4production.utils.log import get_logger
+
+log = get_logger("trainer.cpmgem")
 
 
 class trainer_custom(trainer):
     """
-    Trainer for CPMGEM: direct-generation diffusion model with sub-VP SDE.
+    Trainer for CPMGEM: direct-generation diffusion with sub-VP SDE.
 
     Inherits all dataset / dataloader / MLflow logic from the base trainer.
-    Only overrides model_backprop to inject the diffusion forward process.
+    Overrides model_backprop to inject the continuous-time diffusion process.
 
     Additional YAML keys expected under training_params.kwargs:
         noise_params:
-            T        : int   – number of diffusion steps (e.g. 1000)
-            beta_min : float – smallest noise level (e.g. 0.0001)
-            beta_max : float – largest  noise level (e.g. 0.02)
+            beta_min  : float  – β at t=0 (paper: 0.1)
+            beta_max  : float  – β at t=1 (paper: 20.0)
+            t_min     : float  – lower bound for continuous t (default 1e-5)
+        warmup_steps: int (optional) – linear LR warm-up steps (paper: 5000)
     """
 
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow):
+    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
         super().__init__(
             data=data,
             dataloader=dataloader,
@@ -44,25 +58,36 @@ class trainer_custom(trainer):
             graph=graph,
             d4dpy=d4dpy,
             Mlflow=Mlflow,
+            normalizer_info_x=normalizer_info_x,
+            normalizer_info_y=normalizer_info_y,
+            normalizer_info_f=normalizer_info_f,
         )
 
-        # ── Pre-compute sub-VP SDE schedule ──────────────────────────────────
+        # Store SDE params for metadata
         noise_params = model_info["training_params"]["kwargs"]["noise_params"]
-        T        = noise_params["T"]
-        beta_min = noise_params["beta_min"]
-        beta_max = noise_params["beta_max"]
-
-        betas      = torch.linspace(beta_min, beta_max, T, dtype=torch.float64)
-        alphas_bar = torch.cumprod(1.0 - betas, dim=0).float()
-
-        # Store on CPU; moved to device on each forward call
-        self.T                            = T
-        self.sqrt_alphas_bar              = alphas_bar.sqrt()           # (T,)
-        self.sqrt_one_minus_alphas_bar    = (1.0 - alphas_bar).sqrt()  # (T,)
-
-        # ── Persist noise schedule in metadata for reproducibility ────────────
         self.metadata_dict["noise_params"] = noise_params
-        print("📦 CPMGEM TRAINER READY")
+        log.info("CPMGEM trainer ready (continuous-time sub-VP SDE)")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _marginal_prob(y, t, beta_min, beta_max):
+        """
+        Sub-VP SDE marginal distribution parameters.
+
+        Returns
+        -------
+        mean : (B, 1, 1, 1)  – mean coefficient (applied to y₀)
+        std  : (B, 1, 1, 1)  – standard deviation of the noise
+        """
+        # Sub-VP marginal:
+        #   B(t) = β_min·t + ½(β_max − β_min)·t²
+        #   mean = exp(−½ B(t))
+        #   std  = 1 − exp(−B(t))            (sub-VP; not the VP √(1−e^{−B}))
+        B_t            = beta_min * t + 0.5 * (beta_max - beta_min) * t ** 2
+        log_mean_coeff = -0.5 * B_t
+        mean           = torch.exp(log_mean_coeff)[:, None, None, None]
+        std            = (1.0 - torch.exp(-B_t))[:, None, None, None]
+        return mean, std
 
     # ─────────────────────────────────────────────────────────────────────────
     def model_backprop(
@@ -71,63 +96,83 @@ class trainer_custom(trainer):
         data,
         optimizer,
         loss_function,
+        noise_params,           # forwarded from training_params.kwargs
         device,
-        noise_params,          # passed via training_params.kwargs (see YAML)
         is_this_training=True,
         **kwargs,
     ):
         """
-        One forward/backward pass for CPMGEM.
+        One forward / backward pass for CPMGEM.
 
-        Diffusion forward process:
-            1. Sample t ~ Uniform{0, …, T-1}
-            2. Sample ε ~ N(0, I)
-            3. Compute y_t = √ᾱ_t · y  +  √(1 − ᾱ_t) · ε
-            4. Predict ε̂ = model(y_t, x_cond=x, t_norm)
-            5. loss = MseLoss(ε̂, ε)
+        Continuous-time diffusion process:
+            1.  t ~ U(t_min, 1)
+            2.  Compute mean(t), std(t) from sub-VP SDE
+            3.  Sample ε ~ N(0, I)
+            4.  y_t = mean(t) · y  +  std(t) · ε
+            5.  ε̂ = model(y_t, x_cond=x, t)
+            6.  loss = MseLoss(ε̂, ε)
 
         Parameters
         ----------
-        model : nn.Module
-            CPMGEM instance.
-        data : tuple
-            (x, y, f) from the standard pydataset DataLoader.
-            x : (B, C_x, H_x, W_x) – low-res predictors
-            y : (B, C_y, H_y, W_y) – high-res target
-            f : forcing tensor or "N/A" sentinel (unused here)
-        optimizer : torch.optim.Optimizer
-        loss_function : callable   MseLoss(target=ε, output=ε̂)
-        device : str
-        noise_params : dict        Forwarded from training_params.kwargs
+        model         : CPMGEM instance
+        data          : (x, y, f) from standard pydataset DataLoader
+                        x : (B, C_x, H_x, W_x)  low-res conditioning
+                        y : (B, C_y, H_y, W_y)  high-res target
+                        f : forcing or "N/A" sentinel (unused)
+        optimizer     : torch.optim.Optimizer
+        loss_function : MseLoss(target=ε, output=ε̂)
+        noise_params  : dict with beta_min, beta_max, t_min
+        device        : str
         is_this_training : bool
         """
-        x, y, _ = data          # forcings are not used in the diffusion step
-        x = x.to(device)        # (B, C_x, H_x, W_x)  low-res conditioning
-        y = y.to(device)        # (B, C_y, H_y, W_y)  high-res target
+        x, y, _ = data
+        non_blocking = (self.device == "cuda")
+        x = x.to(device, non_blocking=non_blocking)
+        y = y.to(device, non_blocking=non_blocking)
         B = y.shape[0]
 
-        # ── Sample random timesteps t ∈ {0, …, T-1} ──────────────────────────
-        t_idx = torch.randint(0, self.T, (B,))   # (B,)  0-indexed
+        # --- GPU-side normalization (predictors + predictands) ---
+        # Predictand normalization is essential for cpmgem because the diffusion
+        # process operates on the normalized field y (e.g. sqrt(pr) rescaled to
+        # [-1, 1]). The operator (sqrt) is still applied on CPU per-sample by
+        # pydataset; only the affine rescale happens here.
+        x, y, _ = self._normalize_inputs(x=x, y=y)
 
-        # ── Look up schedule coefficients ─────────────────────────────────────
-        sqrt_ab  = self.sqrt_alphas_bar[t_idx].view(B, 1, 1, 1).to(device)
-        sqrt_1mab = self.sqrt_one_minus_alphas_bar[t_idx].view(B, 1, 1, 1).to(device)
+        beta_min = noise_params["beta_min"]
+        beta_max = noise_params["beta_max"]
+        t_min    = noise_params.get("t_min", 1e-5)
 
-        # ── Forward diffusion: y_t = √ᾱ_t · y + √(1 − ᾱ_t) · ε ──────────────
-        eps  = torch.randn_like(y)
-        y_t  = sqrt_ab * y + sqrt_1mab * eps
+        # ── Sample continuous time t ∈ [t_min, 1] — kept in fp32 ─────────────
+        t = torch.rand(B, device=device) * (1.0 - t_min) + t_min   # (B,)
 
-        # ── Normalise t to [0, 1] for the sinusoidal embedding ────────────────
-        t_norm = ((t_idx.float() + 1.0) / self.T).to(device)   # (B,)
+        # ── Sub-VP SDE marginal distribution ─────────────────────────────────
+        mean, std = self._marginal_prob(y, t, beta_min, beta_max)
 
-        # ── Model forward: predict ε ──────────────────────────────────────────
-        optimizer.zero_grad()
-        eps_pred = model(y_t=y_t, x_cond=x, t=t_norm)
+        # ── Forward diffusion — kept in fp32 ──────────────────────────────────
+        eps = torch.randn_like(y)
+        y_t = mean * y + std * eps
 
-        # ── Loss ──────────────────────────────────────────────────────────────
-        loss = loss_function(target=eps, output=eps_pred)
+        optimizer.zero_grad(set_to_none=True)
+
+        # ── Predict noise ε̂ + loss under AMP autocast ────────────────────────
+        # SongUNet signature: (x, t, cond_low, cond_high). CPMGEM uses only
+        # the low-res conditioning stream.
+        #
+        # Continuous sub-VP convention (score_sde_pytorch / mlde): the scalar
+        # noise label passed to the sinusoidal PE is `t · 999`, not raw t.
+        # The PE uses frequencies in [1e-4, 1]; feeding raw t∈(0,1] collapses
+        # most channels to ≈1 (cos) / ≈0 (sin) and loses time resolution.
+        # The UNet itself is agnostic — it consumes whatever scalar label the
+        # trainer provides — so the rescaling lives here.
+        t_label = t * 999.0
+        with self._amp_ctx():
+            eps_pred = model(x=y_t, t=t_label, cond_low=x)
+            loss = loss_function(target=eps, output=eps_pred)
 
         if is_this_training:
-            loss.backward()
+            if self._scaler is not None:
+                self._scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-        return loss.item()
+        return loss.detach()

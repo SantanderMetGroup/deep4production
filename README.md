@@ -49,12 +49,12 @@ The typical workflow consists of four main steps:
 
    This makes it possible to compare experiments and select the best-performing model.
 
-4. **Run inference (`d4p-predict`)**
+4. **Run inference (`d4p-downscale`)**
 
    Once a model is selected, predictions can be generated using the trained model and new input data.
 
    ```bash
-   d4p-predict predict_config.yaml
+   d4p-downscale predict_config.yaml
    ```
 
 Example YAML configuration files are available in the `recipes` directory and can be used as templates for your own configurations.
@@ -86,7 +86,7 @@ The framework provides four main console commands:
 | `d4p-create`  | Convert raw NetCDF datasets to AI-ready Zarr format |
 | `d4p-inspect` | Inspect generated AI-ready datasets                 |
 | `d4p-train`   | Train deep learning models                          |
-| `d4p-predict` | Generate predictions using trained models           |
+| `d4p-downscale` | Generate predictions using trained models           |
 
 Together, these commands implement a **complete pipeline for preparing data, training models, and deploying predictions in operational workflows**.
 

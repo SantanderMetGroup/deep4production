@@ -24,8 +24,10 @@ graph:
   # kwargs:
   #   data_high: ./AI_ready_datasets/files/RCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the high-res nodes
   #   data_low: ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the low-res nodes
-  #   nearest_neighbours_high_to_high: 6 # 8 # Self included
-  #   nearest_neighbours_low_to_high: 2 # 4 
+  #   # Note: self is excluded internally, so 8 means 8 distinct high neighbours.
+  #   # high-to-high edges are bidirectional. Paper defaults: 8 and 9.
+  #   nearest_neighbours_high_to_high: 8
+  #   nearest_neighbours_low_to_high: 9
 
 saving_info:
   file: 1980.nc # Predictions will be saved at: id_dir/predictions/

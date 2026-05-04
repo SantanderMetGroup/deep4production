@@ -8,6 +8,9 @@ Author: Jose González-Abad, Jorge Baño-Medina
 import xarray as xr
 import numpy as np
 from typing import Union, List, Tuple
+from deep4production.utils.log import get_logger
+
+log = get_logger("trans")
 
 def from_xr_grid_to_vector(y):
     """
@@ -67,9 +70,9 @@ def remove_days_with_nans(data: xr.Dataset,
 
     # Log the operation
     if np.sum(nans_indices) == len(nans_indices):
-        print('There are no observations containing null values')
+        log.debug("No observations containing null values")
     else:
-        print(f'Removing {np.sum(nans_indices)} observations contaning null values')
+        log.info("Removing %d observations containing null values", int(np.sum(nans_indices)))
 
     return data
 
@@ -477,7 +480,7 @@ def replicate_across_time(data: xr.Dataset, ref: xr.Dataset) -> xr.Dataset:
 
 
 
-def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H=None, W=None):
+def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H=None, W=None, precomputed_mask=None):
     """
     Convert numpy predictions into an xarray.Dataset with OR without a template.
 
@@ -493,6 +496,10 @@ def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H
         Flattened lat/lon for "point" dimension when template is None.
     template : xr.Dataset or None
         When provided, spatial mask & coordinates will be taken from template.
+    precomputed_mask : xr.Dataset or None
+        Spatial NaN mask (output of compute_valid_mask(template)). When given,
+        skips the per-call mask recomputation. The downscaler caches this in
+        __init__ so repeated xarray builds (one per member) reuse it.
 
     Returns
     -------
@@ -515,8 +522,8 @@ def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H
         if data_pred.ndim == 3:
             data_pred = data_pred.reshape(B, C, H, W) # Ensure shape is (B, C, H, W). B, C, G → B, C, H, W
         ds_list = []
-        # Build spatial mask once
-        mask = compute_valid_mask(template)
+        # Build spatial mask (use precomputed if provided)
+        mask = precomputed_mask if precomputed_mask is not None else compute_valid_mask(template)
         mask = mask.expand_dims(time=time)
         mask = mask.ffill("time")
         var_mask_name = list(mask.data_vars)[0]

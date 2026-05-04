@@ -1,6 +1,9 @@
 import os
 import mlflow
 from deep4production.utils.general import get_func_from_string
+from deep4production.utils.log import get_logger
+
+log = get_logger("mlflow")
 
 # -------------------------------------------------------------------------
 def mlflow_scalars_logs(tgt, prd, vars, mlflow_info, epoch):
@@ -22,8 +25,7 @@ def mlflow_scalars_logs(tgt, prd, vars, mlflow_info, epoch):
                 diagnostic = diagnostic[1]
             value = get_func_from_string(diagnostic_module, diagnostic, kwargs = kwargs)
             mlflow.log_metric(f"{diagnostic_name}_{var}", float(value), step=int(epoch))
-        print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
-            f"  --> The following SCALARS were LOGGED: {diagnostics_to_run_scalars}")
+        log.info("[%s] MLflow scalars logged: %s", var, diagnostics_to_run_scalars)
 
 # -------------------------------------------------------------------------
 def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
@@ -62,8 +64,7 @@ def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
             mlflow.log_artifact(file_name, artifact_path=f"figures/{var}")
             os.remove(file_name)
             logged.append(diag_name)
-        print(f"🌐 (Mlflow) For VARIABLE: {var}\n"
-            f"  --> The following FIGURES were LOGGED: {logged}")
+        log.info("[%s] MLflow figures logged: %s", var, logged)
 
 
 # -------------------------------------------------------------------------

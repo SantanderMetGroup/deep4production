@@ -1,4 +1,7 @@
 import numpy as np
+from deep4production.utils.log import get_logger
+
+log = get_logger("temporal")
 # -------------------------------------------------------------------------
 def get_pairs(dates, freq, num_lagged_x):
     dates_set = set(dates)
@@ -21,26 +24,29 @@ def get_pairs(dates, freq, num_lagged_x):
 
 # -------------------------------------------------------------------------
 def get_sample_map(dates_yaml, data_zarrs):
-    sample_map = {}
-    found_dates = []
-    # Pre-convert zarr dates to YYYY-MM-DD strings
-    zarr_dates = [
-        [str(d)[:10] for d in z.attrs["dates"]]
+    """
+    Map each requested YAML date (YYYY-MM-DD string) to its location
+    [zarr_file_idx, time_idx] in the provided zarr stores.
+
+    First match wins: if the same date is present in multiple zarr files,
+    the lowest-indexed file is used.
+    """
+    # One O(1) lookup table per zarr — {YYYY-MM-DD: time_idx}
+    luts = [
+        {d: t for t, d in enumerate(z["dates"][:].astype('datetime64[D]').astype(str))}
         for z in data_zarrs
     ]
-    # For each date in YAML, find its location in the zarr files
+
+    sample_map  = {}
+    found_dates = []
     for date_yaml in dates_yaml:
-        found = False
-        for i, dates_i in enumerate(zarr_dates):
-            if date_yaml in dates_i:
-                j = dates_i.index(date_yaml)
-                sample_map[date_yaml] = [i, j]
+        for i, lut in enumerate(luts):
+            if date_yaml in lut:
+                sample_map[date_yaml] = [i, lut[date_yaml]]
                 found_dates.append(date_yaml)
-                found = True
-        # Was the date found in any zarr file?
-        if not found:
-            print(f"⚠️ Date {date_yaml} not found in any input data. Skipping...")
-    # Return
+                break
+        else:
+            log.warning("Date %s not found in any input data; skipping.", date_yaml)
     return sample_map, found_dates
 
 # -------------------------------------------------------------------------

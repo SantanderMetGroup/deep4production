@@ -7,6 +7,7 @@ import time
 import torch
 import zarr
 import importlib
+import contextlib
 import numpy as np
 from functools import partial
 from torch_geometric.loader import DataLoader as PyGDataLoader
@@ -18,14 +19,18 @@ import mlflow.pytorch
 from mlflow.models import infer_signature
 # from mlflow.exceptions import MlflowException
 ## Deep4production
-from deep4production.deep.train import update_params
 from deep4production.deep.utils import EMA
 from deep4production.deep.utils import save_model, resume_model, load_model
+from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.mlflow import *
+from deep4production.utils.log import get_logger
+
+log = get_logger("trainer")
 ##################################################################################################################################
 class trainer:
-    def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None):
+    def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None,
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
         """
         Initializes the trainer class.
         
@@ -41,7 +46,7 @@ class trainer:
             d4dpy (dict, optional): Custom pydataset configuration.
             Mlflow (dict, optional): MLflow tracking configuration.
         """
-        print("🚀 STARTING D4P TRAINER")
+        log.info("Starting d4p trainer")
         # --- SELF PARAMETERS ---------------------------------------
         self.data = data
         self.dataloader = dataloader
@@ -60,10 +65,27 @@ class trainer:
 
         self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
 
+        # --- Mixed precision (AMP) setup ---
+        # Activate via YAML: model_info.training_params.amp: true
+        # Uses bf16 on Ampere+ (A100/H100) when available — no GradScaler needed
+        # — and falls back to fp16 + GradScaler elsewhere.
+        amp_cfg   = self.training_params.get("amp", False)
+        want_amp  = bool(amp_cfg) and self.device == "cuda"
+        amp_dtype = torch.bfloat16 if (want_amp and torch.cuda.is_bf16_supported()) else torch.float16
+        self._amp_enabled = want_amp
+        self._amp_dtype   = amp_dtype
+        # GradScaler only needed for fp16; bf16 has the same exponent range as fp32.
+        self._scaler = (
+            torch.amp.GradScaler("cuda")
+            if want_amp and amp_dtype == torch.float16
+            else None
+        )
+        if want_amp:
+            log.info("AMP enabled (dtype=%s, scaler=%s)", amp_dtype, "on" if self._scaler else "off")
+
         self.id_dir = id_dir
         self.model_dir = f"{id_dir}/models/"
         self.aux_dir = f"{id_dir}/aux_files/"
-        print("📦 SELF READY")
 
         # --- BUILD GRAPH ---------------------------------------
         self.kwargs_training = self.training_params.get("kwargs", {})
@@ -72,19 +94,30 @@ class trainer:
             edge_index = get_func_from_string(module_string=graph["module"],func_string=graph["name"], kwargs=graph.get("kwargs", None))
             self.graph_loc["path"] = "edge_index.pt"
             torch.save(edge_index, f"{self.aux_dir}/{self.graph_loc["path"]}")
-            print(f"📦 GRAPH READY: function {graph['name']} from {graph['module']}")
+            log.info("Graph ready: function %s from %s", graph['name'], graph['module'])
         else:
             self.graph_loc = None
         
         # --- LOSS FUNCTION ---------------------------------------
         self.loss_function = get_func_from_string(module_string=self.loss_params["module"],func_string=self.loss_params["name"], kwargs=self.loss_params.get("kwargs", None))
-        print(f"📦 LOSS READY: {self.loss_params['name']} from {self.loss_params['module']}")
+        log.info("Loss ready: %s from %s", self.loss_params['name'], self.loss_params['module'])
 
         # --- MODEL ---------------------------------------
         self.model_save_name = model_info["saving_params"]["model_save_name"]
         self.model = get_func_from_string(module_string=self.model_params["module"], func_string=self.model_params["name"], kwargs=self.model_params.get("kwargs", None))
         self.model_path = f"{self.model_dir}/{self.model_save_name}.pt"
-        print(f"📦 MODEL READY: {self.model_params['name']} from {self.model_params['module']}")
+        log.info("Model ready: %s from %s", self.model_params['name'], self.model_params['module'])
+
+        # --- INPUT NORMALIZERS (GPU-side, replaces per-sample CPU loop) -------
+        # Each is an nn.Module with persistent buffers; .to(device) at training
+        # time, and round-trips through state_dict so inference normalization
+        # matches training normalization without recomputation.
+        self.normalizer_info_x = normalizer_info_x
+        self.normalizer_info_y = normalizer_info_y
+        self.normalizer_info_f = normalizer_info_f
+        self.norm_x = None
+        self.norm_y = None
+        self.norm_f = None
 
         # --- CREATE AND SAVE METADATA ---------------------------------------
         self.metadata_dict = self.build_metadata()
@@ -117,6 +150,13 @@ class trainer:
                     self.forcing_data = None
 
                 
+    # -------------------------------------------------------------------------
+    def _amp_ctx(self):
+        """Return an autocast context (or nullcontext) depending on AMP state."""
+        if self._amp_enabled:
+            return torch.amp.autocast(device_type="cuda", dtype=self._amp_dtype)
+        return contextlib.nullcontext()
+
     # -------------------------------------------------------------------------
     def build_metadata(self):
         """
@@ -168,18 +208,50 @@ class trainer:
         self.metadata_dict["transform_to_2D_x"], self.metadata_dict["transform_to_2D_y"] = pydataset.get_transform2D()
         self.metadata_dict["H_x"], self.metadata_dict["W_x"], self.metadata_dict["H_y"], self.metadata_dict["W_y"], = pydataset.get_spatial_dims()
         self.metadata_dict["G_x"], self.metadata_dict["G_y"] = pydataset.get_num_gridpoints()
-        ### Normalizer parameters (cont.)
-        if self.data["predictors"].get("normalizer", None) is not None:
-            self.metadata_dict["normalizer_x"] = pydataset.get_normalizer_info(predictands=False)
-        if self.data["predictands"].get("normalizer", None) is not None:
-            self.metadata_dict["normalizer_y"] = pydataset.get_normalizer_info(predictands=True)
-        ### Operator parameters (cont.)
+        ### Operator parameters (cont.) — operators still live in pydataset
         if self.data["predictors"].get("operator", None) is not None:
             self.metadata_dict["operator_x"] = pydataset.get_operator_info(predictands=False)
         if self.data["predictands"].get("operator", None) is not None:
             self.metadata_dict["operator_y"] = pydataset.get_operator_info(predictands=True)
-        ### Forcings
-        self.metadata_dict["vars_f"], self.metadata_dict["idx_vars_f"], self.metadata_dict["normalizer_f"], self.metadata_dict["operator_f"] = pydataset.get_forcings_info()
+        ### Forcings (vars/operator still come from pydataset; normalizer comes
+        ### from this trainer's kwargs, see below)
+        vars_f, idx_vars_f, _, operator_f = pydataset.get_forcings_info()
+        self.metadata_dict["vars_f"] = vars_f
+        self.metadata_dict["idx_vars_f"] = idx_vars_f
+        self.metadata_dict["operator_f"] = operator_f
+        ### Build the per-channel InputNormalizer modules now that we know
+        ### the variable order. The dicts ``self.normalizer_info_*`` were
+        ### populated from the recipe directly (see cli/train.py); pydataset
+        ### never sees them under the new wiring.
+        ###
+        ### After construction, ``cli/train.py`` resolves stats_transform / per-
+        ### variable methods exactly as before via pydataset.get_data_info, so
+        ### we still need to consult pydataset for the merged dict (it knows
+        ### how to fill the kwargs from the reference Zarr's stats arrays).
+        ### Trainer-side: we just take whatever pydataset built for us when
+        ### ``cli/train.py`` passes the recipe dict — pydataset still produces
+        ### a normalized normalizer_info dict via ``_resolve_normalizer_info``.
+        if self.normalizer_info_x is not None:
+            resolved_x = pydataset._resolve_normalizer_info(
+                self.normalizer_info_x, self.metadata_dict["vars_x"], predictand=False
+            )
+            self.metadata_dict["normalizer_x"] = resolved_x
+            self.norm_x = InputNormalizer(resolved_x, self.metadata_dict["vars_x"], channel_dim=1)
+            log.info("InputNormalizer (X) ready: %s", resolved_x.get("normalizer_func_per_variable"))
+        if self.normalizer_info_y is not None:
+            resolved_y = pydataset._resolve_normalizer_info(
+                self.normalizer_info_y, self.metadata_dict["vars_y"], predictand=True
+            )
+            self.metadata_dict["normalizer_y"] = resolved_y
+            self.norm_y = InputNormalizer(resolved_y, self.metadata_dict["vars_y"], channel_dim=1)
+            log.info("InputNormalizer (Y) ready: %s", resolved_y.get("normalizer_func_per_variable"))
+        if self.normalizer_info_f is not None and vars_f is not None:
+            resolved_f = pydataset._resolve_normalizer_info(
+                self.normalizer_info_f, vars_f, predictand=False, forcing=True
+            )
+            self.metadata_dict["normalizer_f"] = resolved_f
+            self.norm_f = InputNormalizer(resolved_f, vars_f, channel_dim=1)
+            log.info("InputNormalizer (F) ready: %s", resolved_f.get("normalizer_func_per_variable"))
         ### Return
         return self.metadata_dict
 
@@ -197,7 +269,7 @@ class trainer:
             tuple: (train_dataset, valid_dataset)
         """
         ## Create pydatasets
-        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "forcings": self.data.get("forcings", {}), "load_in_memory": self.data.get("load_in_memory", True)}
+        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "forcings": self.data.get("forcings", {}), "load_in_memory": self.data.get("load_in_memory", True), "cache_mb": self.data.get("zarr_cache_mb", None)}
         kwargs_pydataset.update(**self.d4dpy)
         train_dataset = self.pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
         valid_dataset = None
@@ -209,7 +281,7 @@ class trainer:
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset) 
         # self.save_metadata(self.metadata_path)
-        print("📦 PYDATASETS READY")
+        log.info("Pydatasets ready")
         return train_dataset, valid_dataset
 
     # -------------------------------------------------------------------------
@@ -229,14 +301,27 @@ class trainer:
         ## Some parameters
         num_workers = self.dataloader.get("num_workers", 0)
         if self.dataloader.get("num_workers", None) is None:
-            print("⚠️ WARNING: Number of workers not specified in YAML. Using num_workers=0")
+            log.warning("Number of workers not specified in YAML; using num_workers=0")
         shuffle = self.dataloader.get("shuffle", False)
         if self.dataloader.get("shuffle", None) is None:
-            print("⚠️ WARNING: Shuffle not specified in YAML. Using shuffle=False")
+            log.warning("Shuffle not specified in YAML; using shuffle=False")
         batch_size = self.dataloader.get("batch_size", 1)
         if self.dataloader.get("batch_size", None) is None:
-            print("⚠️ WARNING: Batch size not specified in YAML. Using batch_size=1")
+            log.warning("Batch size not specified in YAML; using batch_size=1")
         kwargs_dataloader = {"batch_size": batch_size, "shuffle": shuffle, "num_workers": num_workers}
+        # Pin host memory so tensors can be asynchronously copied to the GPU
+        # via .to(device, non_blocking=True); only meaningful on CUDA.
+        if self.device == "cuda":
+            kwargs_dataloader["pin_memory"] = self.dataloader.get("pin_memory", True)
+        # Keep workers alive between epochs to avoid re-forking them each time
+        # (also preserves any per-worker in-memory data caches).
+        if num_workers > 0:
+            kwargs_dataloader["persistent_workers"] = self.dataloader.get("persistent_workers", True)
+            # PyTorch's prefetch_factor is meaningless when num_workers=0; only
+            # attach it when at least one worker exists. Defaults to PyTorch's
+            # built-in (2) when not set in YAML.
+            if "prefetch_factor" in self.dataloader:
+                kwargs_dataloader["prefetch_factor"] = self.dataloader["prefetch_factor"]
         ## Create DataLoaders
         if self.graph is not None:
             DL = PyGDataLoader
@@ -246,7 +331,7 @@ class trainer:
         valid_dataloader = None
         if valid_dataset is not None:
             valid_dataloader = DL(valid_dataset, **kwargs_dataloader)
-        print("📦 DATALOADERS READY")
+        log.info("Dataloaders ready")
         return train_dataloader, valid_dataloader
 
     # -------------------------------------------------------------------------
@@ -263,6 +348,23 @@ class trainer:
             int: Number of trainable parameters.
         """
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+    # -------------------------------------------------------------------------
+    def _normalize_inputs(self, x=None, y=None, f=None, channel_dim_x=1, channel_dim_y=1, channel_dim_f=1):
+        """
+        Apply the GPU-side InputNormalizer modules in place to whichever of
+        ``x``, ``y``, ``f`` are provided. Tensors must already be on
+        ``self.device``. Returns the (possibly normalized) tensors in the same
+        order. If a given normalizer is None, the corresponding tensor is
+        returned unchanged.
+        """
+        if x is not None and self.norm_x is not None:
+            x = self.norm_x(x, channel_dim=channel_dim_x)
+        if y is not None and self.norm_y is not None:
+            y = self.norm_y(y, channel_dim=channel_dim_y)
+        if f is not None and self.norm_f is not None:
+            f = self.norm_f(f, channel_dim=channel_dim_f)
+        return x, y, f
 
     # -------------------------------------------------------------------------
     def model_backprop(self, model, data, optimizer, loss_function, device, is_this_training=True, **kwargs):
@@ -285,28 +387,64 @@ class trainer:
         """
         # --- Get arrays as defined in the pydataset class. ---
         x, y, f = data
-        x = x.to(device)
-        y = y.to(device)
+        non_blocking = (self.device == "cuda")
+        x = x.to(device, non_blocking=non_blocking)
+        y = y.to(device, non_blocking=non_blocking)
 
         if f[0] != "N/A":
-            f = f.to(device)
+            f = f.to(device, non_blocking=non_blocking)
+            f_is_real = True
         else:
             B, Cy, *spatial = y.shape
             f = torch.zeros(B, Cy, *spatial, device=device)
+            f_is_real = False
 
-        # --- Feed features to the denoiser deep learning model ---
-        prediction = model(x, f)
+        # --- GPU-side normalization (replaces per-sample CPU loop in pydataset) ---
+        # Only normalize the forcing tensor when it carries real data; the
+        # zeros sentinel for "no forcing" stays as zeros.
+        x, y, _ = self._normalize_inputs(x=x, y=y)
+        if f_is_real:
+            _, _, f = self._normalize_inputs(f=f)
 
-        # --- Compute loss ---
-        optimizer.zero_grad()
-        loss = loss_function(target=y, output=prediction)
+        # --- Zero grads first (outside autocast) ---
+        optimizer.zero_grad(set_to_none=True)
+
+        # --- Forward + loss under autocast when AMP is enabled ---
+        with self._amp_ctx():
+            prediction = model(x, f)
+            loss = loss_function(target=y, output=prediction)
 
         # --- Backpropagation ---
         if is_this_training:
-            loss.backward()
+            if self._scaler is not None:
+                self._scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
+        # Return the detached loss tensor — the training loop accumulates
+        # without calling .item() on every batch (avoids per-step GPU sync).
+        return loss.detach()
+
+    # -------------------------------------------------------------------------
+    def update_params(self, optimizer, lr, scheduler = None):
+        """
+        Updates optimizer and scheduler, returns new learning rate.
+        Purpose: Steps optimizer and scheduler, updates learning rate for training loop.
+        Parameters:
+            optimizer: PyTorch optimizer.
+            lr: Current learning rate.
+            scheduler: Learning rate scheduler (optional).
+        Returns:
+            float: Updated learning rate.
+        """
+        # --- Update optimizer --- 
+        optimizer.step()
+        # --- Update scheduler --- 
+        if scheduler is not None:
+            scheduler.step()
+            lr = scheduler.get_last_lr()[0]
         # --- Return ---
-        return loss.item() 
+        return lr
 
     # -------------------------------------------------------------------------
     def training_loop(
@@ -345,12 +483,33 @@ class trainer:
         # --- Get some training parameters ------------------------------------------------
         num_epochs = training_params["num_epochs"]
         patience_early_stopping = training_params.get("patience_early_stopping", None)
+        grad_clip = training_params.get("grad_clip", None)  # L2-norm clip applied after backward()
 
-        # --- Model to device ------------------------------------------------ 
+        # --- Model to device ------------------------------------------------
         model = model.to(device)
+        # GPU-side normalizers travel with the model.
+        if self.norm_x is not None: self.norm_x = self.norm_x.to(device)
+        if self.norm_y is not None: self.norm_y = self.norm_y.to(device)
+        if self.norm_f is not None: self.norm_f = self.norm_f.to(device)
         model_size = sum(p.numel() for p in model.parameters())
         model_mb = model_size * 4 / (1024**2)     # float32 = 4 bytes
-        print(f" --> Model parameters: {model_size:,} ({model_mb:.2f} MB)")
+        log.info("Model parameters: %s (%.2f MB)", f"{model_size:,}", model_mb)
+
+        # --- torch.compile (optional) ----------------------------------------
+        # Triggered by `training_params.compile: true` (default mode) or a
+        # mode string e.g. "reduce-overhead" (CUDA graphs, best for fixed-shape
+        # small batches) or "max-autotune" (aggressive, very long first epoch).
+        # The compiled model exposes the same .state_dict() interface, so
+        # checkpointing is unaffected. First epoch will be slow (kernel
+        # compilation); subsequent epochs get the full speedup.
+        compile_cfg = training_params.get("compile", False)
+        if compile_cfg:
+            if not hasattr(torch, "compile"):
+                log.warning("torch.compile requires PyTorch >= 2.0; skipping (upgrade to benefit).")
+            else:
+                compile_mode = compile_cfg if isinstance(compile_cfg, str) else "default"
+                model = torch.compile(model, mode=compile_mode)
+                log.info("Model compiled (mode=%s); first epoch will be slow (kernel compilation).", compile_mode)
 
         # --- Early stopping setup ------------------------------------------------
         best_val_loss = math.inf
@@ -388,28 +547,27 @@ class trainer:
                 scheduler = scheduler_func(optimizer, lr_lambda=lr_lambda)
             else: # All other schedulers
                 scheduler = scheduler_func(optimizer, **scheduler_kwargs)
-            print(f"📦 Loaded scheduler: {scheduler_type}")
+            log.info("Loaded scheduler: %s", scheduler_type)
 
         # --- Resume training from a pretrained checkpoint? ------------------------------------------
         epoch_init=0
         if saving_params.get("resume_checkpoint", None) is not None:
             path_checkpoint = f"{self.model_dir}/{saving_params["resume_checkpoint"]}"
             if os.path.exists(path_checkpoint):
-                print(f"🚀 Resuming training from checkpoint: {path_checkpoint}")
+                log.info("Resuming training from checkpoint: %s", path_checkpoint)
                 checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
                 epoch_init = epoch_ref = epoch = checkpoint['epoch']
                 step_ref = global_step = checkpoint['global_step']
                 train_losses = checkpoint.get('train_losses', [])
                 valid_losses = checkpoint.get('valid_losses', [])
-                best_val_loss = np.min(valid_losses)
-                epoch_best_val_loss = np.where(valid_losses == best_val_loss)[0][0]
+                valid_losses_arr = np.array(valid_losses)
+                best_val_loss = np.min(valid_losses_arr)
+                epoch_best_val_loss = np.where(valid_losses_arr == best_val_loss)[0][0]
                 early_stopping_counter = epoch - epoch_best_val_loss
-                print("🚀 Resume training:")
-                print(f"    checkpoint: {path_checkpoint}")
-                print(f"    epoch: {epoch}")
-                print(f"    global_step: {global_step}")
+                log.info("Resume training: checkpoint=%s epoch=%d global_step=%d",
+                         path_checkpoint, epoch, global_step)
             else:
-                print(f"⚠️ WARNING: Checkpoint specified for resuming training not found at {path_checkpoint}. Starting training from scratch.")
+                log.warning("Checkpoint specified for resuming training not found at %s; starting from scratch.", path_checkpoint)
             
         # --- Ensemble Model Averaging (EMA) parameters ------------------------------------------
         ema = None
@@ -421,17 +579,20 @@ class trainer:
         epoch_ref_mlflow_diagnostic = 0
 
         # --- Loop over epochs ------------------------------------------
-        print(f"🚀 Starting training for {num_epochs} epochs on {device.upper()}") 
-        for epoch in range(epoch_init, num_epochs + 1):
+        log.info("Starting training for %d epochs on %s", num_epochs, device.upper())
+        for epoch in range(epoch_init, num_epochs):
             epoch_start = time.time()
 
             # -----------------------------------------------------------------------------------------
             # --- Training phase: Loop over batches ---------------------------------------------------
             num_batches = len(train_data)
             model.train()
-            train_loss_epoch = 0
+            # Accumulate loss as a tensor on-device so we don't sync to the CPU
+            # every batch (.item() forces a GPU→CPU wait). One .item() call per
+            # epoch below is enough.
+            train_loss_sum = torch.zeros((), device=device)
             for batch_data in train_data:
-                train_loss_epoch += self.model_backprop(
+                batch_loss = self.model_backprop(
                     model=model,
                     data=batch_data,
                     optimizer=optimizer,
@@ -440,19 +601,41 @@ class trainer:
                     is_this_training=True,
                     **kwargs
                 )
-                # --- Scheduler: Update learning rate, and optimizer and loss ---
-                current_lr = update_params(optimizer=optimizer, lr=current_lr, scheduler=scheduler)
+                # Accept either a tensor (new base/SongUNet path) or a scalar
+                # (subclasses still returning .item()) — keep accumulation generic.
+                if not torch.is_tensor(batch_loss):
+                    batch_loss = torch.as_tensor(batch_loss, device=device)
+                train_loss_sum = train_loss_sum + batch_loss.detach()
+
+                # --- Gradient clipping + optimizer step (AMP-aware) ---
+                if self._scaler is not None:
+                    # Unscale gradients in place before clipping so clip_grad_norm_
+                    # sees real gradient magnitudes.
+                    if grad_clip is not None:
+                        self._scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                    self._scaler.step(optimizer)
+                    self._scaler.update()
+                    if scheduler is not None:
+                        scheduler.step()
+                        current_lr = scheduler.get_last_lr()[0]
+                else:
+                    if grad_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                    # --- Scheduler: Update learning rate, and optimizer and loss ---
+                    current_lr = self.update_params(optimizer=optimizer, lr=current_lr, scheduler=scheduler)
+
+                # --- Update EMA per step (required for diffusion models with high decay) ---
+                if ema is not None:
+                    ema.update()
+
                 global_step += 1
 
             # --- Store training loss ---
-            train_loss = train_loss_epoch / num_batches
+            train_loss = (train_loss_sum / num_batches).item()  # one sync per epoch
             train_losses.append(train_loss)
             if self.Mlflow is not None:
                 mlflow.log_metric("train_loss_epoch", train_loss, step=int(epoch))
-            
-            # --- Update EMA? ---
-            if ema is not None:
-                ema.update()
 
             # -----------------------------------------------------------------------------------------
             # --- Validation phase: Loop over batches -------------------------------------------------
@@ -460,10 +643,10 @@ class trainer:
             if valid_data is not None:
                 model.eval()
                 with torch.no_grad():
-                    val_loss_epoch = 0
+                    num_batches = len(valid_data)
+                    val_loss_sum = torch.zeros((), device=device)
                     for batch_data in valid_data:
-                        num_batches = len(valid_data)
-                        val_loss_epoch += self.model_backprop(
+                        batch_loss = self.model_backprop(
                             model=model,
                             data=batch_data,
                             optimizer=optimizer,
@@ -472,7 +655,10 @@ class trainer:
                             is_this_training=False,
                             **kwargs
                         )
-                    val_loss = val_loss_epoch / num_batches
+                        if not torch.is_tensor(batch_loss):
+                            batch_loss = torch.as_tensor(batch_loss, device=device)
+                        val_loss_sum = val_loss_sum + batch_loss.detach()
+                    val_loss = (val_loss_sum / num_batches).item()
                     if self.Mlflow is not None:
                         mlflow.log_metric("val_loss_epoch", val_loss, step=int(epoch))
                 valid_losses.append(val_loss)
@@ -499,16 +685,22 @@ class trainer:
                 else:
                     early_stopping_counter += 1
                     if early_stopping_counter >= patience_early_stopping:
-                      print(f"{timestamp} 🛑 Early stopping triggered after {epoch} epochs.")
+                      log.info("[%s] Early stopping triggered after %d epochs.", timestamp, epoch)
                       break
 
             # --- Save model (general info & checks) ----------------------------------
+            # If EMA is active, apply shadow weights before ALL save calls so every
+            # checkpoint contains the temporally-smoothed weights (crucial for
+            # diffusion samplers). Restore training weights afterwards so the
+            # optimizer can continue using them.
+            if ema is not None:
+                ema.apply_shadow()
             kwargs_save = {'epoch': epoch,
                     'global_step': global_step,
-                    'train_losses': train_losses,      
-                    'valid_losses': valid_losses if valid_data else None,      
+                    'train_losses': train_losses,
+                    'valid_losses': valid_losses if valid_data else None,
                     'model': model,
-                    'optimizer': optimizer,  
+                    'optimizer': optimizer,
                     'scheduler': scheduler if scheduler else None,
                     'metadata': metadata}
             if valid_data is None and saving_params.get("save_every_n_epochs", None) is None and saving_params.get("save_every_n_steps", None) is None:
@@ -517,7 +709,7 @@ class trainer:
             if save_model_or_not:
                 path_save_final = f"{self.model_path[:-3]}_best.pt"
                 save_model(path=os.path.expanduser(path_save_final), **kwargs_save)
-                log_msg += " | 💾 Model saved (best)"
+                log_msg += " | 💾 model saved (best)"
                 epoch_best = epoch
 
             # --- Save model also every n epochs? ----------------------------------
@@ -526,7 +718,7 @@ class trainer:
                 if save_epoch_interval >= saving_params["save_every_n_epochs"]:
                     path_save_per_epoch = f"{self.model_path[:-3]}_epoch{epoch}.pt"
                     save_model(path=os.path.expanduser(path_save_per_epoch), **kwargs_save)
-                    log_msg += " | 💾 Model saved (epoch)"
+                    log_msg += " | 💾 model saved (epoch)"
                     epoch_ref = epoch
 
             # --- Save model also every n steps? ----------------------------------
@@ -536,7 +728,7 @@ class trainer:
                     if save_step_interval >= saving_params["save_every_n_steps"]:
                         path_save_per_step = f"{self.model_path[:-3]}_step{global_step}.pt"
                         save_model(path=os.path.expanduser(path_save_per_step), **kwargs_save)
-                        log_msg += " | 💾 Model saved (step)"
+                        log_msg += " | 💾 model saved (step)"
                         step_ref = global_step
 
             # --------------- MLFLOW --------------------------------------------------------
@@ -547,9 +739,12 @@ class trainer:
                     if mlflow_save_epoch_interval >= self.Mlflow_save_checkpoint_every_n_epochs:
                         path_save_mlflow = f"{self.model_path[:-3]}_epoch{epoch}_mlflow.pt"
                         save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save)
-                        mlflow.log_artifact(path_save_mlflow, artifact_path="checkpoints")   
-                        log_msg += " | 💾 Model saved (mlflow)"
+                        mlflow.log_artifact(path_save_mlflow, artifact_path="checkpoints")
+                        log_msg += " | 💾 model saved (mlflow)"
                         epoch_ref_mlflow = epoch
+            # Restore training weights after all saves so the optimizer keeps working.
+            if ema is not None:
+                ema.restore()
 
             # --- Compute diagnostics (mlflow)? ----------------------------------
             if self.Mlflow is not None:
@@ -587,13 +782,13 @@ class trainer:
                         Mlflow_scalars_xai = self.Mlflow_diagnostics.get("xai_scalars", None)
                         if Mlflow_scalars_xai is not None:
                             # mlflow_scalars_xai_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info=Mlflow_scalars_xai, epoch=epoch)
-                            print("XAI SCALARS LOGS not implemented ...")
+                            log.warning("XAI scalars logs not implemented; skipping.")
     
                         ## Update epoch ref
                         epoch_ref_mlflow_diagnostic = epoch
 
-            # --- Print the log -----------------------------------------------------
-            print(log_msg)
+            # --- Per-epoch summary line --------------------------------------------
+            log.info("%s", log_msg)
 
         # --- Save best model to Mlflow and log figures (optional) ---
         if self.Mlflow is not None:
@@ -611,7 +806,7 @@ class trainer:
                     mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info = Mlflow_figures, epoch=epoch_best)
             
         # --- Return losses ---
-        print("✅ Training completed successfully!")
+        log.info("Training completed successfully.")
         return train_losses, valid_losses if valid_losses else None
     
     # -------------------------------------------------------------------------
@@ -628,7 +823,7 @@ class trainer:
         Returns:
             tuple: (train_loss, val_loss)
         """
-        print(f"✅ CONFIGURATION READY FOR: {self.model_save_name}")   
+        log.info("Configuration ready for: %s", self.model_save_name)
         train_loss, val_loss = self.training_loop( 
                             model=self.model, 
                             train_data=train_dataloader, 
@@ -645,6 +840,5 @@ class trainer:
         if self.Mlflow is not None:
             mlflow.end_run()
 
-        print("----------------------------------------------------")
-        print(f"✅ 🎯 {self.model_save_name}: Training finished successfully! 🎯 ✅")
+        log.info("%s: training finished successfully.", self.model_save_name)
         return train_loss, val_loss

@@ -10,6 +10,9 @@ import numpy as np
 import xarray as xr
 import math
 from deep4production.utils.general import get_func_from_string
+from deep4production.utils.log import get_logger
+
+log = get_logger("deep.utils")
 
 # --------------------------------------------------------------------------------------------------------------
 class StandardDataset(Dataset):
@@ -94,14 +97,30 @@ class EMA:
 
     def apply_shadow(self):
         """
-        Copies EMA weights to the model for evaluation or sampling.
+        Copies EMA shadow weights to the model and saves current weights as backup.
+        Call restore() afterwards to put the training weights back.
         Returns:
             None
         """
-        # Copy EMA weights to the model (for evaluation or sampling)
+        self.backup = {
+            name: param.data.clone()
+            for name, param in self.model.named_parameters()
+            if param.requires_grad
+        }
         for name, param in self.model.named_parameters():
             if name in self.shadow:
                 param.data.copy_(self.shadow[name])
+
+    def restore(self):
+        """
+        Restores training weights from the backup saved by apply_shadow().
+        Returns:
+            None
+        """
+        for name, param in self.model.named_parameters():
+            if name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup = None
 
 # --------------------------------------------------------------------------------------------------------------
 def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_losses, metadata = None, scheduler=None):
@@ -152,7 +171,7 @@ def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     if scheduler and checkpoint['scheduler_state_dict'] is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    print(f"🚀 Model resumed from epoch {checkpoint['epoch']} step {checkpoint['global_step']}")
+    log.info("Model resumed from epoch %s step %s", checkpoint['epoch'], checkpoint['global_step'])
     return checkpoint
 
 

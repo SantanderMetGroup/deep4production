@@ -19,7 +19,8 @@ class trainer_custom(trainer):
         d4dpy (dict): Custom pydataset configuration.
         Mlflow (dict): MLflow tracking configuration.
     """
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow):
+    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
 
         ######### Call parent constructor to initialize common attributes #########
         super().__init__(
@@ -29,7 +30,10 @@ class trainer_custom(trainer):
             model_info=model_info,
             graph=graph,
             d4dpy=d4dpy,
-            Mlflow=Mlflow
+            Mlflow=Mlflow,
+            normalizer_info_x=normalizer_info_x,
+            normalizer_info_y=normalizer_info_y,
+            normalizer_info_f=normalizer_info_f,
         )
 
     # -------------------------------------------------------------------------
@@ -46,37 +50,45 @@ class trainer_custom(trainer):
             is_this_training (bool): Whether to perform backpropagation.
             members (int): Number of ensemble members.
         Returns:
-            float: Loss value for the batch.
+            torch.Tensor: Detached loss tensor for the batch.
         """
         # --- Get arrays ---
         x, y, f = data
-        x = x.to(device)
-        y = y.to(device)
+        non_blocking = (self.device == "cuda")
+        x = x.to(device, non_blocking=non_blocking)
+        y = y.to(device, non_blocking=non_blocking)
 
         # --- Forcing ---
         if f[0] != "N/A":
-            f = f.to(device)
+            f = f.to(device, non_blocking=non_blocking)
+            f_is_real = True
         else:
             B, Cy, *spatial = y.shape
             f = torch.zeros(B, Cy, *spatial, device=device)
+            f_is_real = False
 
-        # --- Forward pass for each ensemble member ---
-        prediction_list = []
-        for m in range(members):
-            pred_m = model(x, f)  # shape: (B, C, H, W) or (B, C, G)
-            prediction_list.append(pred_m)
+        # --- GPU-side normalization (replaces per-sample CPU loop in pydataset) ---
+        x, y, _ = self._normalize_inputs(x=x, y=y)
+        if f_is_real:
+            _, _, f = self._normalize_inputs(f=f)
 
-        # Stack along new ensemble dimension -> (B, M, C, H, W) or (B, M, C, G)
-        prediction = torch.stack(prediction_list, dim=1)
-        # print(f"prediction shape: {prediction.shape}")
+        optimizer.zero_grad(set_to_none=True)
 
-        # --- Compute loss ---
-        optimizer.zero_grad()
-        loss = loss_function(target=y, output=prediction)
+        # --- Forward pass for each ensemble member + loss under AMP autocast ---
+        with self._amp_ctx():
+            prediction_list = []
+            for m in range(members):
+                pred_m = model(x, f)  # shape: (B, C, H, W) or (B, C, G)
+                prediction_list.append(pred_m)
+            # Stack along new ensemble dimension -> (B, M, C, H, W) or (B, M, C, G)
+            prediction = torch.stack(prediction_list, dim=1)
+            loss = loss_function(target=y, output=prediction)
 
-        # --- Backpropagation ---
+        # --- Backpropagation (optimizer.step is handled by training_loop) ---
         if is_this_training:
-            loss.backward()
-            optimizer.step()
+            if self._scaler is not None:
+                self._scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-        return loss.item()
+        return loss.detach()

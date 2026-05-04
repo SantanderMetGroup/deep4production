@@ -1,6 +1,6 @@
 ## Load libraries
 import torch
-from torch_geometric.data import HeteroData
+from torch_geometric.data import HeteroData, Batch
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
 ##################################################################################################################################
@@ -33,26 +33,53 @@ class downscaler_custom(downscaler):
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def to_graph(self, x, edge_index, f=["N/A"]):
+    def graphPredict(self, x: torch.Tensor, edge_index, model, f: torch.Tensor) -> torch.Tensor:
         """
-        Builds HeteroData structure for graph-based inference and generates predictions.
-        Purpose: Prepares graph input, feeds to GNN model, and returns prediction array.
-        Parameters:
-            x (torch.Tensor): Input tensor.
-            edge_index: Tuple of edge indices for graph structure.
-            f (list, optional): Forcing tensor.
-        Returns:
-            np.ndarray: Prediction array.
+        Batched GNN prediction via PyG Batch.from_data_list.
+
+        Builds one HeteroData per sample in the batch, concatenates them into a
+        single disconnected graph so message passing operates on all samples in
+        parallel, then reshapes the output back to (B, C_y, G_high).
+
+        Parameters
+        ----------
+        x : (B, n_lag, C_low, G_low) if lagged, or (B, C_low, G_low) if single-step.
+            Low-resolution node features (preprocessed).
+        edge_index : tuple (low_to_high_edges, high_within_high_edges)
+        model : GNN4CD instance
+        f : (B, C_high, G_high)  high-resolution forcing features.
+            Zeros tensor when no forcing data is configured.
+
+        Returns
+        -------
+        torch.Tensor  (B, C_y, G_high)
         """
-        # --- Build HeteroData structure --- 
-        data_graph = HeteroData()
-        data_graph["low", "to", "high"].edge_index = edge_index[0].to(self.device)
-        data_graph["high", "within", "high"].edge_index = edge_index[1].to(self.device)
-        data_graph['low'].x  = torch.permute(x[0], (2,0,1))   # permute to shape: (N_low, seq, c_low)
-        if f[0] == "N/A":
-            data_graph['high'].x = torch.zeros(self.G_y, 1, device=self.device) # shape: (N_high, c_high)
-        else: 
-            data_graph['high'].x = f[0].to(self.device) # permute to shape: (N_high, c_high)
-        pred = model(data_graph).unsqueeze(0).cpu().numpy()
-        return pred
+        B = x.shape[0]
+        graphs = []
+        for b in range(B):
+            data_graph = HeteroData()
+            data_graph["low", "to", "high"].edge_index      = edge_index[0].to(self.device)
+            data_graph["high", "within", "high"].edge_index = edge_index[1].to(self.device)
+
+            # Low-res node features: (G_low, n_lag, C_low)
+            if x.dim() == 4:                        # (B, n_lag, C_low, G_low)
+                data_graph['low'].x = x[b].permute(2, 0, 1)        # (G_low, n_lag, C_low)
+            else:                                   # (B, C_low, G_low) — no lag
+                data_graph['low'].x = x[b].T.unsqueeze(1)           # (G_low, 1, C_low)
+
+            # High-res node features: (G_high, C_high)
+            # f comes in as (B, C_high, G_high); transpose to PyG convention.
+            data_graph['high'].x = f[b].T                           # (G_high, C_high)
+
+            graphs.append(data_graph)
+
+        batched = Batch.from_data_list(graphs)
+
+        with torch.inference_mode():
+            # GNN4CD.forward returns (C_y, B * G_high) after its internal permute.
+            pred = model(batched)
+
+        # Reshape (C_y, B * G_high) → (B, C_y, G_high)
+        C_y = pred.shape[0]
+        return pred.reshape(C_y, B, self.G_y).permute(1, 0, 2)
 

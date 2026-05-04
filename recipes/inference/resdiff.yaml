@@ -1,0 +1,76 @@
+##### GENERAL INFO #####
+# Directory created by d4p-train for the resdiff run_ID.
+# Contains:  models/  predictions/  aux_files/  metadata.json
+id_dir: your_id_dir             # e.g., /outputs/resdiff
+
+
+##### INPUT DATA #####
+input_data:
+  paths:
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - ...
+  years: [1981, 1982, 1983]
+  load_in_memory: true
+
+
+##### ENSEMBLE SIZE #####
+# CorrDiff is stochastic — each reverse-diffusion trajectory draws fresh
+# Gaussian noise, so ensemble_size > 1 produces independent realisations.
+ensemble_size: 6
+
+graph: null
+
+
+##### MODEL CHECKPOINT #####
+# Metadata inside the checkpoint holds:
+#   model_params.name   = build_edm_model
+#   model_params.module = deep4production.deep.models.diffusion.edm_precond
+#   model_params.kwargs = { sigma_data, backbone: { module, name, kwargs } }
+# load_model() re-invokes the factory, so the preconditioner + backbone are
+# reconstructed identically at inference without any extra wiring here.
+model_file: ResDiff_best.pt
+
+
+##### DOWNSCALER CLASS #####
+# ResDiff / CorrDiff-specific downscaler:
+#   1. Loads the regressor (from `path_regressor` saved in training metadata
+#      by trainer_resdiff, or the optional override below).
+#   2. For each date: runs regressor(x) → y_hat, then draws r_hat from the
+#      EDM Heun sampler (Karras et al. 2022) on the EDM-preconditioned
+#      SongUNet.
+#   3. Returns y_hat + r_hat as the final downscaled prediction (still in
+#      normalised space; the base downscaler's postprocess denormalises).
+# sigma_min / sigma_max default to the values stored in training metadata.
+d4p_downscaler:
+  name: downscaler_custom
+  module: deep4production.core.downscalers.downscaler_resdiff
+  kwargs:
+    # Optional: override the regressor path stored in training metadata
+    # (useful if the checkpoint was moved after training).
+    # path_regressor: /new/path/to/regressor_best.pt
+    sampling_params:
+      # EDM Heun sampler (Karras et al. 2022).
+      num_steps: 18              # paper default for CorrDiff
+      # sigma_min / sigma_max read automatically from training metadata;
+      # override here only if you have a specific reason to.
+      # sigma_min: 0.002
+      # sigma_max: 80.0
+      rho: 7.0                   # EDM noise-schedule curvature
+      # Stochastic churn parameters (Alg. 2 in Karras et al.).
+      # S_churn=0 → deterministic Heun sampler (recommended baseline).
+      S_churn: 0.0
+      S_min: 0.0
+      S_max: .inf
+      S_noise: 1.0
+
+
+##### OUTPUT #####
+saving_info:
+  file: ResDiff_1981-1983.nc     # saved at id_dir/predictions/
+  template: null
+  # formatting:
+  #   name: null
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: ...

@@ -1,0 +1,60 @@
+##### GENERAL INFO #####
+# Directory created by d4p-train for the cpmgem run_ID.
+# Contains:  models/  predictions/  aux_files/  metadata.json
+id_dir: your_id_dir             # e.g., /outputs/cpmgem
+
+
+##### INPUT DATA #####
+input_data:
+  paths:
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - ...
+  years: [1981, 1982, 1983]     # years to downscale
+  load_in_memory: true
+
+
+##### ENSEMBLE SIZE #####
+# CPMGEM is stochastic — each reverse-diffusion trajectory draws fresh Gaussian
+# noise, so ensemble_size > 1 produces independent realisations, useful for
+# uncertainty estimation. The paper evaluates with 6 members per day.
+ensemble_size: 6
+
+graph: null
+
+
+##### MODEL CHECKPOINT #####
+model_file: CPMGEM_best.pt      # relative to id_dir/models/
+
+
+##### DOWNSCALER CLASS #####
+# CPMGEM-specific subclass: replaces the deterministic forward pass with a
+# reverse sub-VP SDE sampling chain (Euler-Maruyama, matching the paper).
+d4p_downscaler:
+  name: downscaler_custom
+  module: deep4production.core.downscalers.downscaler_cpmgem
+  kwargs:
+    sampling_params:
+      # Number of reverse SDE steps.
+      # Paper value: 1000. Reduce to 200-500 for a ~2-5x speed-up at some
+      # quality cost.
+      num_steps: 1000
+      # Deterministic (noise-free) final step — reduces residual variance and
+      # produces slightly sharper outputs.
+      denoise: true
+      # beta_min / beta_max / t_min are read automatically from the checkpoint
+      # metadata saved by trainer_cpmgem. Override here only if needed.
+      # beta_min: 0.1
+      # beta_max: 20.0
+      # t_min: 1.0e-5
+
+
+##### OUTPUT #####
+saving_info:
+  file: CPMGEM_1981-1983.nc     # saved at id_dir/predictions/
+  template: null                # optional NetCDF template for coordinates
+  # formatting:
+  #   name: null                # e.g., cordex_ml
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: ...

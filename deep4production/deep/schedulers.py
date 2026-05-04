@@ -1,4 +1,4 @@
-# Custom d4d schedulers. Set the following lines in the .yaml file:
+# Custom d4p schedulers. Set the following lines in the .yaml file:
 # model_info: 
 #     training_params:
 #         scheduler_params:
@@ -11,7 +11,6 @@
 #               lr_decay: 0.999
 #               decay_interval: 50
 
-# Info here: https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/conf/base/training/base_all.yaml
 def rampup_expdecay(
     step: int,
     base_lr: float = 1e-3,

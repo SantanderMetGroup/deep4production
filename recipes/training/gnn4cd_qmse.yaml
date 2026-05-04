@@ -51,8 +51,14 @@ graph:
   kwargs:
     data_high: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the high-res nodes
     data_low: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the low-res nodes
-    nearest_neighbours_high_to_high: 8 # Self included
-    nearest_neighbours_low_to_high: 4 
+    # Paper default (Blasone et al. 2025): 8 distinct neighbours for high-high.
+    # The self-neighbour is now excluded internally, so 8 here means 8 *distinct*
+    # high neighbours per node; high-high edges are additionally made bidirectional.
+    nearest_neighbours_high_to_high: 8
+    # Paper default: k=9 for low-to-high. Lower values (e.g. 4) make the
+    # downscaler's receptive field narrower and speed up training — departure
+    # from the paper, keep only if intentional.
+    nearest_neighbours_low_to_high: 9
 
 ##### TRAINING CONFIGURATION #####
 model_info: 
