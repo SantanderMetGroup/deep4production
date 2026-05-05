@@ -561,6 +561,11 @@ saving_info: # Defines how predictions are written to disk
   template: null
   formatting: null
 
+inference_params: # Forwarded as **kwargs to downscaler.downscale()
+  batch_size: 4   # number of dates whose forward passes run in parallel on the GPU
+  amp_dtype: null # 'bfloat16' (Ampere+) / 'float16' / null
+  compile: false  # torch.compile the model (one-shot deterministic forward — usually not worth it)
+
 ```
 
 Once the configuration file is defined, we perform inference: `d4p-downscale`.

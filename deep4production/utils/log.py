@@ -27,7 +27,7 @@ import logging
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Marker + color per level. Same ``✻`` glyph for INFO/WARNING/ERROR with the
-# colour carrying the level signal — visually consistent, like Claude's UI.
+# colour carrying the level signal — visually consistent.
 # ─────────────────────────────────────────────────────────────────────────────
 _MARKERS = {
     logging.DEBUG:    "·",

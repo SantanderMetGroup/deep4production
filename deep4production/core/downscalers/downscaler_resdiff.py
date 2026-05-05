@@ -230,16 +230,32 @@ class downscaler_custom(downscaler):
             # ── Preprocess once per date batch ───────────────────────────────
             c_low = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
 
+            # ── GPU-side input normalization (mirrors trainer + residuals build) ──
+            # The regressor and the EDM model were both trained with normalized
+            # cond_low (see pydataset_resdiff and trainer_resdiff).
+            if self.norm_x is not None:
+                c_low = self.norm_x(c_low)
+
             # ── Deterministic mean (shared across members) ───────────────────
+            # The regressor is a SongUNet used deterministically: x is always
+            # zeros (no noisy input), t is always zeros (no noise level), and
+            # the actual low-res conditioning enters via cond_low.
             with torch.inference_mode(), self._amp_ctx():
-                c_high = self.regressor(c_low)                                   # (B, C_y, H_y, W_y)
+                B_cur = c_low.shape[0]
+                x_dummy = torch.zeros(B_cur, len(self.vars_y), self.H_y, self.W_y, device=self.device)
+                t_dummy = torch.zeros(B_cur, device=self.device)
+                c_high = self.regressor(x=x_dummy, t=t_dummy, cond_low=c_low)   # (B, C_y, H_y, W_y)
 
             # ── Stochastic residual: one draw per member ─────────────────────
             for member in range(M):
                 with self._amp_ctx():
                     r_hat = self.sample(c_low=c_low, c_high=c_high, model=model) # (B, C_y, H_y, W_y)
-                # Combined prediction in normalised space, async D2H, postprocess.
+                # Combined prediction in normalised y-space → denormalize on GPU
+                # so it arrives in operator-applied space, which is what
+                # _postprocess_numpy expects (operator inverse runs on CPU).
                 p_gpu = (c_high + r_hat)
+                if self.norm_y is not None:
+                    p_gpu = self.norm_y.inverse_transform(p_gpu.float())
                 p_cpu = self._async_d2h(p_gpu.float())
                 if self._cuda:
                     torch.cuda.synchronize()

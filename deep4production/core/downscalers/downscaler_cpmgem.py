@@ -90,7 +90,8 @@ class downscaler_custom(downscaler):
 
         # ── SDE / sampler parameters ──────────────────────────────────────────
         # Read from checkpoint metadata first; YAML sampling_params can override.
-        meta_noise = self.metadata.get("noise_params", {})
+        # Path mirrors trainer_resdiff: metadata.training_params.noise_params.
+        meta_noise = self.metadata.get("training_params", {}).get("noise_params", {})
         sp = sampling_params or {}
 
         self.beta_min  = float(sp.get("beta_min",  meta_noise.get("beta_min",  0.1)))
@@ -259,10 +260,23 @@ class downscaler_custom(downscaler):
             # ── Preprocess once per date batch ───────────────────────────────
             inp = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
 
+            # ── GPU-side input normalization (mirrors trainer_cpmgem) ─────────
+            # The diffusion UNet was trained on normalized predictors via
+            # trainer_cpmgem._normalize_inputs(x=x, y=y); inference must apply
+            # the same affine before the reverse-SDE chain.
+            if self.norm_x is not None:
+                inp = self.norm_x(inp)
+
             # ── Reverse diffusion: one chain per member ──────────────────────
             for member in range(M):
                 with self._amp_ctx():
                     p_torch = self.sample(x_cond=inp, model=model)  # (B, C_y, H_y, W_y)
+                # Sample is in normalized y-space (target was normalized at
+                # training time); denormalize on GPU so it arrives in
+                # operator-applied space, which is what _postprocess_numpy
+                # expects (operator inverse runs on CPU).
+                if self.norm_y is not None:
+                    p_torch = self.norm_y.inverse_transform(p_torch.float())
                 p_cpu = self._async_d2h(p_torch.float())
                 if self._cuda:
                     torch.cuda.synchronize()

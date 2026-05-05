@@ -506,8 +506,10 @@ def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H
     xr.Dataset
     """
 
-    # Temporal info
-    time = np.atleast_1d(time_pred)
+    # Temporal info — normalise to datetime64[ns] so xarray/NetCDF always
+    # writes a typed time axis regardless of whether the caller passed a
+    # string ("1961-01-01"), a numpy scalar, or a list.
+    time = np.atleast_1d(time_pred).astype("datetime64[ns]")
     # Spatial info
     if data_pred.ndim == 4:
         B, C, H, W = data_pred.shape

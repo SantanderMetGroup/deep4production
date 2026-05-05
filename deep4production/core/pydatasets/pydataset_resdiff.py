@@ -1,14 +1,12 @@
 import os
 import numpy as np
-import xarray as xr
 import torch
 import zarr
+import numcodecs
 from torch import from_numpy
 ## Deep4production
-from deep4production.core.datasets.dataset import dataset as Dataset
 from deep4production.core.pydatasets.pydataset import pydataset
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
-from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.deep.utils import load_model
 from deep4production.utils.log import get_logger
 
@@ -33,13 +31,16 @@ class pydataset_custom(pydataset):
     path_regressor : str
         Path to the pre-trained regressor (deterministic) model.
     residuals : dict
-        Residuals configuration with keys 'path' and 'template'.
+        Residuals configuration with key 'path'.
     load_in_memory : bool
         Whether to load all data (including residuals) into memory.
     add_pred_mean : bool
         Whether to include the deterministic prediction as high-res context.
     add_context_lowres : bool
         Whether to include low-res predictors as context.
+    regressor_batch_size : int
+        Number of dates processed per regressor forward pass. Larger values
+        increase GPU utilisation during residuals precomputation.
     """
     def __init__(
         self,
@@ -55,6 +56,7 @@ class pydataset_custom(pydataset):
         normalizer_info_x: dict = None,
         normalizer_info_y: dict = None,
         cache_mb: int = None,
+        regressor_batch_size: int = 32,
     ):
         # --- Call parent constructor (loads x/y, builds pipelines, temporal info) ---
         super().__init__(
@@ -94,25 +96,16 @@ class pydataset_custom(pydataset):
             + [f"{v}_normalized" for v in self.vars_y]
         )
 
-        if not os.path.exists(path_residuals_zarr):
-            log.info("Producing residuals (netcdf and zarr files)")
-            freq = self.x[0].attrs.get("frequency")
-            template = xr.open_dataset(residuals["template"])
-            for idx, date in enumerate(self.target_dates):
-                log.debug("Generating residual for date %s", date)
-                self._forward_pass_regressor(f"./aux_residuals_{idx}.nc", date=date, template=template)
-            template.close()
-            Dataset(
-                date_init=self.target_dates[0],
-                date_end=self.target_dates[-1],
-                freq=freq,
-                data={
-                    "paths": [f"./aux_residuals_{idx}.nc" for idx in range(len(self.target_dates))],
-                    "vars": variables_residuals,
-                },
-            ).to_disk(path_residuals_zarr)
-            for idx in range(len(self.target_dates)):
-                os.remove(f"./aux_residuals_{idx}.nc")
+        if not self._residuals_zarr_valid(path_residuals_zarr):
+            if os.path.exists(path_residuals_zarr):
+                log.warning(
+                    "Residuals zarr at %s is invalid or incomplete (stale from a "
+                    "previous failed run). Recomputing.", path_residuals_zarr,
+                )
+            self._write_residuals_zarr(
+                path_residuals_zarr, variables_residuals,
+                batch_size=regressor_batch_size,
+            )
         else:
             log.info("Residuals zarr already available at %s, skipping computation.", path_residuals_zarr)
 
@@ -130,65 +123,150 @@ class pydataset_custom(pydataset):
             self.data["r"] = [r["data"] for r in r_zarr]
 
     # -------------------------------------------------------------------------
-    def _forward_pass_regressor(self, path, date, template):
+    @staticmethod
+    def _residuals_zarr_valid(path: str) -> bool:
+        """Return True only if path is a complete d4p residuals zarr group."""
+        if not os.path.exists(path):
+            return False
+        try:
+            store = zarr.open(path, mode="r")
+            return (
+                isinstance(store, zarr.hierarchy.Group)
+                and "data" in store
+                and "mean" in store   # written last by _write_residuals_zarr
+            )
+        except Exception:
+            return False
+
+    # -------------------------------------------------------------------------
+    def _write_residuals_zarr(self, path: str, variables_residuals: list, batch_size: int = 32):
         """
-        Run the regressor for one date, compute the residual, and save to NetCDF.
-
-        Uses the parent's preprocess() so operator → normalizer → reshape → tensor
-        is applied identically to what the dataloader sees at training time.
-
-        Parameters
-        ----------
-        path : str
-            Output NetCDF file path.
-        date : str
-            Target date (YYYY-MM-DD).
-        template : xr.Dataset
-            Coordinate template for from_pred_to_xarray.
+        Run the frozen regressor over all target dates in batches and write
+        (residual, normalized_prediction) directly to a d4p v2 zarr store.
         """
-        x = self.preprocess(
-            date, self.data["x"], self.idx_vars_x, self.sample_map_x,
-            ops=self._ops_x,
-            transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x,
-        ).unsqueeze(0)  # (1, C_x, H_x, W_x) — un-normalized
-        if self._norm_x_cpu is not None:
-            x = self._norm_x_cpu(x)  # CPU normalize before regressor
-
-        y = self.preprocess(
-            date, self.data["y"], self.idx_vars_y, self.sample_map_y,
-            ops=self._ops_y,
-            transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y,
-        ).unsqueeze(0)  # (1, C_y, H_y, W_y) — un-normalized
-        if self._norm_y_cpu is not None:
-            y = self._norm_y_cpu(y)  # CPU normalize so residual is in normalized space
-
-        # The regressor is a SongUNet trained deterministically (trainer_song_unet_det):
-        # noisy-input slot receives zeros and t is fixed at 0; it conditions via cond_low.
+        blk = numcodecs.Blosc(cname='zstd', clevel=5)
         device = next(self.regressor_model.parameters()).device
-        num_y = len(self.vars_y)
-        x_in = torch.zeros(1, num_y, self.H_y, self.W_y, device=device)
-        t    = torch.zeros(1, device=device)
+        num_y  = len(self.vars_y)
+        T      = len(self.target_dates)
+        G      = self.G_y   # total gridpoints (H_y * W_y for regular grids)
 
-        with torch.no_grad():
-            regressor_output = self.regressor_model(x=x_in, t=t, cond_low=x.to(device))
+        log.info("Writing residuals zarr at %s (%d dates, batch_size=%d).", path, T, batch_size)
 
-        residual_np = np.array(y) - np.array(regressor_output.detach().cpu())
-        pred_np = np.array(regressor_output.detach().cpu())
-
-        lats, lons = self.get_coords()
-        # Pass all channels at once — from_pred_to_xarray loops over vars internally.
-        # residual_np / pred_np are (1, C, H, W) so ndim==4 and H/W are inferred correctly.
-        residual_ds = from_pred_to_xarray(
-            residual_np[0:1], date,
-            [f"{var}_residual" for var in self.vars_y],
-            lats, lons, template=template,
+        # --- Create zarr group ---
+        zarr_group = zarr.open_group(path, mode='w')
+        data_arr = zarr_group.create_dataset(
+            "data",
+            shape=(T, 2 * num_y, G),
+            chunks=(1, 2 * num_y, G),
+            dtype="float32",
+            compressor=blk,
+            fill_value=np.nan,
         )
-        pred_ds = from_pred_to_xarray(
-            pred_np[0:1], date,
-            [f"{var}_normalized" for var in self.vars_y],
-            lats, lons, template=template,
-        )
-        xr.merge([residual_ds, pred_ds]).to_netcdf(path)
+
+        # --- Coordinates from the predictand zarr ---
+        lats = self.y[0]["latitudes"][:].astype(np.float32)
+        lons = self.y[0]["longitudes"][:].astype(np.float32)
+        dates_dt = np.array(self.target_dates, dtype="datetime64[ns]").astype("datetime64[s]")
+        zarr_group.create_dataset("dates",      data=dates_dt, chunks=(T,),        dtype="datetime64[s]", compressor=blk)
+        zarr_group.create_dataset("latitudes",  data=lats,     chunks=(len(lats),), dtype="float32",       compressor=blk)
+        zarr_group.create_dataset("longitudes", data=lons,     chunks=(len(lons),), dtype="float32",       compressor=blk)
+
+        # --- Group attributes (d4p v2 format) ---
+        freq = self.x[0].attrs.get("frequency")
+        zarr_group.attrs['format_version']   = 2
+        zarr_group.attrs['date_init_yaml']   = str(self.target_dates[0])
+        zarr_group.attrs['date_end_yaml']    = str(self.target_dates[-1])
+        zarr_group.attrs['num_samples']      = T
+        zarr_group.attrs['num_samples_yaml'] = T
+        zarr_group.attrs['frequency']        = freq
+        zarr_group.attrs['variables']        = {v: i for i, v in enumerate(variables_residuals)}
+        zarr_group.attrs['name_dims']        = ["time", "variable", "gridpoint"]
+        zarr_group.attrs['shape']            = [T, 2 * num_y, G]
+        zarr_group.attrs['is_regular']       = True
+        zarr_group.attrs['H']                = self.H_y
+        zarr_group.attrs['W']                = self.W_y
+        zarr_group.attrs['units']            = {v: "N/A" for v in variables_residuals}
+        zarr_group.attrs['variables_metadata'] = {
+            v: {"computed_forcing": False, "constant_in_time": False}
+            for v in variables_residuals
+        }
+        zarr_group.attrs['constant_fields']   = []
+        zarr_group.attrs['idx_fixed_nan']     = {v: [] for v in variables_residuals}
+        zarr_group.attrs['idx_dynamic_nan']   = {v: [] for v in variables_residuals}
+
+        # --- Running stats (computed on the fly — avoids a second full data pass) ---
+        n_ch  = 2 * num_y
+        _sum  = np.zeros(n_ch, dtype=np.float64)
+        _sum2 = np.zeros(n_ch, dtype=np.float64)
+        _min  = np.full(n_ch, np.inf,  dtype=np.float64)
+        _max  = np.full(n_ch, -np.inf, dtype=np.float64)
+
+        # Pre-allocate fixed-size zero tensors for the regressor's noisy-input
+        # slot and time embedding (always zero for the deterministic regressor).
+        x_in_buf = torch.zeros(batch_size, num_y, self.H_y, self.W_y, device=device)
+        t_buf    = torch.zeros(batch_size, device=device)
+
+        self.regressor_model.eval()
+        for start in range(0, T, batch_size):
+            batch_dates = self.target_dates[start : start + batch_size]
+            B = len(batch_dates)
+
+            # --- CPU preprocessing for the batch ---
+            x_list, y_list = [], []
+            for date in batch_dates:
+                x = self.preprocess(
+                    date, self.data["x"], self.idx_vars_x, self.sample_map_x,
+                    ops=self._ops_x,
+                    transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x,
+                ).unsqueeze(0)
+                if self._norm_x_cpu is not None:
+                    x = self._norm_x_cpu(x)
+                x_list.append(x)
+
+                y = self.preprocess(
+                    date, self.data["y"], self.idx_vars_y, self.sample_map_y,
+                    ops=self._ops_y,
+                    transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y,
+                ).unsqueeze(0)
+                if self._norm_y_cpu is not None:
+                    y = self._norm_y_cpu(y)
+                y_list.append(y)
+
+            x_batch = torch.cat(x_list, dim=0).to(device)  # (B, C_x, H_x, W_x)
+            y_batch = torch.cat(y_list, dim=0)              # (B, C_y, H_y, W_y)
+
+            # --- Batched regressor forward pass ---
+            with torch.no_grad():
+                reg_out = self.regressor_model(
+                    x=x_in_buf[:B], t=t_buf[:B], cond_low=x_batch,
+                ).cpu()  # (B, C_y, H_y, W_y)
+
+            # Flatten spatial dims: (B, C_y, G)
+            residuals_np = (y_batch - reg_out).numpy().reshape(B, num_y, G)
+            preds_np     = reg_out.numpy().reshape(B, num_y, G)
+
+            # Write whole batch in one zarr call and accumulate stats
+            batch_chunk = np.concatenate([residuals_np, preds_np], axis=1)  # (B, 2C, G)
+            data_arr[start : start + B] = batch_chunk
+            _sum  += batch_chunk.sum(axis=(0, 2))
+            _sum2 += (batch_chunk ** 2).sum(axis=(0, 2))
+            _min   = np.minimum(_min, batch_chunk.min(axis=(0, 2)))
+            _max   = np.maximum(_max, batch_chunk.max(axis=(0, 2)))
+
+            log.info("Residuals: %d / %d dates.", min(start + batch_size, T), T)
+
+        # --- Write per-channel statistics ---
+        N = T * G
+        mean_arr = (_sum  / N).astype(np.float32)
+        std_arr  = np.sqrt(np.maximum(_sum2 / N - (_sum / N) ** 2, 0)).astype(np.float32)
+        min_arr  = _min.astype(np.float32)
+        max_arr  = _max.astype(np.float32)
+        zarr_group.create_dataset("mean", data=mean_arr, chunks=(n_ch,), dtype="float32", compressor=blk)
+        zarr_group.create_dataset("std",  data=std_arr,  chunks=(n_ch,), dtype="float32", compressor=blk)
+        zarr_group.create_dataset("min",  data=min_arr,  chunks=(n_ch,), dtype="float32", compressor=blk)
+        zarr_group.create_dataset("max",  data=max_arr,  chunks=(n_ch,), dtype="float32", compressor=blk)
+
+        log.info("Saved residuals store at %s", path)
 
     # -------------------------------------------------------------------------
     def __getitem__(self, idx):

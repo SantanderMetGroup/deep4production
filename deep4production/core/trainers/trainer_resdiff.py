@@ -47,10 +47,6 @@ class trainer_custom(trainer):
         self.add_pred_mean = d4dpy["kwargs"]["add_pred_mean"]
         self.add_context_lowres = d4dpy["kwargs"]["add_context_lowres"]
 
-        # chh = self.model_params["kwargs"].get("cond_channels_high")
-        # self.add_pred_mean = bool(chh)
-        # chh = self.model_params["kwargs"].get("cond_channels_low")
-        # self.add_context_lowres = bool(chh)
         log.debug("ResDiff trainer self-update complete")
 
         # --- UPDATE METADATA ---------------------------------------
@@ -68,8 +64,10 @@ class trainer_custom(trainer):
             None
         """
         ### Generator-specific metadata parameters
-        self.metadata_dict["training_params"] = {}
-        self.metadata_dict["training_params"]["noise_params"] = {k: v for k, v in self.noise_params.items()}
+        # setdefault avoids clobbering anything the base trainer may put under
+        # training_params in the future; canonical noise_params path is
+        # metadata.training_params.noise_params (shared with trainer_cpmgem).
+        self.metadata_dict.setdefault("training_params", {})["noise_params"] = {k: v for k, v in self.noise_params.items()}
         self.metadata_dict["add_pred_mean"] = self.add_pred_mean
         self.metadata_dict["add_context_lowres"] = self.add_context_lowres
         self.metadata_dict["path_regressor"] = self.path_regressor

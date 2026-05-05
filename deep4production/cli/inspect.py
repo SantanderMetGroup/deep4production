@@ -1,15 +1,20 @@
 import sys
-import yaml
-from deep4production.utils.zarr import zarr_inspect 
+import argparse
+from deep4production.utils.zarr import zarr_inspect
+
 
 def main():
-    """
-    Main entry point for the D4P inspect console script.
-    Purpose: Inspects a Zarr dataset using the zarr_inspect utility.
-    Parameters:
-        None (reads sys.argv for zarr file path)
-    Returns:
-        None
-    """
-    zarr_path = sys.argv[1]
-    zarr_inspect(zarr_path)
+    parser = argparse.ArgumentParser(
+        prog="d4p-inspect",
+        description="Inspect a d4p or anemoi-datasets zarr store.",
+    )
+    parser.add_argument("zarr_path", help="Path to the zarr store.")
+    parser.add_argument(
+        "--format", "-f",
+        choices=["auto", "d4p", "anemoi"],
+        default="auto",
+        dest="fmt",
+        help="Force zarr format (default: auto-detect).",
+    )
+    args = parser.parse_args()
+    zarr_inspect(args.zarr_path, fmt=args.fmt)

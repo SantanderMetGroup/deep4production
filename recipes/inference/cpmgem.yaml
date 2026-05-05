@@ -58,3 +58,20 @@ saving_info:
   #   kwargs:
   #     attributes_dict:
   #       project_id: ...
+
+
+##### INFERENCE RUNTIME #####
+# Forwarded as **kwargs to downscaler.downscale().
+#   batch_size : number of dates whose reverse-SDE chains run in parallel on
+#                the GPU (each chain shares the same num_steps iterations).
+#                Increase for higher throughput; bound by GPU memory.
+#   amp_dtype  : 'bfloat16' (Ampere+ recommended) / 'float16' / null.
+#                Mixed-precision autocast for the score-network forward inside
+#                each SDE step. Leave null to disable.
+#   compile    : true wraps the score network with torch.compile(dynamic=True,
+#                mode="reduce-overhead"). The 1000 inner SDE steps amortise the
+#                one-shot compile cost very quickly.
+inference_params:
+  batch_size: 4
+  amp_dtype: null
+  compile: false

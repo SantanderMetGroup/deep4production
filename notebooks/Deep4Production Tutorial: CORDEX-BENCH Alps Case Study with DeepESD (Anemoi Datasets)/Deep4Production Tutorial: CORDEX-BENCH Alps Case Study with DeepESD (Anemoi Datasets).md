@@ -323,6 +323,11 @@ saving_info:
   file: 1980.nc
   template: null
   formatting: null
+
+inference_params:    # Forwarded as **kwargs to downscaler.downscale()
+  batch_size: 4
+  amp_dtype: null    # 'bfloat16' (Ampere+) / 'float16' / null
+  compile: false
 ```
 
 Run inference:

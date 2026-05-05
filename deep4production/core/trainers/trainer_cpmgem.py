@@ -63,9 +63,11 @@ class trainer_custom(trainer):
             normalizer_info_f=normalizer_info_f,
         )
 
-        # Store SDE params for metadata
+        # Store SDE params for metadata under training_params, mirroring the
+        # nested structure used by trainer_resdiff so downscalers can resolve
+        # noise_params from a single canonical path: metadata.training_params.noise_params.
         noise_params = model_info["training_params"]["kwargs"]["noise_params"]
-        self.metadata_dict["noise_params"] = noise_params
+        self.metadata_dict.setdefault("training_params", {})["noise_params"] = noise_params
         log.info("CPMGEM trainer ready (continuous-time sub-VP SDE)")
 
     # ─────────────────────────────────────────────────────────────────────────

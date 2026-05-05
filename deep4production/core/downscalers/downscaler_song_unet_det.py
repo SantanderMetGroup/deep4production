@@ -97,11 +97,26 @@ class downscaler_custom(downscaler):
             # ── Preprocess low-res conditioning ──────────────────────────
             inp = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
 
+            # ── GPU-side input normalization (mirrors trainer_song_unet_det) ──
+            # Deterministic models always condition on normalized predictors;
+            # the trainer applies _normalize_inputs(x=x, y=y) and inference must
+            # match. norm_x is None only if the user trained without an
+            # x-normalizer, which is non-standard for these architectures.
+            if self.norm_x is not None:
+                inp = self.norm_x(inp)
+
             # ── Deterministic forward pass ────────────────────────────────
             t    = torch.zeros(B, device=self.device)
             x_in = torch.zeros(B, C_y, *spatial, device=self.device)
             with torch.inference_mode(), self._amp_ctx():
                 p_torch = model(x=x_in, t=t, cond_low=inp)
+
+            # ── GPU-side denormalization of the prediction ─────────────────
+            # Predictand normalization is loss-dependent: MseLoss recipes
+            # normalize y (norm_y is set), Asym/NLL recipes operate in raw
+            # operator-space (norm_y is None). The guard preserves both paths.
+            if self.norm_y is not None:
+                p_torch = self.norm_y.inverse_transform(p_torch.float())
 
             # ── Async D2H + flush previous ────────────────────────────────
             if pending_cpu is not None:

@@ -39,8 +39,9 @@ model_file: ResDiff_best.pt
 #   2. For each date: runs regressor(x) → y_hat, then draws r_hat from the
 #      EDM Heun sampler (Karras et al. 2022) on the EDM-preconditioned
 #      SongUNet.
-#   3. Returns y_hat + r_hat as the final downscaled prediction (still in
-#      normalised space; the base downscaler's postprocess denormalises).
+#   3. Returns y_hat + r_hat as the final downscaled prediction; the
+#      downscaler denormalises (self.norm_y.inverse_transform) on the GPU
+#      before the D2H copy, then _postprocess_numpy applies the operator inverse.
 # sigma_min / sigma_max default to the values stored in training metadata.
 d4p_downscaler:
   name: downscaler_custom
@@ -74,3 +75,21 @@ saving_info:
   #   kwargs:
   #     attributes_dict:
   #       project_id: ...
+
+
+##### INFERENCE RUNTIME #####
+# Forwarded as **kwargs to downscaler.downscale().
+#   batch_size : number of dates whose Heun sampling chains run in parallel
+#                on the GPU (each chain shares the same num_steps iterations).
+#                Increase for higher throughput; bound by GPU memory.
+#   amp_dtype  : 'bfloat16' (Ampere+ recommended) / 'float16' / null.
+#                Mixed-precision autocast for the score-network forward inside
+#                each Heun step. Leave null to disable.
+#   compile    : true wraps the EDM model with torch.compile(dynamic=True,
+#                mode="reduce-overhead"); the regressor is NOT compiled (one-shot
+#                pass, not worth the warm-up cost). The 18 inner Heun steps
+#                amortise the compile cost per date batch.
+inference_params:
+  batch_size: 4
+  amp_dtype: null
+  compile: false

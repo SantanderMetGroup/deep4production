@@ -237,6 +237,11 @@ graph:
 saving_info:
   file: 1980.nc                    # saved at id_dir/predictions/
   template: null
+
+inference_params:                  # Forwarded as **kwargs to downscaler.downscale()
+  batch_size: 4
+  amp_dtype: null                  # 'bfloat16' (Ampere+) / 'float16' / null
+  compile: false
 ```
 
 Run with:

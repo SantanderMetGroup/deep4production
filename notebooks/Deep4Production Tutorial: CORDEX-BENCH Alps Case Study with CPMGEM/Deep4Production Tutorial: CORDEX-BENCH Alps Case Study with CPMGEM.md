@@ -258,6 +258,14 @@ saving_info:
   file: 1980.nc
   template: null
   formatting: null
+
+
+##### INFERENCE RUNTIME #####
+# Forwarded as **kwargs to downscaler.downscale().
+inference_params:
+  batch_size: 4         # number of dates whose reverse-SDE chains run in parallel on the GPU
+  amp_dtype: null       # 'bfloat16' (Ampere+) / 'float16' / null
+  compile: false        # torch.compile the score network — amortises well over 1000 SDE steps
 ```
 
 Run with:

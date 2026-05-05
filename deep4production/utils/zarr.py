@@ -99,9 +99,19 @@ class AnemoiZarrStore:
         z_attrs = dict(self._z.attrs)
         out     = {"format_version": 2}
 
-        # Variables: anemoi name_to_index → d4p variables
-        name_to_index = z_attrs.get("name_to_index", {})
-        out["variables"] = dict(name_to_index)
+        # Variables: anemoi prefers attrs["variables"] (an ordered iterable of
+        # names) and falls back to attrs["name_to_index"] (a {name: idx} dict).
+        # We mirror that order. The iterable may be list / tuple / ndarray
+        # depending on the zarr serialiser, so we accept anything iterable.
+        variables_seq = z_attrs.get("variables")
+        if variables_seq is not None:
+            try:
+                name_to_index = {str(n): i for i, n in enumerate(variables_seq)}
+            except TypeError:
+                name_to_index = {}
+        else:
+            name_to_index = dict(z_attrs.get("name_to_index", {}))
+        out["variables"] = name_to_index
 
         # Frequency: "24h" → "1D"
         out["frequency"] = _normalize_frequency(z_attrs.get("frequency"))
@@ -183,9 +193,23 @@ class AnemoiZarrStore:
 # ─────────────────────────────────────────────────────────────────────────────
 def _detect_format(group):
     a = group.attrs
+    # d4p v2 native stores always stamp format_version=2
     if "format_version" in a:
         return "d4p"
+    # anemoi-datasets attrs (checked in order of reliability)
     if "name_to_index" in a:
+        return "anemoi"
+    # Anemoi layout: attrs["variables"] is an ordered iterable of names
+    # (list / tuple / ndarray, depending on serialiser). d4p v2 also has
+    # attrs["variables"] but stores it as a {name: idx} dict — so check for
+    # non-dict iterables here.
+    v = a.get("variables")
+    if v is not None and not isinstance(v, dict):
+        return "anemoi"
+    # Last resort: look for anemoi-specific stat array names or a 4-D data array
+    if "stdev" in group or "minimum" in group:
+        return "anemoi"
+    if "data" in group and group["data"].ndim == 4:
         return "anemoi"
     return "d4p"   # be permissive; let downstream errors surface naturally
 
