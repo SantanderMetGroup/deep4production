@@ -47,7 +47,7 @@ multidict==6.6.3
 munkres==1.1.4
 netcdf4==1.7.2
 networkx==3.3
-numcodecs==0.16.1
+numcodecs<0.16
 numpy==2.1.2
 opentelemetry-api==1.38.0
 opentelemetry-proto==1.38.0
