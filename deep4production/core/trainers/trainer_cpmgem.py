@@ -49,7 +49,8 @@ class trainer_custom(trainer):
     """
 
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
+                 hardware=None):
         super().__init__(
             data=data,
             dataloader=dataloader,
@@ -61,6 +62,7 @@ class trainer_custom(trainer):
             normalizer_info_x=normalizer_info_x,
             normalizer_info_y=normalizer_info_y,
             normalizer_info_f=normalizer_info_f,
+            hardware=hardware,
         )
 
         # Store SDE params for metadata under training_params, mirroring the
@@ -128,7 +130,7 @@ class trainer_custom(trainer):
         is_this_training : bool
         """
         x, y, _ = data
-        non_blocking = (self.device == "cuda")
+        non_blocking = (self.device_type == "cuda")
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
         B = y.shape[0]

@@ -39,6 +39,21 @@ dataloader:
   num_workers: 0
 
 
+##### HARDWARE / DATA-PARALLEL CONFIGURATION (optional) #####
+# Omit this block (or keep num_nodes=1 and gpus_per_node=1) for plain
+# single-GPU / CPU training — behavior is identical to before.
+# When num_nodes * gpus_per_node > 1, the trainer wraps the model in
+# DistributedDataParallel and shards the dataloader with DistributedSampler.
+# Launch the training via SLURM, e.g.:
+#   srun --nodes=2 --ntasks-per-node=4 --gres=gpu:4 d4p-train recipe.yaml
+# The ``batch_size`` above is the per-GPU local batch size, so the global
+# batch size becomes batch_size * num_nodes * gpus_per_node.
+hardware:
+  num_nodes: 1
+  gpus_per_node: 1
+  # master_port: 29500  # optional; only honored under SLURM if MASTER_PORT is unset
+
+
 ##### REGRESSOR CONFIGURATION #####
 model_info: 
   saving_params:

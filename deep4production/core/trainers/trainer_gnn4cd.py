@@ -26,7 +26,8 @@ class trainer_custom(trainer):
     """
 
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow, edge_index_path,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
+                 hardware=None):
         """
         Initializes the Residual Generator trainer.
         """
@@ -42,6 +43,7 @@ class trainer_custom(trainer):
             normalizer_info_x=normalizer_info_x,
             normalizer_info_y=normalizer_info_y,
             normalizer_info_f=normalizer_info_f,
+            hardware=hardware,
         )
 
         # ---- Build ONE static graph ----

@@ -57,14 +57,17 @@ class downscaler_custom(downscaler):
             num_steps (int)   – number of reverse SDE steps       (default: 500)
             beta_min  (float) – β at t=0; must match training      (from metadata)
             beta_max  (float) – β at t=1; must match training      (from metadata)
-            t_min     (float) – lower bound for t                  (from metadata)
+            t_min     (float) – lower bound for t at sampling      (default: 1e-3)
             denoise   (bool)  – noise-free final step for sharper output (default: True)
 
     Notes
     -----
-    ``beta_min``, ``beta_max``, and ``t_min`` are read automatically from the
-    checkpoint metadata saved by ``trainer_cpmgem``.  Override them in
-    ``sampling_params`` only if you have a specific reason to.
+    ``beta_min`` and ``beta_max`` are read automatically from the checkpoint
+    metadata saved by ``trainer_cpmgem``; override only if you know what you
+    are doing. ``t_min`` is *decoupled* from training: at training time the
+    SDE is sampled down to 1e-5, but the score correction g²·ε̂/σ blows up as
+    σ → 0, so reverse sampling stops early at 1e-3 (mlde / score_sde_pytorch
+    default). Override via ``sampling_params.t_min`` if needed.
     """
 
     def __init__(
@@ -89,14 +92,17 @@ class downscaler_custom(downscaler):
         )
 
         # ── SDE / sampler parameters ──────────────────────────────────────────
-        # Read from checkpoint metadata first; YAML sampling_params can override.
-        # Path mirrors trainer_resdiff: metadata.training_params.noise_params.
+        # beta_min/beta_max are read from training metadata (must match) but
+        # t_min is *decoupled*: training samples t ∈ [1e-5, 1] for coverage,
+        # while reverse sampling stops at 1e-3 to avoid the σ → 0 blow-up of
+        # the score correction g²·ε̂/σ (mlde / score_sde_pytorch convention).
+        # YAML sampling_params can override any of these.
         meta_noise = self.metadata.get("training_params", {}).get("noise_params", {})
         sp = sampling_params or {}
 
         self.beta_min  = float(sp.get("beta_min",  meta_noise.get("beta_min",  0.1)))
         self.beta_max  = float(sp.get("beta_max",  meta_noise.get("beta_max",  20.0)))
-        self.t_min     = float(sp.get("t_min",     meta_noise.get("t_min",     1e-5)))
+        self.t_min     = float(sp.get("t_min",     1e-3))
         self.num_steps = int(sp.get("num_steps",   500))
         self.denoise   = bool(sp.get("denoise",    True))
 

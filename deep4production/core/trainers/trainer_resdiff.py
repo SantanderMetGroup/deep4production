@@ -23,7 +23,8 @@ class trainer_custom(trainer):
         Mlflow (dict): MLflow tracking configuration.
     """
     def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
+                 hardware=None):
         """
         Initializes the Residual Generator trainer.
         """
@@ -39,6 +40,7 @@ class trainer_custom(trainer):
             normalizer_info_x=normalizer_info_x,
             normalizer_info_y=normalizer_info_y,
             normalizer_info_f=normalizer_info_f,
+            hardware=hardware,
         )
 
         # --- UPDATE SELF PARAMETERS ---------------------------------------
@@ -165,7 +167,7 @@ class trainer_custom(trainer):
         # --- Unpack batch ---
         r, c_low, c_high = data
         batch_size = r.shape[0]
-        non_blocking = (self.device == "cuda")
+        non_blocking = (self.device_type == "cuda")
 
         r = r.to(device, non_blocking=non_blocking)
         if c_low is not None:

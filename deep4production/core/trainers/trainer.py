@@ -12,6 +12,8 @@ import numpy as np
 from functools import partial
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch.utils.data import DataLoader as TorchDataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 ## MLFlow
 import mlflow
 import mlflow.pytorch
@@ -25,12 +27,22 @@ from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.mlflow import *
 from deep4production.utils.log import get_logger
+from deep4production.utils.distributed import (
+    is_distributed,
+    is_main_process,
+    get_rank,
+    get_world_size,
+    barrier,
+    all_reduce_mean,
+    unwrap_model,
+)
 
 log = get_logger("trainer")
 ##################################################################################################################################
 class trainer:
     def __init__(self, data, dataloader, id_dir, model_info, graph=None, d4dpy={}, Mlflow=None,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None):
+                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
+                 hardware=None):
         """
         Initializes the trainer class.
         
@@ -63,14 +75,31 @@ class trainer:
         else:
             self.pydataset = get_func_from_string("deep4production.core.pydatasets.pydataset", "pydataset")
 
-        self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
+        # --- Device + DDP awareness -----------------------------------------
+        # When DDP is active each rank pins its local GPU; otherwise fall back
+        # to plain "cuda"/"cpu" so single-GPU training behaves unchanged.
+        self.hardware = hardware or {}
+        self._distributed = is_distributed()
+        self._world_size = get_world_size()
+        self._rank = get_rank()
+        self._is_main = is_main_process()
+        if self._distributed:
+            self._local_rank = int(os.environ.get("LOCAL_RANK",
+                                                  os.environ.get("SLURM_LOCALID", 0)))
+            self.device = f"cuda:{self._local_rank}"
+        else:
+            self._local_rank = 0
+            self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
+        # Coarse type ("cuda" or "cpu") for comparisons that should not
+        # care about the per-rank device index.
+        self.device_type = "cuda" if str(self.device).startswith("cuda") else "cpu"
 
         # --- Mixed precision (AMP) setup ---
         # Activate via YAML: model_info.training_params.amp: true
         # Uses bf16 on Ampere+ (A100/H100) when available — no GradScaler needed
         # — and falls back to fp16 + GradScaler elsewhere.
         amp_cfg   = self.training_params.get("amp", False)
-        want_amp  = bool(amp_cfg) and self.device == "cuda"
+        want_amp  = bool(amp_cfg) and self.device_type == "cuda"
         amp_dtype = torch.bfloat16 if (want_amp and torch.cuda.is_bf16_supported()) else torch.float16
         self._amp_enabled = want_amp
         self._amp_dtype   = amp_dtype
@@ -311,7 +340,7 @@ class trainer:
         kwargs_dataloader = {"batch_size": batch_size, "shuffle": shuffle, "num_workers": num_workers}
         # Pin host memory so tensors can be asynchronously copied to the GPU
         # via .to(device, non_blocking=True); only meaningful on CUDA.
-        if self.device == "cuda":
+        if self.device_type == "cuda":
             kwargs_dataloader["pin_memory"] = self.dataloader.get("pin_memory", True)
         # Keep workers alive between epochs to avoid re-forking them each time
         # (also preserves any per-worker in-memory data caches).
@@ -327,6 +356,37 @@ class trainer:
             DL = PyGDataLoader
         else:
             DL = TorchDataLoader
+
+        # --- DDP: shard the dataset across ranks via DistributedSampler -------
+        # DistributedSampler is incompatible with DataLoader's shuffle arg, so
+        # we hand shuffling to the sampler. set_epoch() is called from the
+        # training loop so the shuffle order varies across epochs.
+        if self._distributed:
+            train_sampler = DistributedSampler(
+                train_dataset,
+                num_replicas=self._world_size,
+                rank=self._rank,
+                shuffle=shuffle,
+                drop_last=False,
+            )
+            kwargs_dataloader["sampler"] = train_sampler
+            kwargs_dataloader["shuffle"] = False
+            train_dataloader = DL(train_dataset, **kwargs_dataloader)
+            valid_dataloader = None
+            if valid_dataset is not None:
+                valid_kwargs = {**kwargs_dataloader}
+                valid_kwargs["sampler"] = DistributedSampler(
+                    valid_dataset,
+                    num_replicas=self._world_size,
+                    rank=self._rank,
+                    shuffle=False,
+                    drop_last=False,
+                )
+                valid_dataloader = DL(valid_dataset, **valid_kwargs)
+            if self._is_main:
+                log.info("Dataloaders ready (DDP: world_size=%d)", self._world_size)
+            return train_dataloader, valid_dataloader
+
         train_dataloader = DL(train_dataset, **kwargs_dataloader)
         valid_dataloader = None
         if valid_dataset is not None:
@@ -387,7 +447,7 @@ class trainer:
         """
         # --- Get arrays as defined in the pydataset class. ---
         x, y, f = data
-        non_blocking = (self.device == "cuda")
+        non_blocking = (self.device_type == "cuda")
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
 
@@ -493,7 +553,21 @@ class trainer:
         if self.norm_f is not None: self.norm_f = self.norm_f.to(device)
         model_size = sum(p.numel() for p in model.parameters())
         model_mb = model_size * 4 / (1024**2)     # float32 = 4 bytes
-        log.info("Model parameters: %s (%.2f MB)", f"{model_size:,}", model_mb)
+        if self._is_main:
+            log.info("Model parameters: %s (%.2f MB)", f"{model_size:,}", model_mb)
+
+        # --- DDP wrap (after .to(device) so the buckets live on the right GPU) ---
+        # find_unused_parameters defaults to False — flip it via
+        # training_params.ddp_find_unused_parameters: true for graphs where
+        # not every forward touches every parameter.
+        if self._distributed:
+            find_unused = bool(training_params.get("ddp_find_unused_parameters", False))
+            model = DDP(
+                model,
+                device_ids=[self._local_rank],
+                output_device=self._local_rank,
+                find_unused_parameters=find_unused,
+            )
 
         # --- torch.compile (optional) ----------------------------------------
         # Triggered by `training_params.compile: true` (default mode) or a
@@ -554,8 +628,11 @@ class trainer:
         if saving_params.get("resume_checkpoint", None) is not None:
             path_checkpoint = f"{self.model_dir}/{saving_params["resume_checkpoint"]}"
             if os.path.exists(path_checkpoint):
-                log.info("Resuming training from checkpoint: %s", path_checkpoint)
-                checkpoint = resume_model(path=path_checkpoint, model=model, optimizer=optimizer, scheduler=scheduler, device=device)
+                if self._is_main:
+                    log.info("Resuming training from checkpoint: %s", path_checkpoint)
+                # Load into the unwrapped module so the saved (DDP-stripped)
+                # state_dict keys match.
+                checkpoint = resume_model(path=path_checkpoint, model=unwrap_model(model), optimizer=optimizer, scheduler=scheduler, device=device)
                 epoch_init = epoch_ref = epoch = checkpoint['epoch']
                 step_ref = global_step = checkpoint['global_step']
                 train_losses = checkpoint.get('train_losses', [])
@@ -564,24 +641,38 @@ class trainer:
                 best_val_loss = np.min(valid_losses_arr)
                 epoch_best_val_loss = np.where(valid_losses_arr == best_val_loss)[0][0]
                 early_stopping_counter = epoch - epoch_best_val_loss
-                log.info("Resume training: checkpoint=%s epoch=%d global_step=%d",
-                         path_checkpoint, epoch, global_step)
+                if self._is_main:
+                    log.info("Resume training: checkpoint=%s epoch=%d global_step=%d",
+                             path_checkpoint, epoch, global_step)
             else:
-                log.warning("Checkpoint specified for resuming training not found at %s; starting from scratch.", path_checkpoint)
-            
+                if self._is_main:
+                    log.warning("Checkpoint specified for resuming training not found at %s; starting from scratch.", path_checkpoint)
+
         # --- Ensemble Model Averaging (EMA) parameters ------------------------------------------
+        # Build EMA against the underlying module so shadow keys do not carry
+        # the DDP ``module.`` prefix; this also keeps EMA cheap (only one rank
+        # would actually need it, but identical inputs → identical outputs).
         ema = None
         if ema_decay is not None:
-            ema = EMA(model, decay=ema_decay, device=device)
+            ema = EMA(unwrap_model(model), decay=ema_decay, device=device)
 
         # --- Mlflow counter ---
         epoch_ref_mlflow = 0
         epoch_ref_mlflow_diagnostic = 0
 
         # --- Loop over epochs ------------------------------------------
-        log.info("Starting training for %d epochs on %s", num_epochs, device.upper())
+        if self._is_main:
+            world_tag = f" (DDP, world_size={self._world_size})" if self._distributed else ""
+            log.info("Starting training for %d epochs on %s%s", num_epochs, str(device).upper(), world_tag)
         for epoch in range(epoch_init, num_epochs):
             epoch_start = time.time()
+
+            # --- DDP: re-seed the sampler so each rank gets a different shard
+            # of the shuffled order at every epoch.
+            if self._distributed and hasattr(train_data, "sampler"):
+                sampler = train_data.sampler
+                if isinstance(sampler, DistributedSampler):
+                    sampler.set_epoch(epoch)
 
             # -----------------------------------------------------------------------------------------
             # --- Training phase: Loop over batches ---------------------------------------------------
@@ -632,7 +723,11 @@ class trainer:
                 global_step += 1
 
             # --- Store training loss ---
-            train_loss = (train_loss_sum / num_batches).item()  # one sync per epoch
+            train_loss_local = train_loss_sum / num_batches
+            # All-reduce average across ranks so every process has the same
+            # epoch loss (drives early stopping and logging consistently).
+            train_loss_local = all_reduce_mean(train_loss_local)
+            train_loss = train_loss_local.item()  # one sync per epoch
             train_losses.append(train_loss)
             if self.Mlflow is not None:
                 mlflow.log_metric("train_loss_epoch", train_loss, step=int(epoch))
@@ -658,7 +753,9 @@ class trainer:
                         if not torch.is_tensor(batch_loss):
                             batch_loss = torch.as_tensor(batch_loss, device=device)
                         val_loss_sum = val_loss_sum + batch_loss.detach()
-                    val_loss = (val_loss_sum / num_batches).item()
+                    val_loss_local = val_loss_sum / num_batches
+                    val_loss_local = all_reduce_mean(val_loss_local)
+                    val_loss = val_loss_local.item()
                     if self.Mlflow is not None:
                         mlflow.log_metric("val_loss_epoch", val_loss, step=int(epoch))
                 valid_losses.append(val_loss)
@@ -685,7 +782,8 @@ class trainer:
                 else:
                     early_stopping_counter += 1
                     if early_stopping_counter >= patience_early_stopping:
-                      log.info("[%s] Early stopping triggered after %d epochs.", timestamp, epoch)
+                      if self._is_main:
+                          log.info("[%s] Early stopping triggered after %d epochs.", timestamp, epoch)
                       break
 
             # --- Save model (general info & checks) ----------------------------------
@@ -693,13 +791,18 @@ class trainer:
             # checkpoint contains the temporally-smoothed weights (crucial for
             # diffusion samplers). Restore training weights afterwards so the
             # optimizer can continue using them.
-            if ema is not None:
+            # In DDP only rank 0 writes to disk; all ranks share filesystem and
+            # parameters are synchronized, so a single writer is sufficient.
+            if ema is not None and self._is_main:
                 ema.apply_shadow()
+            # Always save the *unwrapped* module so the resulting state_dict
+            # has no ``module.`` prefix and can be loaded by inference code
+            # (or single-GPU training) without modification.
             kwargs_save = {'epoch': epoch,
                     'global_step': global_step,
                     'train_losses': train_losses,
                     'valid_losses': valid_losses if valid_data else None,
-                    'model': model,
+                    'model': unwrap_model(model),
                     'optimizer': optimizer,
                     'scheduler': scheduler if scheduler else None,
                     'metadata': metadata}
@@ -708,7 +811,8 @@ class trainer:
             # --- Save model (best) ----------------------------------
             if save_model_or_not:
                 path_save_final = f"{self.model_path[:-3]}_best.pt"
-                save_model(path=os.path.expanduser(path_save_final), **kwargs_save)
+                if self._is_main:
+                    save_model(path=os.path.expanduser(path_save_final), **kwargs_save)
                 log_msg += " | 💾 model saved (best)"
                 epoch_best = epoch
 
@@ -717,7 +821,8 @@ class trainer:
                 save_epoch_interval = epoch - epoch_ref
                 if save_epoch_interval >= saving_params["save_every_n_epochs"]:
                     path_save_per_epoch = f"{self.model_path[:-3]}_epoch{epoch}.pt"
-                    save_model(path=os.path.expanduser(path_save_per_epoch), **kwargs_save)
+                    if self._is_main:
+                        save_model(path=os.path.expanduser(path_save_per_epoch), **kwargs_save)
                     log_msg += " | 💾 model saved (epoch)"
                     epoch_ref = epoch
 
@@ -727,7 +832,8 @@ class trainer:
                     save_step_interval = global_step - step_ref
                     if save_step_interval >= saving_params["save_every_n_steps"]:
                         path_save_per_step = f"{self.model_path[:-3]}_step{global_step}.pt"
-                        save_model(path=os.path.expanduser(path_save_per_step), **kwargs_save)
+                        if self._is_main:
+                            save_model(path=os.path.expanduser(path_save_per_step), **kwargs_save)
                         log_msg += " | 💾 model saved (step)"
                         step_ref = global_step
 
@@ -738,13 +844,17 @@ class trainer:
                     mlflow_save_epoch_interval = epoch - epoch_ref_mlflow
                     if mlflow_save_epoch_interval >= self.Mlflow_save_checkpoint_every_n_epochs:
                         path_save_mlflow = f"{self.model_path[:-3]}_epoch{epoch}_mlflow.pt"
-                        save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save)
-                        mlflow.log_artifact(path_save_mlflow, artifact_path="checkpoints")
+                        if self._is_main:
+                            save_model(path=os.path.expanduser(path_save_mlflow), **kwargs_save)
+                            mlflow.log_artifact(path_save_mlflow, artifact_path="checkpoints")
                         log_msg += " | 💾 model saved (mlflow)"
                         epoch_ref_mlflow = epoch
             # Restore training weights after all saves so the optimizer keeps working.
-            if ema is not None:
+            if ema is not None and self._is_main:
                 ema.restore()
+            # Make sure other ranks don't race ahead before rank-0 finishes
+            # writing checkpoints / Mlflow artifacts.
+            barrier()
 
             # --- Compute diagnostics (mlflow)? ----------------------------------
             if self.Mlflow is not None:
@@ -763,7 +873,9 @@ class trainer:
 
                         ## Predict and postprocess prediction
                         model.eval()
-                        prd_mlflow = runner.downscale(model=model, return_pred=True, verbose=False)
+                        # Downscaler expects the unwrapped module (its forward
+                        # signatures don't go through DDP's wrapper).
+                        prd_mlflow = runner.downscale(model=unwrap_model(model), return_pred=True, verbose=False)
                         # print(f"Pred (mlflow): {prd_mlflow}")
                         # print(f"Target (mlflow): {self.tgt_mlflow}")
 
@@ -788,7 +900,8 @@ class trainer:
                         epoch_ref_mlflow_diagnostic = epoch
 
             # --- Per-epoch summary line --------------------------------------------
-            log.info("%s", log_msg)
+            if self._is_main:
+                log.info("%s", log_msg)
 
         # --- Save best model to Mlflow and log figures (optional) ---
         if self.Mlflow is not None:
@@ -806,7 +919,8 @@ class trainer:
                     mlflow_figures_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info = Mlflow_figures, epoch=epoch_best)
             
         # --- Return losses ---
-        log.info("Training completed successfully.")
+        if self._is_main:
+            log.info("Training completed successfully.")
         return train_losses, valid_losses if valid_losses else None
     
     # -------------------------------------------------------------------------
