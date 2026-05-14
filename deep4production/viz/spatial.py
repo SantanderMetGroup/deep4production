@@ -92,7 +92,7 @@ def plot_date_from_1D_spatial_field(
         vals = da_sel.values
         selected_fields.append(vals)
 
-        sc = ax.scatter(
+        ax.scatter(
             lon,
             lat,
             c=vals,

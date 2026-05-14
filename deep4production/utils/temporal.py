@@ -12,8 +12,8 @@ def get_pairs(dates, freq, num_lagged_x):
         # Dates (instant and lagged)
         if freq == "1D":
             dates_pair = [
-                str(np.datetime64(date) - l * np.timedelta64(1, "D"))[:10]
-                for l in reversed(range(num_lagged_x + 1))
+                str(np.datetime64(date) - lag * np.timedelta64(1, "D"))[:10]
+                for lag in reversed(range(num_lagged_x + 1))
             ]
         else:
             raise ValueError(

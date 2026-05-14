@@ -130,7 +130,7 @@ def main():
             mlflow.enable_system_metrics_logging()
             ## Set run within experiment:
             run_name = Mlflow["run"]
-            run = mlflow.start_run(run_name=run_name)
+            mlflow.start_run(run_name=run_name)
             ## Logs: yaml conf
             mlflow.log_params(
                 {
@@ -159,7 +159,7 @@ def main():
                     f,
                     indent=2,
                 )
-                artifact_path = f.name
+
             mlflow.log_artifact("config.yaml", artifact_path="config")
         # Non-zero ranks must not receive the MLflow config; this gates every
         # ``if self.Mlflow is not None`` block inside the trainer.

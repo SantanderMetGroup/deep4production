@@ -9,7 +9,11 @@ import zarr
 from torch.utils.data import Dataset
 
 ## Deep4production
-from deep4production.utils.forcings import *
+from deep4production.utils.forcings import (
+    compute_julian_day,
+    compute_sincos_coords,
+    compute_toa_solar_radiation,
+)
 from deep4production.utils.trans import xarray_to_numpy
 from deep4production.utils.general import is_grid_regular
 from deep4production.utils.imputers import d4dimputers

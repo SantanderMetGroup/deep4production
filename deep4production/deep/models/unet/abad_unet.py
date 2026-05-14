@@ -154,7 +154,6 @@ class abad_unet(torch.nn.Module):
         self.base_channels = base_channels
 
         # --- Default activation (no change to output) ---
-        default_act = nn.Identity()
 
         ## --- Encoder ---
         self.down_conv_1 = UnitConv(

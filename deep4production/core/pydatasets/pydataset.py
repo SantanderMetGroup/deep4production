@@ -379,7 +379,7 @@ class pydataset(Dataset):
         for idx in range(len(self)):
             # --- Get dates ---
             target_date = self.target_dates[idx]
-            dates = self.pairs[target_date]
+
             # --- Prepare target ---
             y = (
                 self.preprocess(

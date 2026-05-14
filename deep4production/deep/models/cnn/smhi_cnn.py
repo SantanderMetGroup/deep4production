@@ -251,13 +251,12 @@ class SMHICNN(nn.Module):
         self.ps_blocks = nn.ModuleList()
         H_ps = H_in
         W_ps = W_in
-        use_post_map = False
+
         npm = num_pre_maps
         out_ch = base_channels * (pixel_shuffle_upscale_factor**2)
         for i in range(pixel_shuffle_blocks):
             img_shape = (H_ps, W_ps)
             if (i + 1) == pixel_shuffle_blocks:
-                use_post_map = use_post_map_on_last
                 npm = C_out_params * (pixel_shuffle_upscale_factor**2)
                 out_ch = C_out_params * (pixel_shuffle_upscale_factor**2)
             ps_block = PixelShuffleBlock(

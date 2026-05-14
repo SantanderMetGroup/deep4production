@@ -37,10 +37,3 @@ repos:
   rev: v8.21.2
   hooks:
   - id: gitleaks
-- repo: https://github.com/cruft/cruft
-  rev: 2.15.0
-  hooks:
-  - id: cruft
-    entry: cruft update -y
-    additional_dependencies: [toml]
-

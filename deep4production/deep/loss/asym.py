@@ -153,7 +153,7 @@ class Asym(nn.Module):
             x = x[x >= threshold]  # Filter wet days
             try:  # Compute dist.
                 fit_shape, fit_loc, fit_scale = scipy.stats.gamma.fit(x)
-            except:  # If its not possible return nan
+            except Exception:  # If its not possible return nan
                 fit_shape, fit_loc, fit_scale = np.nan, np.nan, np.nan
             return fit_shape, fit_loc, fit_scale
 

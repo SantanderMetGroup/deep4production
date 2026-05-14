@@ -2,6 +2,9 @@ import torch
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from deep4production.utils.zarr import open_zarr_store
+import torch.nn as nn
+import torch_geometric.nn as geometric_nn
+from torch_geometric.nn import GATv2Conv, GraphConv
 
 
 def build_graph(
@@ -99,9 +102,6 @@ def build_graph(
 
 ###########################################################
 # Original code at: https://github.com/valebl/GNN4CD/blob/main/models/GNN4CD_model.py
-import torch.nn as nn
-import torch_geometric.nn as geometric_nn
-from torch_geometric.nn import GATv2Conv, GraphConv
 
 
 class GNN4CD(nn.Module):

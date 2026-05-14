@@ -85,7 +85,7 @@ class BinaryCrossEntropyLoss(nn.Module):
 
         # --- Flatten to vectors per channel ------------------
         # Shape: (B*C*G,)
-        target_flat = target.reshape(-1).float()
+        target_flat = target_bin.reshape(-1).float()
         output_flat = output.reshape(-1)
 
         # --- Handle NaNs (ignore them) -----------------------------

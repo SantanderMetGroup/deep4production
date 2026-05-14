@@ -1,29 +1,24 @@
-[workspace]
-channels = ["conda-forge"]
-name = "d4p"
-platforms = ["linux-64"]
-
 [dependencies]
-python = ">=3.13"
-pip = "*"
 anemoi-datasets = "==0.5.36"
+cartopy = "*"
+cftime = "*"
+h5py = "*"
+matplotlib = "*"
+mlflow = "*"
+netcdf4 = "*"
+numcodecs = "*"
 numpy = "*"
 pandas = "<3.0"
+pip = "*"
+python = ">=3.13"
+pytorch = "*"
+pyyaml = "*"
 scikit-learn = "*"
 scipy = "*"
-xarray = "*"
-netcdf4 = "*"
-h5py = "*"
-zarr = "<=2.18.7"
-cftime = "*"
-numcodecs = "*"
-cartopy = "*"
-matplotlib = "*"
-pyyaml = "*"
-pytorch = "*"
-torchvision = "*"
 torch-geometric = "*"
-mlflow = "*"
+torchvision = "*"
+xarray = "*"
+zarr = "<=2.18.7"
 
 [environments]
 default = {features = [], solve-group = "default"}
@@ -67,3 +62,8 @@ qa = "pre-commit run --all-files"
 template-update = "pre-commit run --all-files cruft -c .pre-commit-config-cruft.yaml"
 type-check = "python -m mypy ."
 unit-tests = "python -m pytest -vv --cov=. --cov-report=html --doctest-glob='*.md' --doctest-glob='*.rst' tests/unit"
+
+[workspace]
+channels = ["conda-forge"]
+name = "d4p"
+platforms = ["linux-64"]

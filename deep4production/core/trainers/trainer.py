@@ -22,7 +22,7 @@ from deep4production.deep.utils import EMA
 from deep4production.deep.utils import save_model, resume_model
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.general import get_func_from_string
-from deep4production.utils.mlflow import *
+from deep4production.utils.mlflow import mlflow_scalars_logs, mlflow_figures_logs
 from deep4production.utils.log import get_logger
 from deep4production.utils.distributed import (
     is_distributed,

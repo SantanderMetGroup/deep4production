@@ -157,7 +157,7 @@ class AnemoiZarrStore:
 
         # Anemoi has no per-variable NaN inventory; expose empties for
         # zarr_inspect.
-        n_vars = len(name_to_index)
+
         out["idx_fixed_nan"] = {v: [] for v in name_to_index}
         out["idx_dynamic_nan"] = {v: [] for v in name_to_index}
 
