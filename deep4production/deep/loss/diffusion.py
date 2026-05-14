@@ -39,7 +39,9 @@ class WeightedDenoisingScoreMatchingLoss(nn.Module):
         self.ignore_nans = ignore_nans
         self.sigma_data = sigma_data
 
-    def forward(self, target: torch.Tensor, output: torch.Tensor, sigma_t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, target: torch.Tensor, output: torch.Tensor, sigma_t: torch.Tensor
+    ) -> torch.Tensor:
         """
         Parameters
         ----------
@@ -54,7 +56,7 @@ class WeightedDenoisingScoreMatchingLoss(nn.Module):
         -------
         Scalar loss.
         """
-        weight = (self.sigma_data ** 2 + sigma_t ** 2) / (self.sigma_data * sigma_t) ** 2
+        weight = (self.sigma_data**2 + sigma_t**2) / (self.sigma_data * sigma_t) ** 2
         loss = weight * (output - target) ** 2
         if self.ignore_nans:
             loss = loss[~torch.isnan(loss)]

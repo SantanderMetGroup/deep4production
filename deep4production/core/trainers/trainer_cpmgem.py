@@ -48,9 +48,20 @@ class trainer_custom(trainer):
         warmup_steps: int (optional) – linear LR warm-up steps (paper: 5000)
     """
 
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
-                 hardware=None):
+    def __init__(
+        self,
+        data,
+        dataloader,
+        id_dir,
+        model_info,
+        graph,
+        d4dpy,
+        Mlflow,
+        normalizer_info_x=None,
+        normalizer_info_y=None,
+        normalizer_info_f=None,
+        hardware=None,
+    ):
         super().__init__(
             data=data,
             dataloader=dataloader,
@@ -69,7 +80,9 @@ class trainer_custom(trainer):
         # nested structure used by trainer_resdiff so downscalers can resolve
         # noise_params from a single canonical path: metadata.training_params.noise_params.
         noise_params = model_info["training_params"]["kwargs"]["noise_params"]
-        self.metadata_dict.setdefault("training_params", {})["noise_params"] = noise_params
+        self.metadata_dict.setdefault("training_params", {})["noise_params"] = (
+            noise_params
+        )
         log.info("CPMGEM trainer ready (continuous-time sub-VP SDE)")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -87,10 +100,10 @@ class trainer_custom(trainer):
         #   B(t) = β_min·t + ½(β_max − β_min)·t²
         #   mean = exp(−½ B(t))
         #   std  = 1 − exp(−B(t))            (sub-VP; not the VP √(1−e^{−B}))
-        B_t            = beta_min * t + 0.5 * (beta_max - beta_min) * t ** 2
+        B_t = beta_min * t + 0.5 * (beta_max - beta_min) * t**2
         log_mean_coeff = -0.5 * B_t
-        mean           = torch.exp(log_mean_coeff)[:, None, None, None]
-        std            = (1.0 - torch.exp(-B_t))[:, None, None, None]
+        mean = torch.exp(log_mean_coeff)[:, None, None, None]
+        std = (1.0 - torch.exp(-B_t))[:, None, None, None]
         return mean, std
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -100,7 +113,7 @@ class trainer_custom(trainer):
         data,
         optimizer,
         loss_function,
-        noise_params,           # forwarded from training_params.kwargs
+        noise_params,  # forwarded from training_params.kwargs
         device,
         is_this_training=True,
         **kwargs,
@@ -130,7 +143,7 @@ class trainer_custom(trainer):
         is_this_training : bool
         """
         x, y, _ = data
-        non_blocking = (self.device_type == "cuda")
+        non_blocking = self.device_type == "cuda"
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
         B = y.shape[0]
@@ -144,10 +157,10 @@ class trainer_custom(trainer):
 
         beta_min = noise_params["beta_min"]
         beta_max = noise_params["beta_max"]
-        t_min    = noise_params.get("t_min", 1e-5)
+        t_min = noise_params.get("t_min", 1e-5)
 
         # ── Sample continuous time t ∈ [t_min, 1] — kept in fp32 ─────────────
-        t = torch.rand(B, device=device) * (1.0 - t_min) + t_min   # (B,)
+        t = torch.rand(B, device=device) * (1.0 - t_min) + t_min  # (B,)
 
         # ── Sub-VP SDE marginal distribution ─────────────────────────────────
         mean, std = self._marginal_prob(y, t, beta_min, beta_max)

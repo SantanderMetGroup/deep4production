@@ -40,29 +40,28 @@ d4p_pydataset:
 ##### TRAINING DATA CONFIGURATION #####
 data:
   load_in_memory: true
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
     paths:
-      - path_to_your_x_file_1.zarr
-      - path_to_your_x_file_2.zarr
-      - ...
-    variables: null
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - '...'
+    variables:
     normalizer:
       path_reference: path_to_your_x_file_1.zarr
       default: mean_std
-    transform_to_2D: True
+    transform_to_2D: true
 
   predictands:
     paths:
-      - path_to_your_y_file_1.zarr
-      - path_to_your_y_file_2.zarr
-      - ...
+    - path_to_your_y_file_1.zarr
+    - path_to_your_y_file_2.zarr
+    - '...'
     variables:
-      - pr
-    transform_to_2D: True
+    - pr
+    transform_to_2D: true
 
 
 ##### DATA LOADER CONFIGURATION #####
@@ -149,6 +148,6 @@ model_info:
     kwargs:
       noise_params:
         P_mean: -1.2              # EDM default
-        P_std:  1.2               # EDM default
+        P_std: 1.2                # EDM default
         sigma_min: 0.002          # EDM default
         sigma_max: 80.0           # EDM default

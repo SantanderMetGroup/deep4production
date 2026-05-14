@@ -16,7 +16,6 @@ from deep4production.utils.zarr import open_zarr_store
 ### ---------------------------------------------------------------------------------------- ###
 ### -------------------- Mean Absolute Error Loss ------------------------------------------ ###
 class MaeLoss(nn.Module):
-
     """
     Standard Mean Absolute Error (MAE). It is possible to compute
     this metric over a target dataset with nans.
@@ -39,7 +38,6 @@ class MaeLoss(nn.Module):
         self.ignore_nans = ignore_nans
 
     def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-
         """
         Computes MAE loss between target and output.
         Parameters:
@@ -50,12 +48,12 @@ class MaeLoss(nn.Module):
         """
 
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
-        if target.ndim > 3: # stack spatial dimensions
+        if target.ndim > 3:  # stack spatial dimensions
             B, C, H, W = target.shape
-            target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-        if output.ndim > 3: # stack spatial dimensions
+            target = target.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
+        if output.ndim > 3:  # stack spatial dimensions
             B, C, H, W = output.shape
-            output = output.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+            output = output.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
 
         # --- Remove Nans if present ---
         if self.ignore_nans:
@@ -71,7 +69,6 @@ class MaeLoss(nn.Module):
 ### ---------------------------------------------------------------------------------------- ###
 ### -------------------- Mean Squared Error Loss ------------------------------------------- ###
 class MseLoss(nn.Module):
-
     """
     Standard Mean Square Error (MSE) loss.
     Purpose: Computes MSE between target and output, optionally ignoring NaNs.
@@ -94,12 +91,12 @@ class MseLoss(nn.Module):
         """
 
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
-        if target.ndim > 3: # stack spatial dimensions
+        if target.ndim > 3:  # stack spatial dimensions
             B, C, H, W = target.shape
-            target = target.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
-        if output.ndim > 3: # stack spatial dimensions
+            target = target.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
+        if output.ndim > 3:  # stack spatial dimensions
             B, C, H, W = output.shape
-            output = output.reshape(B, C, -1) # From shape: (B, C, H, W) to (B, C, H*W)
+            output = output.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
 
         # --- Remove Nans if present ---
         if self.ignore_nans:
@@ -127,14 +124,15 @@ class QuantisedMSELoss(nn.Module):
         ignore_nans (bool): Ignore NaNs in computations.
     """
 
-    def __init__(self,
-                 zarr_path: str,
-                 var: str,
-                 alpha: float = 1.0,
-                 n_quantiles: int = 10,
-                 threshold: float = None,
-                 ignore_nans: bool = True):
-
+    def __init__(
+        self,
+        zarr_path: str,
+        var: str,
+        alpha: float = 1.0,
+        n_quantiles: int = 10,
+        threshold: float = None,
+        ignore_nans: bool = True,
+    ):
         super().__init__()
 
         self.alpha = alpha
@@ -153,8 +151,7 @@ class QuantisedMSELoss(nn.Module):
 
         # -------- Compute bin edges from quantiles --------
         self.bin_edges = torch.tensor(
-            np.quantile(data, np.linspace(0, 1, n_quantiles + 1)),
-            dtype=torch.float32
+            np.quantile(data, np.linspace(0, 1, n_quantiles + 1)), dtype=torch.float32
         )
 
     # ------------------------------------------------------------
@@ -197,7 +194,7 @@ class QuantisedMSELoss(nn.Module):
 
         # -------- Compute QMSE over bins --------
         for k in range(self.n_quantiles):
-            mask_k = (bin_idx == k)
+            mask_k = bin_idx == k
             freq = mask_k.sum()
 
             if freq == 0:
@@ -256,7 +253,7 @@ class QuantisedMSELoss(nn.Module):
         # Convert values below threshold to NaN.
         # ------------------------------------------------------------
         if self.threshold is not None:
-                target[target<self.threshold] = np.nan
+            target[target < self.threshold] = np.nan
 
         # ------------------------------------------------------------
         # Compute loss

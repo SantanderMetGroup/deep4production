@@ -1,5 +1,6 @@
 import numpy as np
 
+
 # --- Sin/cos Julian day ----------------------------------------------------------------
 def compute_julian_day(dates, type, points=None):
     julian_day = dates.dayofyear.values
@@ -25,7 +26,6 @@ def compute_sincos_coords(coords, type, samples=1):
     out = out[np.newaxis, np.newaxis, :]  # shape (1, 1, points)
     out = np.tile(out, (samples, 1, 1))  # shape (time, 1, points)
     return out
-
 
 
 # --- Top of the atmosphere solar radiation ----------------------------------------------------------------
@@ -69,8 +69,13 @@ def compute_toa_solar_radiation(dates, lats):
 
         # TOA daily mean insolation
         toa[:, j] = (
-            S0 / np.pi * dr *
-            (H0 * np.sin(phi) * np.sin(delta) + np.cos(phi) * np.cos(delta) * np.sin(H0))
+            S0
+            / np.pi
+            * dr
+            * (
+                H0 * np.sin(phi) * np.sin(delta)
+                + np.cos(phi) * np.cos(delta) * np.sin(H0)
+            )
         )
 
     # Expand dimensions: (time, 1, lat)

@@ -9,14 +9,11 @@ Authors:
 
 import torch
 import torch.nn as nn
-import torch.distributions as td
-import numpy as np
 
 
 ### ------------------------------------------------------------------------------------------------- ###
 ### -------------------- Neg Log-likelihood Gaussian Loss ------------------------------------------- ###
 class NLLGaussianLoss(nn.Module):
-
     """
     Negative Log-Likelihood Gaussian loss.
     Purpose: Computes NLL for Gaussian distribution, optionally ignoring NaNs.
@@ -39,7 +36,9 @@ class NLLGaussianLoss(nn.Module):
         """
 
         # --- Ensure same shape compatibility ---
-        assert output.shape[2] == 2, f"Expected P=2 (mean, log_var), got {output.shape[2]}"
+        assert (
+            output.shape[2] == 2
+        ), f"Expected P=2 (mean, log_var), got {output.shape[2]}"
 
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
         if target.ndim > 3:
@@ -55,8 +54,8 @@ class NLLGaussianLoss(nn.Module):
             B, C, P, GP = output.shape
 
         # --- Split mean and log-variance --- #
-        mean = output[:, :, 0, :]      # (B, C, GP)
-        log_var = output[:, :, 1, :]   # (B, C, GP)
+        mean = output[:, :, 0, :]  # (B, C, GP)
+        log_var = output[:, :, 1, :]  # (B, C, GP)
         precision = torch.exp(-log_var)
 
         # --- Remove Nans if present ---
@@ -68,14 +67,13 @@ class NLLGaussianLoss(nn.Module):
             target = target[~nans_idx]
 
         # --- Compute NLL and return ---
-        loss = torch.mean(0.5 * precision * (target-mean)**2 + 0.5 * log_var)
+        loss = torch.mean(0.5 * precision * (target - mean) ** 2 + 0.5 * log_var)
         return loss
 
 
 ### -------------------------------------------------------------------------------------------------------- ###
 ### -------------------- Neg Log-likelihood Bernoulli-Gamma Loss ------------------------------------------- ###
 class NLLBerGammaLoss(nn.Module):
-
     """
     Negative Log-Likelihood Bernoulli-Gamma loss.
     Purpose: Computes NLL for Bernoulli-Gamma distribution, optionally ignoring NaNs.
@@ -100,7 +98,9 @@ class NLLBerGammaLoss(nn.Module):
         """
 
         # --- Ensure same shape compatibility ---
-        assert output.shape[1] == 3, f"Expected P=3 (p, shape, scale), got {output.shape[1]}"
+        assert (
+            output.shape[1] == 3
+        ), f"Expected P=3 (p, shape, scale), got {output.shape[1]}"
 
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
         if target.ndim > 3:
@@ -108,16 +108,20 @@ class NLLBerGammaLoss(nn.Module):
             target = target.reshape(B, C, -1)
         else:
             B, C, GP = target.shape
-        target = target.squeeze() # (B, H*W)
+        target = target.squeeze()  # (B, H*W)
         if output.ndim > 3:
             B, P, H, W = output.shape
             output = output.reshape(B, P, -1)
         else:
             B, P, GP = output.shape
         # --- Split probability, shape and scale Gamma parameters --- #
-        p = output[:,0,:].squeeze() # From shape: (B, P=3, H*W) to shape: (B, H*W)
-        shape = torch.exp(output[:,1,:]).squeeze() # From shape: (B, P=3, H*W) to shape: (B, H*W)
-        scale = torch.exp(output[:,2,:]).squeeze() # From shape: (B, P=3, H*W) to shape: (B, H*W)
+        p = output[:, 0, :].squeeze()  # From shape: (B, P=3, H*W) to shape: (B, H*W)
+        shape = torch.exp(
+            output[:, 1, :]
+        ).squeeze()  # From shape: (B, P=3, H*W) to shape: (B, H*W)
+        scale = torch.exp(
+            output[:, 2, :]
+        ).squeeze()  # From shape: (B, P=3, H*W) to shape: (B, H*W)
 
         # --- Shift target? ---
         if self.threshold is not None:
@@ -136,10 +140,12 @@ class NLLBerGammaLoss(nn.Module):
         bool_rain = torch.greater(target, 0).type(torch.float32)
         epsilon = 0.000001
         noRainCase = (1 - bool_rain) * torch.log(1 - p + epsilon)
-        rainCase = bool_rain * (torch.log(p + epsilon) +
-                            (shape - 1) * torch.log(target + epsilon) -
-                            shape * torch.log(scale + epsilon) -
-                            torch.lgamma(shape + epsilon) -
-                            target / (scale + epsilon))
+        rainCase = bool_rain * (
+            torch.log(p + epsilon)
+            + (shape - 1) * torch.log(target + epsilon)
+            - shape * torch.log(scale + epsilon)
+            - torch.lgamma(shape + epsilon)
+            - target / (scale + epsilon)
+        )
         loss = -torch.mean(noRainCase + rainCase)
         return loss

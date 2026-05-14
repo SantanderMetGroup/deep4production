@@ -24,7 +24,6 @@ log = get_logger("deep.loss.asym")
 ### -------------------------------------------------------------------------------- ###
 ### -------------------- Asymmetric Loss ------------------------------------------- ###
 class Asym(nn.Module):
-
     """
     Asymmetric loss function for precipitation downscaling.
     Purpose: Computes asymmetric loss using fitted gamma distributions.
@@ -40,11 +39,20 @@ class Asym(nn.Module):
         appendix (str): File appendix.
     """
 
-    def __init__(self, ref_path: str, var: str,
-                 ignore_nans: bool, asym_path: str,
-                 type: Literal["per_year", "full"] = "full",
-                 asym_weight: float = 1.0, cdf_pow: float = 2.0, threshold: float=1.0,
-                 appendix: str = None, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        ref_path: str,
+        var: str,
+        ignore_nans: bool,
+        asym_path: str,
+        type: Literal["per_year", "full"] = "full",
+        asym_weight: float = 1.0,
+        cdf_pow: float = 2.0,
+        threshold: float = 1.0,
+        appendix: str = None,
+        *args,
+        **kwargs,
+    ) -> None:
         super(Asym, self).__init__()
 
         # --- Ensure that asym_weight and cdf_pow are numeric values ---
@@ -60,7 +68,7 @@ class Asym(nn.Module):
             raise ValueError("'asym_weight' and 'cdf_pow' must be positive.")
 
         # --- Device ---
-        self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # --- Store as SELF parameters ---
         self.ignore_nans = ignore_nans
@@ -69,24 +77,26 @@ class Asym(nn.Module):
         self.threshold = threshold
 
         # --- Saving paths ---
-        shape_file_name = 'shape.npy'
-        scale_file_name = 'scale.npy'
-        loc_file_name = 'loc.npy'
+        shape_file_name = "shape.npy"
+        scale_file_name = "scale.npy"
+        loc_file_name = "loc.npy"
         if appendix:
-            shape_file_name = f'shape_{appendix}.npy'
-            scale_file_name = f'scale_{appendix}.npy'
-            loc_file_name = f'loc_{appendix}.npy'
-        self.shape_path = f'{asym_path}/{shape_file_name}'
-        self.scale_path = f'{asym_path}/{scale_file_name}'
-        self.loc_path = f'{asym_path}/{loc_file_name}'
+            shape_file_name = f"shape_{appendix}.npy"
+            scale_file_name = f"scale_{appendix}.npy"
+            loc_file_name = f"loc_{appendix}.npy"
+        self.shape_path = f"{asym_path}/{shape_file_name}"
+        self.scale_path = f"{asym_path}/{scale_file_name}"
+        self.loc_path = f"{asym_path}/{loc_file_name}"
 
         # --- Get shape, scale and loc ---
         if not self.parameters_exist():
             if ref_path[-5:] == ".zarr":
                 z = open_zarr_store(ref_path, fmt="auto")
                 idx = z.attrs["variables"][var]
-                data = np.array(z["data"][:, idx, :]).squeeze()  # From (B, C, GP) to (B, GP)
-                dates = z["dates"][:].astype('datetime64[Y]').astype(str).tolist()
+                data = np.array(
+                    z["data"][:, idx, :]
+                ).squeeze()  # From (B, C, GP) to (B, GP)
+                dates = z["dates"][:].astype("datetime64[Y]").astype(str).tolist()
             elif ref_path[-3:] == ".nc":
                 z = xr.open_dataset(ref_path)[var]
                 data = z.values
@@ -111,7 +121,7 @@ class Asym(nn.Module):
         shape_exist = os.path.exists(self.shape_path)
         scale_exist = os.path.exists(self.scale_path)
         loc_exist = os.path.exists(self.loc_path)
-        return (shape_exist and scale_exist and loc_exist)
+        return shape_exist and scale_exist and loc_exist
 
     def load_parameters(self):
         """
@@ -125,8 +135,7 @@ class Asym(nn.Module):
         loc = np.load(self.loc_path)
         return shape, scale, loc
 
-    def _compute_gamma_parameters(self, x: np.ndarray, threshold: float=1.0) -> tuple:
-
+    def _compute_gamma_parameters(self, x: np.ndarray, threshold: float = 1.0) -> tuple:
         """
         Fits gamma distribution to wet days in 1D array.
         Parameters:
@@ -140,11 +149,11 @@ class Asym(nn.Module):
         if np.sum(np.isnan(x)) == len(x):
             return np.nan, np.nan, np.nan
         else:
-            x = x[~np.isnan(x)] # Remove nans
-            x = x[x >= threshold] # Filter wet days
-            try: # Compute dist.
+            x = x[~np.isnan(x)]  # Remove nans
+            x = x[x >= threshold]  # Filter wet days
+            try:  # Compute dist.
                 fit_shape, fit_loc, fit_scale = scipy.stats.gamma.fit(x)
-            except: # If its not possible return nan
+            except:  # If its not possible return nan
                 fit_shape, fit_loc, fit_scale = np.nan, np.nan, np.nan
             return fit_shape, fit_loc, fit_scale
 
@@ -165,11 +174,21 @@ class Asym(nn.Module):
             gamma_params = []
             for year in years:
                 idx = [i for i, y in enumerate(dates) if y == year]  # list of indices
-                params_year = np.apply_along_axis(self._compute_gamma_parameters, axis=0, arr=data[idx,:], threshold=self.threshold)
+                params_year = np.apply_along_axis(
+                    self._compute_gamma_parameters,
+                    axis=0,
+                    arr=data[idx, :],
+                    threshold=self.threshold,
+                )
                 gamma_params.append(params_year)
             gamma_params = np.nanmean(np.stack(gamma_params), axis=0)
         elif type == "full":
-            gamma_params = np.apply_along_axis(self._compute_gamma_parameters, axis=0, arr=data, threshold=self.threshold)
+            gamma_params = np.apply_along_axis(
+                self._compute_gamma_parameters,
+                axis=0,
+                arr=data,
+                threshold=self.threshold,
+            )
 
         # --- Subset Gamma parameters ---
         shape = gamma_params[0, :]
@@ -217,22 +236,25 @@ class Asym(nn.Module):
 
         # Compute cdfs for Torch
         if isinstance(data, torch.Tensor):
-            data = data - self.loc # For scipy, loc corresponds to the mean
-            data[data < 0] = 0 # Remove the negative values, which are automatically handled by scipy
-            m = td.Gamma(concentration=self.shape,
-                         rate=1/self.scale,
-                         validate_args=False) # Deactivates the validation of the paremeters (e.g., support)
-                                              # In this way the cdf method handles nans
+            data = data - self.loc  # For scipy, loc corresponds to the mean
+            data[data < 0] = (
+                0  # Remove the negative values, which are automatically handled by scipy
+            )
+            m = td.Gamma(
+                concentration=self.shape, rate=1 / self.scale, validate_args=False
+            )  # Deactivates the validation of the paremeters (e.g., support)
+            # In this way the cdf method handles nans
             cdfs = m.cdf(data)
 
         # Compute cdfs for Numpy
         elif isinstance(data, np.ndarray):
             cdfs = np.empty_like(data)
-            cdfs = scipy.stats.gamma.cdf(data,
-                                         a=self.shape, scale=self.scale, loc=self.loc)
+            cdfs = scipy.stats.gamma.cdf(
+                data, a=self.shape, scale=self.scale, loc=self.loc
+            )
 
         else:
-            raise ValueError('Unsupported type for the data argument.')
+            raise ValueError("Unsupported type for the data argument.")
 
         return cdfs
 
@@ -247,15 +269,17 @@ class Asym(nn.Module):
         """
 
         # --- Only univariate cases ---
-        assert target.shape[1] == 1, f"Expected univariate target (C=1), got {target.shape[1]}"
+        assert (
+            target.shape[1] == 1
+        ), f"Expected univariate target (C=1), got {target.shape[1]}"
 
         # --- Handle both spatial (H, W) and flattened (GP) shapes ---
-        if target.ndim > 3: # stack spatial dimensions
+        if target.ndim > 3:  # stack spatial dimensions
             B, C, H, W = target.shape
-            target = target.reshape(B, -1) # From shape: (B, C, H, W) to (B, [C=1]*H*W)
-        if output.ndim > 3: # stack spatial dimensions
+            target = target.reshape(B, -1)  # From shape: (B, C, H, W) to (B, [C=1]*H*W)
+        if output.ndim > 3:  # stack spatial dimensions
             B, C, H, W = output.shape
-            output = output.reshape(B, -1) # From shape: (B, C, H, W) to (B, [C=1]*H*W)
+            output = output.reshape(B, -1)  # From shape: (B, C, H, W) to (B, [C=1]*H*W)
 
         # --- Compute CDF ---
         cdfs = self.compute_cdf(data=target)
@@ -270,6 +294,8 @@ class Asym(nn.Module):
 
         # --- Compute loss and return ---
         loss_mae = torch.mean(torch.abs(target - output))
-        loss_asym = torch.mean((cdfs ** self.cdf_pow) * torch.max(torch.tensor(0.0), target - output))
+        loss_asym = torch.mean(
+            (cdfs**self.cdf_pow) * torch.max(torch.tensor(0.0), target - output)
+        )
         loss = loss_mae + self.asym_weight * loss_asym
         return loss

@@ -1,14 +1,14 @@
 ## Load libraries
-import os
-import numpy as np
 import torch
 from torch_geometric.data import HeteroData
-from torch_geometric.utils import to_dense_batch
+
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
 from deep4production.utils.log import get_logger
 
 log = get_logger("trainer.gnn4cd")
+
+
 ##################################################################################################################################
 class trainer_custom(trainer):
     """
@@ -25,9 +25,21 @@ class trainer_custom(trainer):
         edge_index_path (str): Path to the pre-computed edge index file for the static graph.
     """
 
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow, edge_index_path,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
-                 hardware=None):
+    def __init__(
+        self,
+        data,
+        dataloader,
+        id_dir,
+        model_info,
+        graph,
+        d4dpy,
+        Mlflow,
+        edge_index_path,
+        normalizer_info_x=None,
+        normalizer_info_y=None,
+        normalizer_info_f=None,
+        hardware=None,
+    ):
         """
         Initializes the Residual Generator trainer.
         """
@@ -57,7 +69,9 @@ class trainer_custom(trainer):
         self.graph_on_device = False
 
     # -------------------------------------------------------------------------
-    def model_backprop(self, model, data, optimizer, loss_function, device, is_this_training=True):
+    def model_backprop(
+        self, model, data, optimizer, loss_function, device, is_this_training=True
+    ):
         """
         Performs a single forward and backward pass for a batch of size 1 using graph-based input.
         Purpose: Places features in HeteroData structure, feeds to GNN model, computes loss, and performs backpropagation.
@@ -73,7 +87,7 @@ class trainer_custom(trainer):
         """
 
         x, y, f = data
-        f_is_real = (f[0] != "N/A")
+        f_is_real = f[0] != "N/A"
         if not f_is_real:
             f = torch.zeros_like(y)
 
@@ -96,9 +110,9 @@ class trainer_custom(trainer):
             _, _, f = self._normalize_inputs(f=f)
 
         # ---- Reshape inputs (now on device, normalized) ----
-        x = x[0].permute(2, 0, 1)   # from (sample, seq, C, G_low) → (G_low, seq, C)
-        y = y[0].permute(1, 0)      # from (sample, C, G_low) → (G_high, C)
-        f = f[0].permute(1, 0)      # from (sample, C, G_low) → (G_high, C)
+        x = x[0].permute(2, 0, 1)  # from (sample, seq, C, G_low) → (G_low, seq, C)
+        y = y[0].permute(1, 0)  # from (sample, C, G_low) → (G_high, C)
+        f = f[0].permute(1, 0)  # from (sample, C, G_low) → (G_high, C)
 
         # ---- Attach features to static graph ----
         self.graph["low"].x = x
@@ -109,8 +123,14 @@ class trainer_custom(trainer):
         prediction = model(self.graph)  # (N_high, C)
 
         # --- Compute loss ---
-        y = y.permute(1,0).unsqueeze(0) # permute to (num_vars, num_high_nodes) and add time dimension for loss computation
-        prediction = prediction.unsqueeze(0) # permute to (num_vars, num_high_nodes) and add time dimension for loss computation
+        y = y.permute(
+            1, 0
+        ).unsqueeze(
+            0
+        )  # permute to (num_vars, num_high_nodes) and add time dimension for loss computation
+        prediction = prediction.unsqueeze(
+            0
+        )  # permute to (num_vars, num_high_nodes) and add time dimension for loss computation
         optimizer.zero_grad()
         loss = loss_function(target=y, output=prediction)
 
@@ -120,11 +140,3 @@ class trainer_custom(trainer):
 
         # --- Return ---
         return loss.item()
-
-
-
-
-
-
-
-

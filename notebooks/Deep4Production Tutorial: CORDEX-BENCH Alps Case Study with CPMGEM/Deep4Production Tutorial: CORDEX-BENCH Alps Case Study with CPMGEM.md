@@ -4,7 +4,7 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/S
 
 > If you are new to `deep4production`, please go through the [DeepESD tutorial](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD.md) first — sections 1 through 5 (project structure, data download, dataset creation, inspection) are identical and are summarized briefly here.
 
----
+______________________________________________________________________
 
 ## 1. Introduction
 
@@ -12,32 +12,32 @@ This tutorial demonstrates how to use the [deep4production](https://github.com/S
 
 This tutorial swaps the deterministic **DeepESD** backbone for a **stochastic diffusion** model, so each forward pass is now a *reverse SDE trajectory* and a single model can produce multiple plausible realizations of the high-resolution field per input.
 
----
+______________________________________________________________________
 
 ## 2. Case study: CORDEX-BENCH
 
 Same simplified CORDEX-BENCH Alps configuration as in the DeepESD tutorial:
 
-* **Domain:** Central Europe (Alps)
-* **AI-model backbone:** **CPMGEM** (sub-VP SDE diffusion, NCSN++/SongUNet UNet)
-* **Loss function:** MSE on predicted noise ε
-* **Predictors:** UPSRCM (16 × 16, 15 variables: `u/v/t/q/z` at 850/700/500 hPa)
-* **Predictands:** RCM (128 × 128) precipitation `pr`
-* **Training:** 1961-1979 (excl. 1967, 1975) · **Validation:** 1967, 1975 · **Test:** 1980
+- **Domain:** Central Europe (Alps)
+- **AI-model backbone:** **CPMGEM** (sub-VP SDE diffusion, NCSN++/SongUNet UNet)
+- **Loss function:** MSE on predicted noise ε
+- **Predictors:** UPSRCM (16 × 16, 15 variables: `u/v/t/q/z` at 850/700/500 hPa)
+- **Predictands:** RCM (128 × 128) precipitation `pr`
+- **Training:** 1961-1979 (excl. 1967, 1975) · **Validation:** 1967, 1975 · **Test:** 1980
 
----
+______________________________________________________________________
 
 ## 3. Download CORDEX-BENCH Alps Data
 
 Identical to the DeepESD tutorial — see [section 3 there](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD.md#3-download-cordex-bench-alps-data).
 
----
+______________________________________________________________________
 
 ## 4. Prepare AI-Ready Datasets with `d4p-create`
 
 Identical to the DeepESD tutorial. The CPMGEM trainer reads from the **same Zarr files** (`UPSRCM_1961-1980.zarr` and `RCM_1961-1980.zarr`) — no data-side changes are required when switching architectures. See [section 4 of the DeepESD tutorial](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20DeepESD.md#4-prepare-ai-ready-datasets-with-d4p-create).
 
----
+______________________________________________________________________
 
 ## 5. Inspect the Zarr Datasets with `d4p-inspect`
 
@@ -48,7 +48,7 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr      # Predictands
 
 Use the reported shape `(C, H, W)` to fill in the `cond_low_channels`, `in_channels`, and the implicit grid of the diffusion U-Net (see section 6).
 
----
+______________________________________________________________________
 
 ## 6. Train CPMGEM with `d4p-train`
 
@@ -56,11 +56,12 @@ CPMGEM differs from DeepESD in three places:
 
 1. **Custom trainer (`d4p_trainer`).** Diffusion models need a noise schedule and an integration over noise levels at training time. The DeepESD recipe doesn't declare a `d4p_trainer` block — it uses the default deterministic trainer. CPMGEM must point to `trainer_cpmgem`, which implements the sub-VP SDE training loop.
 
-2. **Predictand transform (`operator` + `normalizer`).** Precipitation is heavy-tailed and zero-inflated; CPMGEM trains on a transformed target so the diffusion process operates in a roughly Gaussian space:
-   * `operator: sqrt` — applied first, compresses the upper tail.
-   * `normalizer: minmax_neg1_1` — rescales to `[-1, 1]` (the natural range of the noise the SDE adds). Statistics are derived from the raw zarr stats; no recomputation needed.
+1. **Predictand transform (`operator` + `normalizer`).** Precipitation is heavy-tailed and zero-inflated; CPMGEM trains on a transformed target so the diffusion process operates in a roughly Gaussian space:
 
-3. **Architecture and training schedule.** A larger NCSN++/SongUNet replaces the small DeepESD CNN. Diffusion training also benefits from EMA weight averaging, a warm-up scheduler, and gradient clipping — all enabled via the YAML.
+   - `operator: sqrt` — applied first, compresses the upper tail.
+   - `normalizer: minmax_neg1_1` — rescales to `[-1, 1]` (the natural range of the noise the SDE adds). Statistics are derived from the raw zarr stats; no recomputation needed.
+
+1. **Architecture and training schedule.** A larger NCSN++/SongUNet replaces the small DeepESD CNN. Diffusion training also benefits from EMA weight averaging, a warm-up scheduler, and gradient clipping — all enabled via the YAML.
 
 Below is the full CPMGEM training YAML (`./training/configs/cpmgem.yaml`):
 
@@ -193,7 +194,7 @@ Below is an example of training output:
 
 ![d4p-train-1](./images/d4p-train-output.png)
 
----
+______________________________________________________________________
 
 ### Enabling MLflow
 
@@ -201,7 +202,7 @@ The MLflow block is identical to the [DeepESD tutorial section](../Deep4Producti
 
 A small but very useful tweak for diffusion runs: set `compute_diagnostics_every_n_epochs` higher than for DeepESD (e.g. `5`) — generating diagnostic samples requires a full reverse SDE rollout per sample, which is far more expensive than a single forward pass.
 
----
+______________________________________________________________________
 
 ## 7. Run Inference with `d4p-downscale`
 
@@ -284,7 +285,7 @@ The output NetCDF has shape `(member, time, point)` — one extra dimension comp
 
 ![d4p-downscale-2](./images/d4p-downscale-pred.png)
 
----
+______________________________________________________________________
 
 ## 8. Visualization
 
@@ -340,24 +341,24 @@ prd_mean = prd.mean(dim="member")
 prd_std  = prd.std(dim="member")
 ```
 
----
+______________________________________________________________________
 
 ## 9. Summary
 
 You have now run a full diffusion-based downscaling workflow on CORDEX-BENCH Alps using CPMGEM:
 
-* Reused the AI-ready datasets created in the DeepESD tutorial.
-* Trained an NCSN++/SongUNet via continuous-time sub-VP SDE noise denoising.
-* Generated **ensemble** high-resolution precipitation fields by running multiple reverse SDE trajectories.
-* Visualized one member and outlined the standard ensemble-mean / spread post-processing.
+- Reused the AI-ready datasets created in the DeepESD tutorial.
+- Trained an NCSN++/SongUNet via continuous-time sub-VP SDE noise denoising.
+- Generated **ensemble** high-resolution precipitation fields by running multiple reverse SDE trajectories.
+- Visualized one member and outlined the standard ensemble-mean / spread post-processing.
 
 For a residual diffusion variant (separately trained regressor + EDM-preconditioned diffusion of the residual), see the [ResDiff tutorial](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md).
 
----
+______________________________________________________________________
 
 ## 10. References
 
-* [CORDEX-BENCH GitHub](https://github.com/WCRP-CORDEX/ml-benchmark)
-* [CORDEX-BENCH Zenodo](https://zenodo.org/records/17957264)
-* Addison et al. 2024 — *Machine learning emulation of precipitation from km-scale regional climate simulations using a diffusion model*
-* Song et al. 2021 — *Score-based generative modeling through SDEs* (NCSN++ / sub-VP SDE)
+- [CORDEX-BENCH GitHub](https://github.com/WCRP-CORDEX/ml-benchmark)
+- [CORDEX-BENCH Zenodo](https://zenodo.org/records/17957264)
+- Addison et al. 2024 — *Machine learning emulation of precipitation from km-scale regional climate simulations using a diffusion model*
+- Song et al. 2021 — *Score-based generative modeling through SDEs* (NCSN++ / sub-VP SDE)

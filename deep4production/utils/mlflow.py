@@ -5,6 +5,7 @@ from deep4production.utils.log import get_logger
 
 log = get_logger("mlflow")
 
+
 # -------------------------------------------------------------------------
 def mlflow_scalars_logs(tgt, prd, vars, mlflow_info, epoch):
     diagnostic_module = "deep4production.utils.diagnostics"
@@ -23,9 +24,10 @@ def mlflow_scalars_logs(tgt, prd, vars, mlflow_info, epoch):
                 diagnostic_name = f"{diagnostic[0]}_{diagnostic[1]}"
                 kwargs.update({"index": diagnostic[0]})
                 diagnostic = diagnostic[1]
-            value = get_func_from_string(diagnostic_module, diagnostic, kwargs = kwargs)
+            value = get_func_from_string(diagnostic_module, diagnostic, kwargs=kwargs)
             mlflow.log_metric(f"{diagnostic_name}_{var}", float(value), step=int(epoch))
         log.info("[%s] MLflow scalars logged: %s", var, diagnostics_to_run_scalars)
+
 
 # -------------------------------------------------------------------------
 def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
@@ -40,7 +42,7 @@ def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
             diagnostics_to_run_figures.update(mlflow_info[var])
         logged = []  # track logged figures
         for diag_name, diag_cfg in diagnostics_to_run_figures.items():
-            ## 1. Load diagnostic figure function   
+            ## 1. Load diagnostic figure function
             diag_func = get_func_from_string(diag_cfg["module"], diag_cfg["name"])
             # kwargs passed directly to the diagnostic plotting function
             fig_kwargs = diag_cfg.get("kwargs", {}).copy()
@@ -49,7 +51,7 @@ def mlflow_figures_logs(tgt, prd, vars, mlflow_info, epoch):
                 idx_cfg = diag_cfg["index"]
                 index_func = get_func_from_string(idx_cfg["module"], idx_cfg["name"])
                 index_kwargs = idx_cfg.get("kwargs", {})
-                # compute index 
+                # compute index
                 index_target = index_func(tgt[var], **index_kwargs)
                 index_prediction = index_func(prd[var], **index_kwargs)
                 # the diagnostic function expects the index under key "index"

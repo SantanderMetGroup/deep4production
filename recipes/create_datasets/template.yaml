@@ -5,15 +5,14 @@ freq: 1D
 data:
   paths: [path_to_your_input_file.nc]
   vars: [pr, tasmax] # example
-  imputer: 
+  imputer:
     default:
       name: nearest_spatial # See available options at: "deep4downscaling.utils.imputers"
       num_nearest_neighbours: 4
       aggr_function: mean # Has to be a numpy function
-    pr: 
+    pr:
       name: constant # See available options at: "deep4downscaling.utils.imputers"
       value: 0
 
 output_path: path_to_your_output_location.zarr
-overwrite: True
-
+overwrite: true

@@ -1,15 +1,19 @@
-import zarr
 import torch
 import numpy as np
 import xarray as xr
 from contextlib import nullcontext
 from torch import from_numpy
+
 ## Deep4production
 from deep4production.deep.utils import load_model
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.trans import from_pred_to_xarray, compute_valid_mask
 from deep4production.utils.general import get_func_from_string
-from deep4production.utils.temporal import get_dates_from_yaml, get_sample_map, get_pairs
+from deep4production.utils.temporal import (
+    get_dates_from_yaml,
+    get_sample_map,
+    get_pairs,
+)
 from deep4production.utils.zarr import open_zarr_store
 from deep4production.utils.log import get_logger
 
@@ -18,17 +22,18 @@ log = get_logger("downscaler")
 
 # Map YAML strings → torch dtypes for AMP autocast.
 _AMP_DTYPES = {
-    None:        None,
-    "":          None,
-    "none":      None,
-    "float32":   torch.float32,
-    "fp32":      torch.float32,
-    "float16":   torch.float16,
-    "fp16":      torch.float16,
-    "half":      torch.float16,
-    "bfloat16":  torch.bfloat16,
-    "bf16":      torch.bfloat16,
+    None: None,
+    "": None,
+    "none": None,
+    "float32": torch.float32,
+    "fp32": torch.float32,
+    "float16": torch.float16,
+    "fp16": torch.float16,
+    "half": torch.float16,
+    "bfloat16": torch.bfloat16,
+    "bf16": torch.bfloat16,
 }
+
 
 ##################################################################################################################################
 class downscaler:
@@ -44,7 +49,17 @@ class downscaler:
         graph (dict, optional): Graph configuration for GNN models.
         forcing_data (dict, optional): Forcing data configuration.
     """
-    def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
+
+    def __init__(
+        self,
+        id_dir,
+        input_data,
+        model_file=None,
+        saving_info=None,
+        ensemble_size=1,
+        graph=None,
+        forcing_data=None,
+    ):
         """
         Initializes the D4P Downscaler.
         """
@@ -52,13 +67,15 @@ class downscaler:
         # --- SELF PARAMETERS ---
         self.ensemble_size = ensemble_size
         self.graph = graph
-        self.device = ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         log.debug("Device: %s", self.device)
 
         # --- GET MODEL AND METADATA FROM CHECKPOINT ---
         if model_file is not None:
             model_path = f"{id_dir}/models/{model_file}"
-            self.model, self.metadata = load_model(path=model_path, map_location=self.device, return_metadata=True)
+            self.model, self.metadata = load_model(
+                path=model_path, map_location=self.device, return_metadata=True
+            )
             self.model.to(self.device)
             log.info("Model and metadata loaded from %s", model_path)
 
@@ -87,7 +104,7 @@ class downscaler:
 
         # --- LOAD INPUT DATA IN MEMORY? ---
         load_in_memory = input_data.get("load_in_memory", True)
-        if load_in_memory: # If dataset fits in memory, load input data to speed up
+        if load_in_memory:  # If dataset fits in memory, load input data to speed up
             x_data = [np.array(x["data"]) for x in self.x]
             self.data = {"x": x_data}
             log.info("Predictor data loaded into memory.")
@@ -106,7 +123,7 @@ class downscaler:
             dates_yaml = get_dates_from_yaml(forcing_data["years"], freq=freq)
             self.sample_map_f, _ = get_sample_map(dates_yaml, self.x)
             load_in_memory = input_data.get("load_in_memory", True)
-            if load_in_memory: # If dataset fits in memory, load input data to speed up
+            if load_in_memory:  # If dataset fits in memory, load input data to speed up
                 f_data = [np.array(f["data"]) for f in self.f]
                 self.data.update({"f": f_data})
                 log.info("Forcing data loaded into memory.")
@@ -139,18 +156,32 @@ class downscaler:
             if self.format_output is not None:
                 formatting_module = "deep4production.utils.formatting"
                 formatting_name = self.saving_info["formatting"]["name"]
-                self.formatting_func = get_func_from_string(formatting_module, formatting_name)
-                self.formatting_kwargs = self.saving_info["formatting"].get("kwargs", None)
+                self.formatting_func = get_func_from_string(
+                    formatting_module, formatting_name
+                )
+                self.formatting_kwargs = self.saving_info["formatting"].get(
+                    "kwargs", None
+                )
 
         # --- BUILD GRAPH ---------------------------------------
         if self.graph is not None:
             if self.graph["path"] is not None:
-                self.edge_index = torch.load(f"{id_dir}/aux_files/{self.graph['path']}", weights_only=False)
-                log.info("Graph loaded from %s", self.graph['path'])
+                self.edge_index = torch.load(
+                    f"{id_dir}/aux_files/{self.graph['path']}", weights_only=False
+                )
+                log.info("Graph loaded from %s", self.graph["path"])
             else:
-                self.edge_index = get_func_from_string(module_string=self.graph["module"],func_string=self.graph["name"], kwargs=self.graph.get("kwargs", None))
+                self.edge_index = get_func_from_string(
+                    module_string=self.graph["module"],
+                    func_string=self.graph["name"],
+                    kwargs=self.graph.get("kwargs", None),
+                )
                 torch.save(self.edge_index, f"{self.aux_dir}/aux_files/edge_index_B.pt")
-                log.info("Graph ready: function %s from %s", self.graph['name'], self.graph['module'])
+                log.info(
+                    "Graph ready: function %s from %s",
+                    self.graph["name"],
+                    self.graph["module"],
+                )
 
         # --- POSTPROCESS FUNC ---------------------------------------
         postprocess_module = "deep4production.deep.postprocessors"
@@ -158,7 +189,9 @@ class downscaler:
         self.post_func_kwargs = {}
         if self.loss_params["name"] == "NLLBerGammaLoss":
             postprocess_name = "from_bergamma_to_pred"
-            self.post_func_kwargs = {"threshold": self.loss_params["kwargs"]["threshold"]}
+            self.post_func_kwargs = {
+                "threshold": self.loss_params["kwargs"]["threshold"]
+            }
         elif self.loss_params["name"] == "NLLGaussianLoss":
             postprocess_name = "from_gaussian_to_pred"
         else:
@@ -179,15 +212,23 @@ class downscaler:
         # The metadata's normalizer dicts were resolved at training time by
         # pydataset._resolve_normalizer_info — kwargs / methods / stats_transform
         # are all baked in. Buffers travel with the module to GPU.
-        self.norm_x = self._build_input_normalizer(self.normalizer_x, self.vars_x, channel_dim=1)
-        self.norm_y = self._build_input_normalizer(self.normalizer_y, self.vars_y, channel_dim=1)
+        self.norm_x = self._build_input_normalizer(
+            self.normalizer_x, self.vars_x, channel_dim=1
+        )
+        self.norm_y = self._build_input_normalizer(
+            self.normalizer_y, self.vars_y, channel_dim=1
+        )
         self.norm_f = (
             self._build_input_normalizer(self.normalizer_f, self.vars_f, channel_dim=1)
-            if forcing_data is not None else None
+            if forcing_data is not None
+            else None
         )
-        if self.norm_x is not None: self.norm_x = self.norm_x.to(self.device)
-        if self.norm_y is not None: self.norm_y = self.norm_y.to(self.device)
-        if self.norm_f is not None: self.norm_f = self.norm_f.to(self.device)
+        if self.norm_x is not None:
+            self.norm_x = self.norm_x.to(self.device)
+        if self.norm_y is not None:
+            self.norm_y = self.norm_y.to(self.device)
+        if self.norm_f is not None:
+            self.norm_f = self.norm_f.to(self.device)
 
         # --- Pre-compute the template's spatial NaN mask ONCE -----------
         # `from_pred_to_xarray` computes this per call when given a template;
@@ -198,9 +239,9 @@ class downscaler:
         )
 
         # --- Runtime/inference flags (set by downscale()) ---------------
-        self._amp_dtype = None      # torch.dtype or None
-        self._is_compiled = False   # set True after first torch.compile()
-        self._cuda = (self.device == 'cuda')
+        self._amp_dtype = None  # torch.dtype or None
+        self._is_compiled = False  # set True after first torch.compile()
+        self._cuda = self.device == "cuda"
 
     # ---------------------------------------------------------------------------------------------------------------------<
     @staticmethod
@@ -249,7 +290,7 @@ class downscaler:
         """
         # --- Files (X)---
         self.x = [open_zarr_store(p, fmt=fmt, cache_mb=cache_mb) for p in paths]
-        # --- Variables --- 
+        # --- Variables ---
         self.vars_y = self.metadata["vars_y"]
         self.vars_x = self.metadata["vars_x"]
         self.idx_vars_x = [self.x[0].attrs["variables"][var] for var in self.vars_x]
@@ -257,31 +298,46 @@ class downscaler:
         # --- Normalizer ---
         self.normalizer_x = self.metadata.get("normalizer_x", None)
         if self.normalizer_x is not None:
-            log.debug("Normalizer (X): %s", self.normalizer_x.get("normalizer_func_per_variable"))
+            log.debug(
+                "Normalizer (X): %s",
+                self.normalizer_x.get("normalizer_func_per_variable"),
+            )
         # --- Denormalizer (Prediction) ---
         self.normalizer_y = self.metadata.get("normalizer_y", None)
         if self.normalizer_y is not None:
-            log.debug("Denormalizer (Y): %s", self.normalizer_y.get("normalizer_func_per_variable"))
+            log.debug(
+                "Denormalizer (Y): %s",
+                self.normalizer_y.get("normalizer_func_per_variable"),
+            )
         # --- Operator ---
         self.operator_x = self.metadata.get("operator_x", None)
         if self.operator_x is not None:
-            log.debug("Operator (X): %s", self.operator_x.get("operator_func_per_variable"))
+            log.debug(
+                "Operator (X): %s", self.operator_x.get("operator_func_per_variable")
+            )
         # --- Deoperator (Prediction) ---
         self.operator_y = self.metadata.get("operator_y", None)
         if self.operator_y is not None:
-            log.debug("Deoperator (Y): %s", self.operator_y.get("operator_func_per_variable"))
-        # --- Loss params --- 
+            log.debug(
+                "Deoperator (Y): %s", self.operator_y.get("operator_func_per_variable")
+            )
+        # --- Loss params ---
         self.loss_params = self.metadata.get("loss_params", None)
-        # --- Transform to 2D --- 
+        # --- Transform to 2D ---
         self.transform_to_2D_x = self.metadata.get("transform_to_2D_x", False)
         self.transform_to_2D_y = self.metadata.get("transform_to_2D_y", False)
         # --- Input and output 2D spatial dimensions ---
-        self.H_x, self.W_x = self.metadata.get("H_x", None), self.metadata.get("W_x", None)
-        self.H_y, self.W_y = self.metadata.get("H_y", None), self.metadata.get("W_y", None)
+        self.H_x, self.W_x = (
+            self.metadata.get("H_x", None),
+            self.metadata.get("W_x", None),
+        )
+        self.H_y, self.W_y = (
+            self.metadata.get("H_y", None),
+            self.metadata.get("W_y", None),
+        )
         # --- Input and output expected number of gridpoints ---
         self.G_x = self.metadata.get("G_x", None)
         self.G_y = self.metadata.get("G_y", None)
-
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def update_self_with_forcings(self, fpaths, fmt="auto", cache_mb=None):
@@ -298,11 +354,15 @@ class downscaler:
         self.idx_vars_f = [self.f[0].attrs["variables"][var] for var in self.vars_f]
         self.normalizer_f = self.metadata.get("normalizer_f", None)
         if self.normalizer_f is not None:
-            log.debug("Normalizer (F): %s", self.normalizer_f.get("normalizer_func_per_variable"))
+            log.debug(
+                "Normalizer (F): %s",
+                self.normalizer_f.get("normalizer_func_per_variable"),
+            )
         self.operator_f = self.metadata.get("operator_f", None)
         if self.operator_f is not None:
-            log.debug("Operator (F): %s", self.operator_f.get("operator_func_per_variable"))
-
+            log.debug(
+                "Operator (F): %s", self.operator_f.get("operator_func_per_variable")
+            )
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def graphPredict(self, x, edge_index, model, f=["N/A"]):
@@ -323,7 +383,20 @@ class downscaler:
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def preprocess(self, date, data, vars, idx_vars, sample_map, operator=None, transform_to_2D=False, H=None, W=None, ops=None, to_device=True):
+    def preprocess(
+        self,
+        date,
+        data,
+        vars,
+        idx_vars,
+        sample_map,
+        operator=None,
+        transform_to_2D=False,
+        H=None,
+        W=None,
+        ops=None,
+        to_device=True,
+    ):
         """
         Preprocess a sample: index → operator → reshape → to-tensor.
 
@@ -342,14 +415,17 @@ class downscaler:
         # -- Lazily resolve operator callables if only the legacy dict was given --
         if ops is None and operator is not None:
             ops = [
-                get_func_from_string(operator["module"], operator["operator_func_per_variable"][v])
-                if operator["operator_func_per_variable"].get(v) is not None else None
+                get_func_from_string(
+                    operator["module"], operator["operator_func_per_variable"][v]
+                )
+                if operator["operator_func_per_variable"].get(v) is not None
+                else None
                 for v in vars
             ]
 
         # -- Get sample --
         i, j = sample_map[date]
-        x = data[i][j][idx_vars]                       # (C, G)
+        x = data[i][j][idx_vars]  # (C, G)
 
         # --- Operator (per-channel) ---
         if ops is not None:
@@ -373,17 +449,35 @@ class downscaler:
         """
         dates = self.pairs[target_date]
         if len(dates) > 1:
-            return torch.stack([
-                self.preprocess(date, self.data["x"], self.vars_x, self.idx_vars_x,
-                                self.sample_map, ops=self._ops_x,
-                                transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x,
-                                to_device=False)
-                for date in dates
-            ])  # (n_lag, C, H, W) on CPU
-        return self.preprocess(target_date, self.data["x"], self.vars_x, self.idx_vars_x,
-                               self.sample_map, ops=self._ops_x,
-                               transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x,
-                               to_device=False)
+            return torch.stack(
+                [
+                    self.preprocess(
+                        date,
+                        self.data["x"],
+                        self.vars_x,
+                        self.idx_vars_x,
+                        self.sample_map,
+                        ops=self._ops_x,
+                        transform_to_2D=self.transform_to_2D_x,
+                        H=self.H_x,
+                        W=self.W_x,
+                        to_device=False,
+                    )
+                    for date in dates
+                ]
+            )  # (n_lag, C, H, W) on CPU
+        return self.preprocess(
+            target_date,
+            self.data["x"],
+            self.vars_x,
+            self.idx_vars_x,
+            self.sample_map,
+            ops=self._ops_x,
+            transform_to_2D=self.transform_to_2D_x,
+            H=self.H_x,
+            W=self.W_x,
+            to_device=False,
+        )
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def _preprocess_forcing_date(self, target_date) -> torch.Tensor:
@@ -392,10 +486,18 @@ class downscaler:
         Returns (C_y, H, W) or a CPU zeros tensor when no forcing data is configured.
         """
         if self.forcing_data is not None:
-            return self.preprocess(target_date, self.data["f"], self.vars_f, self.idx_vars_f,
-                                   self.sample_map_f, ops=self._ops_f,
-                                   transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y,
-                                   to_device=False)
+            return self.preprocess(
+                target_date,
+                self.data["f"],
+                self.vars_f,
+                self.idx_vars_f,
+                self.sample_map_f,
+                ops=self._ops_f,
+                transform_to_2D=self.transform_to_2D_y,
+                H=self.H_y,
+                W=self.W_y,
+                to_device=False,
+            )
         Cy = len(self.vars_y)
         spatial = [self.H_y, self.W_y] if self.transform_to_2D_y else [self.G_y]
         return torch.zeros(Cy, *spatial)  # CPU; caller transfers to device
@@ -423,14 +525,16 @@ class downscaler:
             return amp_dtype if amp_dtype != torch.float32 else None
         if isinstance(amp_dtype, str):
             return _AMP_DTYPES.get(amp_dtype.lower(), None)
-        raise TypeError(f"amp_dtype must be str, None, or torch.dtype; got {type(amp_dtype)}")
+        raise TypeError(
+            f"amp_dtype must be str, None, or torch.dtype; got {type(amp_dtype)}"
+        )
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def _amp_ctx(self):
         """Autocast context for mixed-precision inference, or nullcontext if disabled."""
         if self._amp_dtype is None or not self._cuda:
             return nullcontext()
-        return torch.autocast(device_type='cuda', dtype=self._amp_dtype)
+        return torch.autocast(device_type="cuda", dtype=self._amp_dtype)
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def _maybe_compile(self, model, compile_flag):
@@ -442,7 +546,7 @@ class downscaler:
         if not compile_flag or self._is_compiled:
             return model
         try:
-            compiled = torch.compile(model, dynamic=True, mode='reduce-overhead')
+            compiled = torch.compile(model, dynamic=True, mode="reduce-overhead")
             self._is_compiled = True
             log.info("Model compiled (torch.compile, dynamic=True, reduce-overhead)")
             return compiled
@@ -459,7 +563,9 @@ class downscaler:
         """
         if not self._cuda:
             return t_gpu  # already on CPU
-        out_cpu = torch.empty(t_gpu.shape, dtype=t_gpu.dtype, device='cpu', pin_memory=True)
+        out_cpu = torch.empty(
+            t_gpu.shape, dtype=t_gpu.dtype, device="cpu", pin_memory=True
+        )
         out_cpu.copy_(t_gpu, non_blocking=True)
         return out_cpu
 
@@ -483,7 +589,20 @@ class downscaler:
         return data
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def postprocess(self, date, data, vars, member, operator=None, normalizer=None, lats=None, lons=None, template=None, func=None, kwargs=None):
+    def postprocess(
+        self,
+        date,
+        data,
+        vars,
+        member,
+        operator=None,
+        normalizer=None,
+        lats=None,
+        lons=None,
+        template=None,
+        func=None,
+        kwargs=None,
+    ):
         """
         Postprocesses model output: denormalization, deoperator, formatting, and conversion to xarray.
         The operator/normalizer/func/kwargs arguments are kept for API compatibility but are no longer
@@ -491,13 +610,22 @@ class downscaler:
         """
         data = self._postprocess_numpy(data)
         date = np.datetime64(date)
-        ds_pred = from_pred_to_xarray(data, date, vars, lats, lons, template, self.H_y, self.W_y)
+        ds_pred = from_pred_to_xarray(
+            data, date, vars, lats, lons, template, self.H_y, self.W_y
+        )
         ds_pred = ds_pred.assign_coords({"member": member})
         return ds_pred
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def downscale(self, model=None, return_pred=False, verbose=True,
-                  batch_size=1, amp_dtype=None, compile=False):
+    def downscale(
+        self,
+        model=None,
+        return_pred=False,
+        verbose=True,
+        batch_size=1,
+        amp_dtype=None,
+        compile=False,
+    ):
         """
         Runs the downscaling process: preprocesses input, predicts, postprocesses, and saves or returns output.
 
@@ -540,18 +668,28 @@ class downscaler:
         # runs on CPU and its forward starts on GPU. We only sync just before
         # we need the previous batch's bytes for postprocess.
         all_preds = []
-        pending_cpu = None      # async D2H buffer from the previous batch
+        pending_cpu = None  # async D2H buffer from the previous batch
 
         for b_idx in range(n_batches):
             i = b_idx * batch_size
             batch_dates = self.target_dates[i : i + batch_size]
             if verbose:
-                log.info("Batch %d/%d: %s → %s (%d dates)",
-                         b_idx + 1, n_batches, batch_dates[0], batch_dates[-1], len(batch_dates))
+                log.info(
+                    "Batch %d/%d: %s → %s (%d dates)",
+                    b_idx + 1,
+                    n_batches,
+                    batch_dates[0],
+                    batch_dates[-1],
+                    len(batch_dates),
+                )
 
             # -- Preprocess on CPU then one transfer to GPU --
-            inp = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, ..., H, W)
-            f   = self._stack_to_device([self._preprocess_forcing_date(d) for d in batch_dates]) # (B, Cy, ...)
+            inp = self._stack_to_device(
+                [self._preprocess_single_date(d) for d in batch_dates]
+            )  # (B, ..., H, W)
+            f = self._stack_to_device(
+                [self._preprocess_forcing_date(d) for d in batch_dates]
+            )  # (B, Cy, ...)
 
             # -- GPU-side normalization (mirrors trainer) --
             if self.norm_x is not None:
@@ -562,7 +700,9 @@ class downscaler:
             # -- Predict --
             with torch.inference_mode(), self._amp_ctx():
                 if self.graph is not None:
-                    p_torch = self.graphPredict(x=inp, edge_index=self.edge_index, model=model, f=f)
+                    p_torch = self.graphPredict(
+                        x=inp, edge_index=self.edge_index, model=model, f=f
+                    )
                 else:
                     p_torch = model(inp, f)
 
@@ -578,7 +718,9 @@ class downscaler:
                 if self._cuda:
                     torch.cuda.synchronize()
                 all_preds.append(self._postprocess_numpy(pending_cpu.numpy()))
-            pending_cpu = self._async_d2h(p_torch.float())  # cast back to float32 for numpy postprocess
+            pending_cpu = self._async_d2h(
+                p_torch.float()
+            )  # cast back to float32 for numpy postprocess
             del inp, f, p_torch
 
         # Final flush
@@ -590,8 +732,14 @@ class downscaler:
         # -- Build xarray ONCE; broadcast across ensemble dim --
         all_preds_np = np.concatenate(all_preds, axis=0)  # (T, C, G)
         ds = from_pred_to_xarray(
-            all_preds_np, all_dates_np, self.vars_y,
-            self.lats, self.lons, self.template, self.H_y, self.W_y,
+            all_preds_np,
+            all_dates_np,
+            self.vars_y,
+            self.lats,
+            self.lons,
+            self.template,
+            self.H_y,
+            self.W_y,
             precomputed_mask=self._template_mask,
         )
         if self.ensemble_size > 1:
@@ -606,5 +754,3 @@ class downscaler:
             return ds
         log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds)
         ds.to_netcdf(self.output_path)
-
-

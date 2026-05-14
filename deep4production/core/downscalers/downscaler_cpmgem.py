@@ -33,6 +33,7 @@ Authors:
 import numpy as np
 import torch
 import xarray as xr
+
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.utils.trans import from_pred_to_xarray
@@ -100,14 +101,20 @@ class downscaler_custom(downscaler):
         meta_noise = self.metadata.get("training_params", {}).get("noise_params", {})
         sp = sampling_params or {}
 
-        self.beta_min  = float(sp.get("beta_min",  meta_noise.get("beta_min",  0.1)))
-        self.beta_max  = float(sp.get("beta_max",  meta_noise.get("beta_max",  20.0)))
-        self.t_min     = float(sp.get("t_min",     1e-3))
-        self.num_steps = int(sp.get("num_steps",   500))
-        self.denoise   = bool(sp.get("denoise",    True))
+        self.beta_min = float(sp.get("beta_min", meta_noise.get("beta_min", 0.1)))
+        self.beta_max = float(sp.get("beta_max", meta_noise.get("beta_max", 20.0)))
+        self.t_min = float(sp.get("t_min", 1e-3))
+        self.num_steps = int(sp.get("num_steps", 500))
+        self.denoise = bool(sp.get("denoise", True))
 
-        log.info("CPMGEM sampler: beta_min=%g beta_max=%g t_min=%g steps=%d denoise=%s",
-                 self.beta_min, self.beta_max, self.t_min, self.num_steps, self.denoise)
+        log.info(
+            "CPMGEM sampler: beta_min=%g beta_max=%g t_min=%g steps=%d denoise=%s",
+            self.beta_min,
+            self.beta_max,
+            self.t_min,
+            self.num_steps,
+            self.denoise,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     def _sde_coeffs(self, t: torch.Tensor):
@@ -120,11 +127,11 @@ class downscaler_custom(downscaler):
         g2     : scalar – g²(t) = β(t)(1 − e^{−2B(t)})            (sub-VP)
         std_t  : scalar – σ(t)  = 1 − e^{−B(t)}                   (sub-VP)
         """
-        beta_t    = self.beta_min + (self.beta_max - self.beta_min) * t
-        B_t       = self.beta_min * t + 0.5 * (self.beta_max - self.beta_min) * t ** 2
+        beta_t = self.beta_min + (self.beta_max - self.beta_min) * t
+        B_t = self.beta_min * t + 0.5 * (self.beta_max - self.beta_min) * t**2
         exp_neg_B = torch.exp(-B_t)
-        std_t     = (1.0 - exp_neg_B).clamp(min=1e-10)
-        g2        = beta_t * (1.0 - exp_neg_B * exp_neg_B)
+        std_t = (1.0 - exp_neg_B).clamp(min=1e-10)
+        g2 = beta_t * (1.0 - exp_neg_B * exp_neg_B)
         return beta_t, g2, std_t
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -155,7 +162,7 @@ class downscaler_custom(downscaler):
         y_{t-dt} : (B, C_y, H_y, W_y)
         """
         B = y_t.shape[0]
-        t_batch = t_scalar.expand(B)                    # (B,)
+        t_batch = t_scalar.expand(B)  # (B,)
 
         # Predict noise  ε̂ = model(y_t, cond_low=x_cond, t · 999)
         # SongUNet signature: (x, t, cond_low, cond_high). The 999 factor
@@ -178,7 +185,7 @@ class downscaler_custom(downscaler):
 
         if add_noise:
             noise_std = torch.sqrt((g2 * dt).clamp(min=0.0))
-            y_next    = y_next + noise_std * torch.randn_like(y_t)
+            y_next = y_next + noise_std * torch.randn_like(y_t)
 
         return y_next
 
@@ -197,7 +204,7 @@ class downscaler_custom(downscaler):
         -------
         (B, C_y, H_y, W_y)  — all B dates sampled in parallel on the GPU
         """
-        B   = x_cond.shape[0]
+        B = x_cond.shape[0]
         C_y = len(self.vars_y)
         y_t = torch.randn(B, C_y, self.H_y, self.W_y, device=self.device)
 
@@ -207,17 +214,29 @@ class downscaler_custom(downscaler):
         for i, t in enumerate(ts[:-1]):
             # Suppress noise on the very last step when denoise=True.
             # This "tweedie" denoising step reduces residual variance.
-            last_step = (i == self.num_steps - 1)
-            add_noise  = not (last_step and self.denoise)
+            last_step = i == self.num_steps - 1
+            add_noise = not (last_step and self.denoise)
             y_t = self._reverse_step(y_t, x_cond, t, dt, model, add_noise=add_noise)
 
-        log.debug("y_0 min=%.3f max=%.3f mean=%.3f std=%.3f",
-                  float(y_t.min()), float(y_t.max()), float(y_t.mean()), float(y_t.std()))
+        log.debug(
+            "y_0 min=%.3f max=%.3f mean=%.3f std=%.3f",
+            float(y_t.min()),
+            float(y_t.max()),
+            float(y_t.mean()),
+            float(y_t.std()),
+        )
         return y_t
 
     # ─────────────────────────────────────────────────────────────────────────
-    def downscale(self, model=None, return_pred=False, verbose=True,
-                  batch_size=1, amp_dtype=None, compile=False):
+    def downscale(
+        self,
+        model=None,
+        return_pred=False,
+        verbose=True,
+        batch_size=1,
+        amp_dtype=None,
+        compile=False,
+    ):
         """
         Override base ``downscale``: runs reverse-diffusion sampling.
 
@@ -260,11 +279,20 @@ class downscaler_custom(downscaler):
             i = b_idx * batch_size
             batch_dates = self.target_dates[i : i + batch_size]
             if verbose:
-                log.info("Batch %d/%d: %s → %s (%d dates) x %d member(s)",
-                         b_idx + 1, n_batches, batch_dates[0], batch_dates[-1], len(batch_dates), M)
+                log.info(
+                    "Batch %d/%d: %s → %s (%d dates) x %d member(s)",
+                    b_idx + 1,
+                    n_batches,
+                    batch_dates[0],
+                    batch_dates[-1],
+                    len(batch_dates),
+                    M,
+                )
 
             # ── Preprocess once per date batch ───────────────────────────────
-            inp = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
+            inp = self._stack_to_device(
+                [self._preprocess_single_date(d) for d in batch_dates]
+            )  # (B, C_x, H_x, W_x)
 
             # ── GPU-side input normalization (mirrors trainer_cpmgem) ─────────
             # The diffusion UNet was trained on normalized predictors via
@@ -296,8 +324,14 @@ class downscaler_custom(downscaler):
         for m, buf in enumerate(member_buffers):
             all_preds_np = np.concatenate(buf, axis=0)  # (T, C, G)
             ds_member = from_pred_to_xarray(
-                all_preds_np, all_dates_np, self.vars_y,
-                self.lats, self.lons, self.template, self.H_y, self.W_y,
+                all_preds_np,
+                all_dates_np,
+                self.vars_y,
+                self.lats,
+                self.lons,
+                self.template,
+                self.H_y,
+                self.W_y,
                 precomputed_mask=self._template_mask,
             )
             ds_member = ds_member.assign_coords({"member": m})

@@ -7,9 +7,9 @@ id_dir: your_id_dir             # e.g., /outputs/resdiff
 ##### INPUT DATA #####
 input_data:
   paths:
-    - path_to_your_x_file_1.zarr
-    - path_to_your_x_file_2.zarr
-    - ...
+  - path_to_your_x_file_1.zarr
+  - path_to_your_x_file_2.zarr
+  - '...'
   years: [1981, 1982, 1983]
   load_in_memory: true
 
@@ -19,7 +19,7 @@ input_data:
 # Gaussian noise, so ensemble_size > 1 produces independent realisations.
 ensemble_size: 6
 
-graph: null
+graph:
 
 
 ##### MODEL CHECKPOINT #####
@@ -69,7 +69,7 @@ d4p_downscaler:
 ##### OUTPUT #####
 saving_info:
   file: ResDiff_1981-1983.nc     # saved at id_dir/predictions/
-  template: null
+  template:
   # formatting:
   #   name: null
   #   kwargs:
@@ -91,5 +91,5 @@ saving_info:
 #                amortise the compile cost per date batch.
 inference_params:
   batch_size: 4
-  amp_dtype: null
+  amp_dtype:
   compile: false

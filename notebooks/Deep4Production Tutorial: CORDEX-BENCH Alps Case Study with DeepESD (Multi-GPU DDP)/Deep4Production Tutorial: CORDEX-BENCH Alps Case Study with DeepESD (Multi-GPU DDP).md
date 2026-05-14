@@ -5,31 +5,31 @@ This tutorial picks up where the single-GPU [DeepESD tutorial](../Deep4Productio
 The dataset preparation (`d4p-create`) and inference (`d4p-downscale`) steps are unchanged; only the training step is parallelized. We will:
 
 1. Recall how DDP works conceptually and what the global batch size becomes.
-2. Show the new `hardware` section in the training YAML.
-3. Launch the training with `sbatch` / `srun` on SLURM.
-4. Verify the run scaled correctly (loss curves, per-rank logs, MLflow).
+1. Show the new `hardware` section in the training YAML.
+1. Launch the training with `sbatch` / `srun` on SLURM.
+1. Verify the run scaled correctly (loss curves, per-rank logs, MLflow).
 
----
+______________________________________________________________________
 
 ## 1. What changes when we move from 1 → N GPUs?
 
 `deep4production` uses standard **PyTorch DistributedDataParallel**:
 
-* Each GPU runs an **identical copy** of the model with its own optimizer state.
-* The training dataset is sharded across ranks by a `DistributedSampler`, so each GPU sees a different subset of samples per epoch.
-* After every backward pass, gradients are **all-reduced** across ranks so every replica steps in lockstep. The mathematical effect is equivalent to training with a larger batch size.
+- Each GPU runs an **identical copy** of the model with its own optimizer state.
+- The training dataset is sharded across ranks by a `DistributedSampler`, so each GPU sees a different subset of samples per epoch.
+- After every backward pass, gradients are **all-reduced** across ranks so every replica steps in lockstep. The mathematical effect is equivalent to training with a larger batch size.
 
 Concretely, if the recipe has `dataloader.batch_size: 64` and we launch with `num_nodes=2` and `gpus_per_node=4`:
 
-* per-GPU local batch: **64 samples**
-* global batch (effective): **64 × 2 × 4 = 512 samples per optimizer step**
-* dataset sharding: each GPU iterates over ⌈N/8⌉ samples per epoch.
+- per-GPU local batch: **64 samples**
+- global batch (effective): **64 × 2 × 4 = 512 samples per optimizer step**
+- dataset sharding: each GPU iterates over ⌈N/8⌉ samples per epoch.
 
 Because the global batch grows linearly with the number of ranks, you typically want to scale the **learning rate** with the world size (the classic *linear LR scaling rule*) — e.g. multiply `optimizer_params.lr` by `num_nodes * gpus_per_node` as a starting point.
 
 Only **rank 0** writes checkpoints, talks to MLflow, and emits per-epoch log lines. All other ranks are silent on stdout/stderr so SLURM logs stay readable.
 
----
+______________________________________________________________________
 
 ## 2. The `hardware` section in the training YAML
 
@@ -114,7 +114,7 @@ model_info:
 
 That is the **only** change to the recipe. The model, dataset, normalizer, loss, and MLflow blocks are identical to the single-GPU version.
 
----
+______________________________________________________________________
 
 ## 3. Launching on SLURM
 
@@ -162,7 +162,7 @@ The arguments must match the recipe:
 
 If `num_nodes * gpus_per_node == 1` (the default), `init_distributed()` short-circuits before touching `dist`, so single-GPU and CPU training paths remain unchanged.
 
----
+______________________________________________________________________
 
 ## 4. What rank 0 prints
 
@@ -182,7 +182,7 @@ The log on the rank-0 task looks like this (the others are silent):
 
 `Step` here counts **per-rank** optimizer steps. With a global batch of `batch_size * world_size`, fewer steps per epoch means each step makes more progress — set the LR accordingly.
 
----
+______________________________________________________________________
 
 ## 5. Checkpoints and inference are unchanged
 
@@ -194,15 +194,15 @@ d4p-downscale ./inference/configs/deepesd.yaml
 
 If you trained on DDP and want to resume on a single GPU later, just omit the `hardware` block (or set both to 1) and point `saving_params.resume_checkpoint` at the saved file.
 
----
+______________________________________________________________________
 
 ## 6. Quick sanity checks before going to many GPUs
 
 A good rule of thumb is to **always confirm a 2-GPU run on one node first** before requesting a full multi-node allocation. On 2 GPUs you can verify:
 
 1. The per-epoch log line is printed once (rank-0 only).
-2. Train/val losses are roughly comparable to the single-GPU run when the LR is scaled.
-3. The best-model checkpoint loads back into `d4p-downscale`.
+1. Train/val losses are roughly comparable to the single-GPU run when the LR is scaled.
+1. The best-model checkpoint loads back into `d4p-downscale`.
 
 For a 2-GPU one-node sanity run, the YAML and sbatch are:
 
@@ -218,7 +218,7 @@ sbatch --nodes=1 --ntasks-per-node=2 --gres=gpu:2 ../recipes/training/launch_ddp
 
 Once that passes, move to the full configuration.
 
----
+______________________________________________________________________
 
 ## 7. Troubleshooting
 
@@ -230,7 +230,7 @@ Once that passes, move to the full configuration.
 | `find_unused_parameters` warning                       | A forward pass leaves some parameters un-touched      | Set `model_info.training_params.ddp_find_unused_parameters: true`.               |
 | Non-rank-0 logs flood the SLURM file                   | `setup_logging` ran before DDP init                   | Verify you're using the shipped `d4p-train` CLI (it silences non-zero ranks).    |
 
----
+______________________________________________________________________
 
 ## 8. Summary
 

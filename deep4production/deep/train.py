@@ -4,12 +4,6 @@ This module contains the functions for training deep learning models.
 Author: Jose González-Abad
 """
 
-import os
-import copy
-import numpy as np
-import time
-import math
-import torch
 
 # def standard_training_loop(model: torch.nn.Module, model_name: str, model_path: str,
 #                            loss_function: torch.nn.Module, optimizer: torch.optim,
@@ -57,7 +51,7 @@ import torch
 
 #     # Iterate over epochs
 #     for epoch in range(num_epochs):
-        
+
 #         epoch_start = time.time()
 #         epoch_train_loss.append(0)
 
@@ -72,7 +66,7 @@ import torch
 
 #             optimizer.zero_grad()
 
-#             if mixed_precision: 
+#             if mixed_precision:
 #                 with torch.amp.autocast(device_type=device):
 #                     output = model(x)
 #                     loss = loss_function(target=y, output=output)
@@ -84,7 +78,7 @@ import torch
 #                 # print(f"pred_shape: {output.shape}")
 #                 loss = loss_function(target=y, output=output)
 #                 # print(f"loss: {loss}")
-#                 loss.backward()               
+#                 loss.backward()
 #                 optimizer.step()
 
 #             epoch_train_loss[-1] += loss.item()
@@ -101,15 +95,15 @@ import torch
 #             for x, y in valid_data:
 
 #                 x = x.to(device)
-#                 y = y.to(device)    
+#                 y = y.to(device)
 
-#                 if mixed_precision: 
+#                 if mixed_precision:
 #                     with torch.amp.autocast(device_type=device):
 #                         output = model(x)
 #                         loss = loss_function(target=y, output=output)
 #                 else:
 #                         output = model(x)
-#                         loss = loss_function(target=y, output=output)                    
+#                         loss = loss_function(target=y, output=output)
 
 #                 epoch_valid_loss[-1] += loss.item()
 
@@ -121,9 +115,9 @@ import torch
 
 #         # Build log message
 #         log_msg = f'Epoch {epoch+1} ({epoch_time} secs) | Training Loss {np.round(epoch_train_loss[-1], 4)}'
-#         if valid_data is not None: 
+#         if valid_data is not None:
 #             log_msg = log_msg + f' Valid Loss {np.round(epoch_valid_loss[-1], 4)}'
-        
+
 #         # Step the scheduler if provided
 #         if scheduler is not None:
 #             # If scheduler is ReduceLROnPlateau, it needs the validation loss
@@ -134,7 +128,7 @@ import torch
 #                     scheduler.step(epoch_train_loss[-1])
 #             else:
 #                 scheduler.step()
-            
+
 #             # Add current learning rate to log message
 #             current_lr = scheduler.get_last_lr()[0] if not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau) else optimizer.param_groups[0]['lr']
 #             log_msg = log_msg + f' | LR {current_lr:.2e}'
@@ -161,7 +155,7 @@ import torch
 #             log_msg = log_msg + ' (Model saved)'
 #             torch.save(model.state_dict(),
 #                        os.path.expanduser(f'{model_path}/{model_name}.pt'))
-        
+
 #         # Print log
 #         print(log_msg)
 
@@ -170,5 +164,3 @@ import torch
 #         return epoch_train_loss, epoch_valid_loss
 #     else:
 #         return epoch_train_loss, None
-
-

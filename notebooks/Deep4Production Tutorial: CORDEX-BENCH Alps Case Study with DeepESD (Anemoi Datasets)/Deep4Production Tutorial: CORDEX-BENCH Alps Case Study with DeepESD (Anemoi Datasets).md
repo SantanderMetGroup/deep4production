@@ -2,7 +2,7 @@
 
 This tutorial demonstrates how to use **anemoi-datasets** as the data-ingest backend for the [deep4production](https://github.com/SantanderMetGroup/deep4production) framework. It covers the same CORDEX-BENCH Alps / DeepESD case study as the companion notebook, but replaces `d4p-create` with `anemoi-datasets create` to produce the AI-ready Zarr stores. All downstream steps (`d4p-inspect`, `d4p-train`, `d4p-downscale`) are unchanged — a single `format: anemoi` key in the YAML configuration is all that is needed to tell deep4production to read anemoi Zarr stores.
 
----
+______________________________________________________________________
 
 ## 1. Introduction
 
@@ -11,11 +11,13 @@ This tutorial demonstrates how to use **anemoi-datasets** as the data-ingest bac
 [anemoi-datasets](https://github.com/ecmwf/anemoi-datasets) is ECMWF's open-source library for building AI-ready datasets for weather and climate applications. It natively supports a wide variety of data sources (GRIB, NetCDF, MARS, OpenDAP, Zarr, …), applies CF-convention coordinate auto-detection, handles multi-source joins, and computes statistics in a single pass.
 
 Use `anemoi-datasets create` instead of `d4p-create` when:
+
 - Your team already produces anemoi Zarr stores for other workflows (e.g., [anemoi-training](https://github.com/ecmwf/anemoi-training))
 - You need to ingest data from MARS, GRIB, or remote object stores that `d4p-create` does not support
 - You want to leverage anemoi's built-in source ecosystem (accumulations, recentering, multi-member ensembles, …)
 
 Use `d4p-create` when:
+
 - You are working exclusively with local NetCDF files and do not need anemoi's extended source ecosystem
 - You need to ingest static (time-independent) fields such as orography — `d4p-create` handles time-free variables natively
 - You prefer a simpler, single-tool pipeline
@@ -43,7 +45,7 @@ This tutorial uses the following CLIs:
 | `d4p-train` | Train a deep learning downscaling model |
 | `d4p-downscale` | Run inference with a trained model |
 
----
+______________________________________________________________________
 
 ## 2. Case Study: CORDEX-BENCH Alps
 
@@ -56,7 +58,7 @@ This tutorial uses the same simplified CORDEX-BENCH configuration as the compani
 - **Training period:** 1961–1980 (excluding 1967, 1975 held out for validation)
 - **Test period:** 1980
 
----
+______________________________________________________________________
 
 ## 3. Download CORDEX-BENCH Alps Data
 
@@ -80,13 +82,14 @@ with zipfile.ZipFile('./source_files/data_zenodo/ALPS_domain.zip', 'r') as zip_r
 os.remove("./source_files/data_zenodo/ALPS_domain.zip")
 ```
 
----
+______________________________________________________________________
 
 ## 4. Build AI-Ready Zarr Stores with `anemoi-datasets create`
 
 ### How anemoi-datasets works
 
 `anemoi-datasets create` reads a **recipe YAML** that describes:
+
 - The **date range** and **frequency** of the dataset
 - The **input sources** (NetCDF, GRIB, MARS, …) and how to map their coordinates
 - The **statistics** time window (for mean, std, min, max)
@@ -191,7 +194,7 @@ anemoi-datasets create \
 
 > **Note.** This Zarr contains `pr` and `tasmax`. The static orography field (`orog`) lives in a separate time-independent file that `anemoi-datasets` cannot ingest directly. The `forcings` block in the training YAML is therefore commented out in this tutorial (it was already commented out in the companion notebook). If you need `orog` as a forcing, create a separate d4p Zarr with `d4p-create` and reference it with `format: d4p` in the training YAML.
 
----
+______________________________________________________________________
 
 ## 5. Inspect the Zarr Stores with `d4p-inspect`
 
@@ -204,7 +207,7 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr     # Predictands
 
 The output is identical to the d4p-native format: variable names, spatial dimensions, temporal range, stored statistics, and missing-value counts. This confirms that the anemoi adapter exposes all the information that d4p needs.
 
----
+______________________________________________________________________
 
 ## 6. Train a Model with `d4p-train`
 
@@ -296,7 +299,7 @@ d4p-train ./training/configs/deepesd_anemoi.yaml
 
 Training output, model saving, early stopping, and optional MLflow integration are identical to the companion notebook. Refer to Section 6 of that notebook for a full description.
 
----
+______________________________________________________________________
 
 ## 7. Run Inference with `d4p-downscale`
 
@@ -338,7 +341,7 @@ d4p-downscale ./inference/configs/deepesd_anemoi.yaml
 
 The output NetCDF file `./outputs/deepesd/predictions/1980.nc` has the same structure as in the companion notebook and can be opened with `xarray` identically.
 
----
+______________________________________________________________________
 
 ## 8. Visualization
 
@@ -376,7 +379,7 @@ kwargs.update({"data": [tgt[var], prd[var]]})
 fig = plot_date_from_1D_spatial_field(**kwargs)
 ```
 
----
+______________________________________________________________________
 
 ## 9. Summary: d4p-create vs. anemoi-datasets
 
@@ -392,12 +395,13 @@ fig = plot_date_from_1D_spatial_field(**kwargs)
 | Model outputs | same | same |
 
 You have now completed the full deep4production workflow using anemoi-datasets as the data-ingest backend with the DeepESD model for the CORDEX-BENCH Alps case study:
+
 - Built AI-ready Zarr stores with `anemoi-datasets create`
 - Inspected the anemoi Zarr stores with `d4p-inspect`
 - Trained a DeepESD model with `d4p-train` reading anemoi Zarrs
 - Performed inference with `d4p-downscale` reading anemoi Zarrs
 
----
+______________________________________________________________________
 
 ## 10. References
 

@@ -1,4 +1,3 @@
-import sys
 import argparse
 from deep4production.utils.zarr import zarr_inspect
 
@@ -10,7 +9,8 @@ def main():
     )
     parser.add_argument("zarr_path", help="Path to the zarr store.")
     parser.add_argument(
-        "--format", "-f",
+        "--format",
+        "-f",
         choices=["auto", "d4p", "anemoi"],
         default="auto",
         dest="fmt",

@@ -1,44 +1,51 @@
 [build-system]
-requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61.0"]
 
 [project]
-name = "d4p"
-version = "0.0"
+authors = [{name = "Santander MetGroup"}]
+dependencies = [
+  # Core libraries
+  "anemoi-datasets==0.5.36",
+  "numpy",
+  "pandas<3.0",
+  "scikit-learn",
+  "scipy",
+  "xarray",
+  "netcdf4",
+  "h5py",
+  "zarr<=2.18.7",
+  "cftime",
+  "numcodecs",
+  "cartopy",
+  "matplotlib",
+  "pyyaml",
+  # Deep Learning
+  "torch",
+  "torchvision",
+  "torch-geometric",
+  # ML / Analytics
+  "mlflow"
+]
 description = ""
+name = "d4p"
 readme = "README.md"
 requires-python = ">=3.13"
-authors = [{ name = "Santander MetGroup" }]
-dependencies = [
-    # Core libraries
-    "anemoi-datasets==0.5.36",
-    "numpy",
-    "pandas",
-    "scikit-learn",
-    "scipy",
-    "xarray",
-    "netcdf4",
-    "h5py",
-    "zarr<=2.18.7",
-    "cftime",
-    "numcodecs",
-    "cartopy",
-    "cartopy",
+version = "0.0.1"
 
-    # Deep Learning
-    "torch",
-    "torchvision",
-    "torch-geometric",
+[project.scripts]
+d4p-create = "deep4production.cli.create:main"
+d4p-downscale = "deep4production.cli.downscale:main"
+d4p-inspect = "deep4production.cli.inspect:main"
+d4p-train = "deep4production.cli.train:main"
 
-    # ML / Analytics
-    "mlflow",
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version = "0.0.1"
+version_files = [
+  "pyproject.toml:version"
 ]
 
 [tool.setuptools]
 packages = ["deep4production"]
-
-[project.scripts]
-d4p-train = "deep4production.cli.train:main"
-d4p-downscale = "deep4production.cli.downscale:main"
-d4p-inspect = "deep4production.cli.inspect:main"
-d4p-create = "deep4production.cli.create:main"
