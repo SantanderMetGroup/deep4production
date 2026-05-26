@@ -40,6 +40,7 @@ Author:
 import numpy as np
 import torch
 import xarray as xr
+
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.deep.utils import load_model
@@ -92,11 +93,11 @@ class downscaler_custom(downscaler):
         self.num_steps = int(sp.get("num_steps", 18))
         self.sigma_min = float(sp.get("sigma_min", meta_noise.get("sigma_min", 0.002)))
         self.sigma_max = float(sp.get("sigma_max", meta_noise.get("sigma_max", 80.0)))
-        self.rho       = float(sp.get("rho",       7.0))
-        self.S_churn   = float(sp.get("S_churn",   0.0))
-        self.S_min     = float(sp.get("S_min",     0.0))
-        self.S_max     = float(sp.get("S_max",     float("inf")))
-        self.S_noise   = float(sp.get("S_noise",   1.0))
+        self.rho = float(sp.get("rho", 7.0))
+        self.S_churn = float(sp.get("S_churn", 0.0))
+        self.S_min = float(sp.get("S_min", 0.0))
+        self.S_max = float(sp.get("S_max", float("inf")))
+        self.S_noise = float(sp.get("S_noise", 1.0))
 
         # ── Regressor (the deterministic mean-prediction network) ──────────────
         # Path priority: YAML override  >  training metadata  >  error.
@@ -111,8 +112,14 @@ class downscaler_custom(downscaler):
         self.regressor.to(self.device).eval()
         log.info("Regressor loaded from %s", reg_path)
 
-        log.info("ResDiff sampler: steps=%d sigma=[%g, %g] rho=%g S_churn=%g",
-                 self.num_steps, self.sigma_min, self.sigma_max, self.rho, self.S_churn)
+        log.info(
+            "ResDiff sampler: steps=%d sigma=[%g, %g] rho=%g S_churn=%g",
+            self.num_steps,
+            self.sigma_min,
+            self.sigma_max,
+            self.rho,
+            self.S_churn,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     def _sigmas(self) -> torch.Tensor:
@@ -123,9 +130,11 @@ class downscaler_custom(downscaler):
         N = self.num_steps
         ramp = torch.linspace(0, 1, N, device=self.device)
         inv_rho = 1.0 / self.rho
-        sigmas = (self.sigma_max ** inv_rho
-                  + ramp * (self.sigma_min ** inv_rho - self.sigma_max ** inv_rho)) ** self.rho
-        return torch.cat([sigmas, torch.zeros(1, device=self.device)])   # (N+1,)
+        sigmas = (
+            self.sigma_max**inv_rho
+            + ramp * (self.sigma_min**inv_rho - self.sigma_max**inv_rho)
+        ) ** self.rho
+        return torch.cat([sigmas, torch.zeros(1, device=self.device)])  # (N+1,)
 
     # ─────────────────────────────────────────────────────────────────────────
     @torch.inference_mode()
@@ -151,28 +160,35 @@ class downscaler_custom(downscaler):
         x = torch.randn(shape, device=self.device) * sigmas[0]
 
         for i in range(self.num_steps):
-            sigma_cur  = sigmas[i]
+            sigma_cur = sigmas[i]
             sigma_next = sigmas[i + 1]
 
             # Stochastic churn: σ_cur → σ_hat = σ_cur·(1 + γ)
-            gamma = min(self.S_churn / self.num_steps, 2 ** 0.5 - 1) \
-                    if self.S_min <= sigma_cur <= self.S_max else 0.0
+            gamma = (
+                min(self.S_churn / self.num_steps, 2**0.5 - 1)
+                if self.S_min <= sigma_cur <= self.S_max
+                else 0.0
+            )
             sigma_hat = sigma_cur * (1.0 + gamma)
             if gamma > 0:
-                x = x + (sigma_hat ** 2 - sigma_cur ** 2).sqrt() * self.S_noise * torch.randn_like(x)
+                x = x + (
+                    sigma_hat**2 - sigma_cur**2
+                ).sqrt() * self.S_noise * torch.randn_like(x)
 
             # Euler step: d = (x − D(x, σ_hat)) / σ_hat
-            sigma_b  = sigma_hat.expand(B)
+            sigma_b = sigma_hat.expand(B)
             denoised = precond(x, sigma_b, cond_low=cond_low, cond_high=cond_high)
-            d_cur    = (x - denoised) / sigma_hat
-            x_next   = x + (sigma_next - sigma_hat) * d_cur
+            d_cur = (x - denoised) / sigma_hat
+            x_next = x + (sigma_next - sigma_hat) * d_cur
 
             # Heun 2nd-order correction (skip on the clean step σ_next = 0)
             if sigma_next > 0:
-                sigma_nb      = sigma_next.expand(B)
-                denoised_next = precond(x_next, sigma_nb, cond_low=cond_low, cond_high=cond_high)
-                d_next        = (x_next - denoised_next) / sigma_next
-                x_next        = x + (sigma_next - sigma_hat) * 0.5 * (d_cur + d_next)
+                sigma_nb = sigma_next.expand(B)
+                denoised_next = precond(
+                    x_next, sigma_nb, cond_low=cond_low, cond_high=cond_high
+                )
+                d_next = (x_next - denoised_next) / sigma_next
+                x_next = x + (sigma_next - sigma_hat) * 0.5 * (d_cur + d_next)
 
             x = x_next
 
@@ -182,14 +198,21 @@ class downscaler_custom(downscaler):
     @torch.inference_mode()
     def sample(self, c_low: torch.Tensor, c_high: torch.Tensor, model) -> torch.Tensor:
         """Draw residual samples r_hat for a batch of dates given (c_low, c_high)."""
-        C_y   = len(self.vars_y)
-        B     = c_low.shape[0]
+        C_y = len(self.vars_y)
+        B = c_low.shape[0]
         shape = (B, C_y, self.H_y, self.W_y)
         return self._edm_heun_sample(model, c_low, c_high, shape)
 
     # ─────────────────────────────────────────────────────────────────────────
-    def downscale(self, model=None, return_pred=False, verbose=True,
-                  batch_size=1, amp_dtype=None, compile=False):
+    def downscale(
+        self,
+        model=None,
+        return_pred=False,
+        verbose=True,
+        batch_size=1,
+        amp_dtype=None,
+        compile=False,
+    ):
         """
         Override base `downscale`: date-outer, member-inner.
 
@@ -224,11 +247,20 @@ class downscaler_custom(downscaler):
             i = b_idx * batch_size
             batch_dates = self.target_dates[i : i + batch_size]
             if verbose:
-                log.info("Batch %d/%d: %s → %s (%d dates) x %d member(s)",
-                         b_idx + 1, n_batches, batch_dates[0], batch_dates[-1], len(batch_dates), M)
+                log.info(
+                    "Batch %d/%d: %s → %s (%d dates) x %d member(s)",
+                    b_idx + 1,
+                    n_batches,
+                    batch_dates[0],
+                    batch_dates[-1],
+                    len(batch_dates),
+                    M,
+                )
 
             # ── Preprocess once per date batch ───────────────────────────────
-            c_low = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
+            c_low = self._stack_to_device(
+                [self._preprocess_single_date(d) for d in batch_dates]
+            )  # (B, C_x, H_x, W_x)
 
             # ── GPU-side input normalization (mirrors trainer + residuals build) ──
             # The regressor and the EDM model were both trained with normalized
@@ -242,18 +274,24 @@ class downscaler_custom(downscaler):
             # the actual low-res conditioning enters via cond_low.
             with torch.inference_mode(), self._amp_ctx():
                 B_cur = c_low.shape[0]
-                x_dummy = torch.zeros(B_cur, len(self.vars_y), self.H_y, self.W_y, device=self.device)
+                x_dummy = torch.zeros(
+                    B_cur, len(self.vars_y), self.H_y, self.W_y, device=self.device
+                )
                 t_dummy = torch.zeros(B_cur, device=self.device)
-                c_high = self.regressor(x=x_dummy, t=t_dummy, cond_low=c_low)   # (B, C_y, H_y, W_y)
+                c_high = self.regressor(
+                    x=x_dummy, t=t_dummy, cond_low=c_low
+                )  # (B, C_y, H_y, W_y)
 
             # ── Stochastic residual: one draw per member ─────────────────────
             for member in range(M):
                 with self._amp_ctx():
-                    r_hat = self.sample(c_low=c_low, c_high=c_high, model=model) # (B, C_y, H_y, W_y)
+                    r_hat = self.sample(
+                        c_low=c_low, c_high=c_high, model=model
+                    )  # (B, C_y, H_y, W_y)
                 # Combined prediction in normalised y-space → denormalize on GPU
                 # so it arrives in operator-applied space, which is what
                 # _postprocess_numpy expects (operator inverse runs on CPU).
-                p_gpu = (c_high + r_hat)
+                p_gpu = c_high + r_hat
                 if self.norm_y is not None:
                     p_gpu = self.norm_y.inverse_transform(p_gpu.float())
                 p_cpu = self._async_d2h(p_gpu.float())
@@ -269,8 +307,14 @@ class downscaler_custom(downscaler):
         for m, buf in enumerate(member_buffers):
             all_preds_np = np.concatenate(buf, axis=0)  # (T, C, G)
             ds_member = from_pred_to_xarray(
-                all_preds_np, all_dates_np, self.vars_y,
-                self.lats, self.lons, self.template, self.H_y, self.W_y,
+                all_preds_np,
+                all_dates_np,
+                self.vars_y,
+                self.lats,
+                self.lons,
+                self.template,
+                self.H_y,
+                self.W_y,
                 precomputed_mask=self._template_mask,
             )
             ds_member = ds_member.assign_coords({"member": m})

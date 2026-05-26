@@ -33,9 +33,20 @@ class trainer_custom(trainer):
     No extra YAML keys are required beyond the standard model_info block.
     """
 
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
-                 hardware=None):
+    def __init__(
+        self,
+        data,
+        dataloader,
+        id_dir,
+        model_info,
+        graph,
+        d4dpy,
+        Mlflow,
+        normalizer_info_x=None,
+        normalizer_info_y=None,
+        normalizer_info_f=None,
+        hardware=None,
+    ):
         super().__init__(
             data=data,
             dataloader=dataloader,
@@ -84,7 +95,7 @@ class trainer_custom(trainer):
         is_this_training : bool
         """
         x, y, _ = data
-        non_blocking = (self.device_type == "cuda")
+        non_blocking = self.device_type == "cuda"
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
         B = y.shape[0]
@@ -92,7 +103,7 @@ class trainer_custom(trainer):
         # --- GPU-side normalization ---
         x, y, _ = self._normalize_inputs(x=x, y=y)
 
-        t    = torch.zeros(B, device=device)
+        t = torch.zeros(B, device=device)
         x_in = torch.zeros_like(y)  # model conditions entirely via cond_low
 
         optimizer.zero_grad(set_to_none=True)

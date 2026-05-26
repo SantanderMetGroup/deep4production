@@ -8,7 +8,7 @@ d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_gnn4cd
   kwargs:
-    edge_index_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs/gnn4cd_asym/aux_files/edge_index.pt # File is created on the fly when the trainer is first run. 
+    edge_index_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs/gnn4cd_asym/aux_files/edge_index.pt # File is created on the fly when the trainer is first run.
 
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
@@ -18,21 +18,21 @@ data:
 
   predictors:
     paths:
-      - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr 
-    variables: null  # If null, uses all variables available in the zarrs. 
-    normalizer: 
-      path_reference: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr 
+    - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+    variables:       # If null, uses all variables available in the zarrs.
+    normalizer:
+      path_reference: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr
       default: mean_std # Applies this type of standardization to all the variables in the predictor set
     transform_to_2D: false
     num_lagged: 1
 
   predictands:
     paths:
-      - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr # If null, uses all variables available in the zarrs. 
+    - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr   # If null, uses all variables available in the zarrs.
     variables:
-      - pr
+    - pr
     transform_to_2D: false
-    operator: 
+    operator:
       pr: log1p
 
 
@@ -61,10 +61,10 @@ graph:
     nearest_neighbours_low_to_high: 9
 
 ##### TRAINING CONFIGURATION #####
-model_info: 
+model_info:
   saving_params:
     model_save_name: gnn4cd_asym
-  loss_params: 
+  loss_params:
     name: Asym
     module: deep4production.deep.loss
     kwargs:
@@ -74,15 +74,15 @@ model_info:
       asym_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs/gnn4cd_asym/aux_files/
       asym_weight: 1
       cdf_pow: 2
-      appendix: null
-      ignore_nans: True
+      appendix:
+      ignore_nans: true
   model_params:
     name: GNN4CD
     module: deep4production.deep.models.gnn.GNN4CD
     # kwargs model
     kwargs:
       c_low: 15           # Number of low-res input features, i.e., predictor variables
-      c_high: null          # Number of high-res input features, i.e., high-res forcing variables such as elevation
+      c_high:               # Number of high-res input features, i.e., high-res forcing variables such as elevation
       c_rnn_out: 15
       num_layers_rnn: 2
       num_lagged_predictors: 1
@@ -95,7 +95,3 @@ model_info:
     patience_early_stopping: 20
     optimizer_params:
       lr: 0.0001
-
-
-
-

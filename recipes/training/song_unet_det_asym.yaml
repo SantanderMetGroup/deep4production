@@ -15,16 +15,15 @@ d4p_trainer:
 ##### TRAINING DATA CONFIGURATION #####
 data:
   load_in_memory: true
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
     paths:
-      - path_to_your_x_file_1.zarr
-      - path_to_your_x_file_2.zarr
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
       # Add more zarr files if predictors come from multiple sources
-    variables: null  # null → use all variables present in the zarrs
+    variables:       # null → use all variables present in the zarrs
     normalizer:
       path_reference: path_to_your_x_file_1.zarr  # zarr used to compute stats
       default: mean_std  # standardise each variable to zero mean / unit variance
@@ -32,9 +31,9 @@ data:
 
   predictands:
     paths:
-      - path_to_your_y_file.zarr
+    - path_to_your_y_file.zarr
     variables:
-      - pr  # single precipitation variable — Asym loss only supports C_y = 1
+    - pr    # single precipitation variable — Asym loss only supports C_y = 1
     # No operator / normalizer: the Asym loss fits a Gamma distribution directly
     # on the raw precipitation values and evaluates the CDF in physical space.
     # Adding a transform here would invalidate those Gamma parameters.
@@ -79,7 +78,7 @@ model_info:
       asym_weight: 1.0
       cdf_pow: 2.0
       threshold: 1.0   # mm/day — standard wet-day definition
-      appendix: null   # optional suffix for the cached Gamma parameter files
+      appendix:        # optional suffix for the cached Gamma parameter files
       ignore_nans: true
 
   # ── Architecture ──────────────────────────────────────────────────────────

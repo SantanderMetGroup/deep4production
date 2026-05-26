@@ -1,8 +1,11 @@
-import zarr
 import torch
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from deep4production.utils.zarr import open_zarr_store
+import torch.nn as nn
+import torch_geometric.nn as geometric_nn
+from torch_geometric.nn import GATv2Conv, GraphConv
+
 
 def build_graph(
     data_high: str,
@@ -63,15 +66,18 @@ def build_graph(
     k_hh = nearest_neighbours_high_to_high
     nn_high = NearestNeighbors(n_neighbors=k_hh + 1).fit(coords_high)
     _, idx_hh = nn_high.kneighbors(coords_high)
-    idx_hh = idx_hh[:, 1:]                                   # drop self column
+    idx_hh = idx_hh[:, 1:]  # drop self column
 
     # Build directed (i, j) pairs from kNN, then symmetrize for bidirectionality.
     src = np.repeat(np.arange(N_high), k_hh)
     dst = idx_hh.reshape(-1)
-    pairs = np.stack([
-        np.concatenate([src, dst]),
-        np.concatenate([dst, src]),
-    ], axis=0)
+    pairs = np.stack(
+        [
+            np.concatenate([src, dst]),
+            np.concatenate([dst, src]),
+        ],
+        axis=0,
+    )
     # Deduplicate (i, j) == (j, i) overlaps from symmetrisation.
     pairs = np.unique(pairs, axis=1)
     high_edges = torch.from_numpy(pairs).to(torch.long).contiguous()
@@ -81,23 +87,22 @@ def build_graph(
     # ------------------------------------------------------------
     k_lh = nearest_neighbours_low_to_high
     nn_low = NearestNeighbors(n_neighbors=k_lh).fit(coords_low)
-    _, idx_lh = nn_low.kneighbors(coords_high)               # (N_high, k_lh)
+    _, idx_lh = nn_low.kneighbors(coords_high)  # (N_high, k_lh)
 
     low_src = idx_lh.reshape(-1)
     high_dst = np.repeat(np.arange(N_high), k_lh)
-    low_to_high_edges = torch.from_numpy(
-        np.stack([low_src, high_dst], axis=0)
-    ).to(torch.long).contiguous()
+    low_to_high_edges = (
+        torch.from_numpy(np.stack([low_src, high_dst], axis=0))
+        .to(torch.long)
+        .contiguous()
+    )
 
     return low_to_high_edges, high_edges
 
 
-
 ###########################################################
 # Original code at: https://github.com/valebl/GNN4CD/blob/main/models/GNN4CD_model.py
-import torch.nn as nn
-import torch_geometric.nn as geometric_nn
-from torch_geometric.nn import GATv2Conv, GraphConv
+
 
 class GNN4CD(nn.Module):
     """
@@ -114,8 +119,19 @@ class GNN4CD(nn.Module):
         channels_downscaler_out (int): Channels for downscaler output.
         channels_downscaler_base (int): Base channels for downscaler.
     """
-    
-    def __init__(self, c_low, c_rnn_out, pred_dim=1, c_high=None, channels_downscaler_low_in=128, num_lagged_predictors=1, num_layers_rnn=2, channels_downscaler_out=64, channels_downscaler_base=64):
+
+    def __init__(
+        self,
+        c_low,
+        c_rnn_out,
+        pred_dim=1,
+        c_high=None,
+        channels_downscaler_low_in=128,
+        num_lagged_predictors=1,
+        num_layers_rnn=2,
+        channels_downscaler_out=64,
+        channels_downscaler_base=64,
+    ):
         super(GNN4CD, self).__init__()
 
         num_lagged_predictors += 1  # include current time step → sequence length
@@ -131,7 +147,7 @@ class GNN4CD(nn.Module):
         # remains valid when c_low != c_rnn_out.
         self.dense = nn.Sequential(
             nn.Linear(c_rnn_out * num_lagged_predictors, channels_downscaler_low_in),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
         # ── Downscaler: low → high GraphConv.
@@ -139,39 +155,103 @@ class GNN4CD(nn.Module):
         # land-use, day-of-year). When no high-node features are available, fall
         # back to 1 dummy channel so GraphConv's (src_ch, dst_ch) pair is valid.
         self.c_high = c_high if c_high else 1
-        self.downscaler = geometric_nn.Sequential('x, edge_index', [
-            (GraphConv(
-                (channels_downscaler_low_in, self.c_high),
-                out_channels=channels_downscaler_out,
-                aggr='mean',
-            ), 'x, edge_index -> x')
-        ])
-        
-        self.processor = geometric_nn.Sequential('x, edge_index', [
-            (geometric_nn.BatchNorm(channels_downscaler_out), 'x -> x'),
-            (GATv2Conv(in_channels=channels_downscaler_out, out_channels=channels_downscaler_base, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(channels_downscaler_base*2), 'x -> x'), 
-            nn.ReLU(),
-            (GATv2Conv(in_channels=channels_downscaler_base*2, out_channels=channels_downscaler_base, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(channels_downscaler_base*2), 'x -> x'),
-            nn.ReLU(),
-            (GATv2Conv(in_channels=channels_downscaler_base*2, out_channels=channels_downscaler_base, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(channels_downscaler_base*2), 'x -> x'),
-            nn.ReLU(),
-            (GATv2Conv(in_channels=channels_downscaler_base*2, out_channels=channels_downscaler_base, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(channels_downscaler_base*2), 'x -> x'),
-            nn.ReLU(),
-            (GATv2Conv(in_channels=channels_downscaler_base*2, out_channels=channels_downscaler_base, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
-            nn.ReLU(),
-            ])
-    
+        self.downscaler = geometric_nn.Sequential(
+            "x, edge_index",
+            [
+                (
+                    GraphConv(
+                        (channels_downscaler_low_in, self.c_high),
+                        out_channels=channels_downscaler_out,
+                        aggr="mean",
+                    ),
+                    "x, edge_index -> x",
+                )
+            ],
+        )
+
+        self.processor = geometric_nn.Sequential(
+            "x, edge_index",
+            [
+                (geometric_nn.BatchNorm(channels_downscaler_out), "x -> x"),
+                (
+                    GATv2Conv(
+                        in_channels=channels_downscaler_out,
+                        out_channels=channels_downscaler_base,
+                        heads=2,
+                        dropout=0.2,
+                        aggr="mean",
+                        add_self_loops=True,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                ),
+                (geometric_nn.BatchNorm(channels_downscaler_base * 2), "x -> x"),
+                nn.ReLU(),
+                (
+                    GATv2Conv(
+                        in_channels=channels_downscaler_base * 2,
+                        out_channels=channels_downscaler_base,
+                        heads=2,
+                        dropout=0.2,
+                        aggr="mean",
+                        add_self_loops=True,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                ),
+                (geometric_nn.BatchNorm(channels_downscaler_base * 2), "x -> x"),
+                nn.ReLU(),
+                (
+                    GATv2Conv(
+                        in_channels=channels_downscaler_base * 2,
+                        out_channels=channels_downscaler_base,
+                        heads=2,
+                        dropout=0.2,
+                        aggr="mean",
+                        add_self_loops=True,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                ),
+                (geometric_nn.BatchNorm(channels_downscaler_base * 2), "x -> x"),
+                nn.ReLU(),
+                (
+                    GATv2Conv(
+                        in_channels=channels_downscaler_base * 2,
+                        out_channels=channels_downscaler_base,
+                        heads=2,
+                        dropout=0.2,
+                        aggr="mean",
+                        add_self_loops=True,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                ),
+                (geometric_nn.BatchNorm(channels_downscaler_base * 2), "x -> x"),
+                nn.ReLU(),
+                (
+                    GATv2Conv(
+                        in_channels=channels_downscaler_base * 2,
+                        out_channels=channels_downscaler_base,
+                        heads=1,
+                        dropout=0.0,
+                        aggr="mean",
+                        add_self_loops=True,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                ),
+                nn.ReLU(),
+            ],
+        )
+
         self.predictor = nn.Sequential(
             nn.Linear(channels_downscaler_base, channels_downscaler_base),
             nn.ReLU(),
             nn.Linear(channels_downscaler_base, 32),
             nn.ReLU(),
-            nn.Linear(32, pred_dim)
-            )
+            nn.Linear(32, pred_dim),
+        )
 
     def forward(self, data):
         """
@@ -181,13 +261,17 @@ class GNN4CD(nn.Module):
         Returns:
             torch.Tensor: Output predictions for high-resolution nodes.
         """
-        x_low = data['low'].x       # shape: (N_low, seq_len, c_low)
-        x_high = data['high'].x 
-        encod_rnn, _ = self.rnn(x_low) # shape (N_low, seq_len, h_hid)
-        encod_rnn = encod_rnn.flatten(start_dim=1) # becomes (N_low, seq_len * h_hid)
+        x_low = data["low"].x  # shape: (N_low, seq_len, c_low)
+        x_high = data["high"].x
+        encod_rnn, _ = self.rnn(x_low)  # shape (N_low, seq_len, h_hid)
+        encod_rnn = encod_rnn.flatten(start_dim=1)  # becomes (N_low, seq_len * h_hid)
         encod_rnn = self.dense(encod_rnn)
-        encod_low2high  = self.downscaler((encod_rnn, x_high), data["low", "to", "high"].edge_index)
-        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        encod_low2high = self.downscaler(
+            (encod_rnn, x_high), data["low", "to", "high"].edge_index
+        )
+        encod_high = self.processor(
+            encod_low2high, data.edge_index_dict[("high", "within", "high")]
+        )
         x_high = self.predictor(encod_high)
         # Permute to (pred_dim, N_high) so the trainer can unsqueeze(0) to get
         # (B=1, C=pred_dim, G=N_high), matching deep4production's (B, C, G)

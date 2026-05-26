@@ -1,5 +1,5 @@
 # Custom d4p schedulers. Set the following lines in the .yaml file:
-# model_info: 
+# model_info:
 #     training_params:
 #         scheduler_params:
 #             module: torch.optim.lr_scheduler
@@ -11,13 +11,14 @@
 #               lr_decay: 0.999
 #               decay_interval: 50
 
+
 def rampup_expdecay(
     step: int,
     base_lr: float = 1e-3,
     rampup_steps: int = 1000,
     decay_rate: float = 0.999,
     decay_interval: int = 50,
-    terminal_value: float = 1e-6
+    terminal_value: float = 1e-6,
 ) -> float:
     """
     Lambda function for linear ramp-up + continuous exponential decay.
@@ -49,7 +50,7 @@ def rampup_expdecay(
     else:
         # --- Continuous exponential decay ---
         decay_progress = (step - rampup_steps) / max(1, decay_interval)
-        lr = base_lr * (decay_rate ** decay_progress)
+        lr = base_lr * (decay_rate**decay_progress)
         # --- Apply terminal floor ---
         lr = max(lr, float(terminal_value))
     # LambdaLR expects a *multiplier* relative to base_lr:

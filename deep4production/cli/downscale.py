@@ -5,6 +5,7 @@ import yaml
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.log import setup_logging, get_logger
 
+
 def main():
     """
     Main entry point for the D4P downscaling console script.
@@ -24,7 +25,7 @@ def main():
 
     # --- Get config from YAML ------------------------------------------
     config_file = sys.argv[1]
-    with open(config_file, 'r') as f:
+    with open(config_file, "r") as f:
         config = yaml.safe_load(f)
 
     # --- Unpack config to get parameters ------------------------------------------
@@ -39,11 +40,13 @@ def main():
     # --- Import downscaler module ----------------------------------
     d4p = config.get("d4p_downscaler", None)
     if d4p is None:
-      d4p_downscaler = get_func_from_string("deep4production.core.downscalers.downscaler", "downscaler")
-      kwargs_downscaler = {}
+        d4p_downscaler = get_func_from_string(
+            "deep4production.core.downscalers.downscaler", "downscaler"
+        )
+        kwargs_downscaler = {}
     else:
-      d4p_downscaler = get_func_from_string(d4p["module"], d4p["name"])
-      kwargs_downscaler = d4p.get("kwargs", {}) or {}
+        d4p_downscaler = get_func_from_string(d4p["module"], d4p["name"])
+        kwargs_downscaler = d4p.get("kwargs", {}) or {}
 
     # --- Inference runtime params (batch_size, amp_dtype, compile, ...) ---
     # Forwarded to downscale(). Defaults preserve the original eager-mode,
@@ -51,6 +54,13 @@ def main():
     inference_params = config.get("inference_params", {}) or {}
 
     # --- Downscale ----------------------------------
-    downscaler = d4p_downscaler(id_dir=id_dir, input_data=input_data, graph=graph, ensemble_size=ensemble_size, model_file=model_file, saving_info=saving_info, **kwargs_downscaler)
+    downscaler = d4p_downscaler(
+        id_dir=id_dir,
+        input_data=input_data,
+        graph=graph,
+        ensemble_size=ensemble_size,
+        model_file=model_file,
+        saving_info=saving_info,
+        **kwargs_downscaler,
+    )
     downscaler.downscale(**inference_params)
-

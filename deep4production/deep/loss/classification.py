@@ -10,7 +10,6 @@ Authors:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 
 class BinaryCrossEntropyLoss(nn.Module):
@@ -77,15 +76,16 @@ class BinaryCrossEntropyLoss(nn.Module):
             thr = self.threshold.view(1, C, 1).to(target.device)
         else:
             # Single float threshold for all channels
-            thr = torch.tensor(self.threshold, dtype=torch.float32,
-                               device=target.device).view(1, 1, 1)
+            thr = torch.tensor(
+                self.threshold, dtype=torch.float32, device=target.device
+            ).view(1, 1, 1)
 
         # --- Binarize target using thresholds ---------------------------------
         target_bin = (target >= thr).float()
 
         # --- Flatten to vectors per channel ------------------
         # Shape: (B*C*G,)
-        target_flat = target.reshape(-1).float()
+        target_flat = target_bin.reshape(-1).float()
         output_flat = output.reshape(-1)
 
         # --- Handle NaNs (ignore them) -----------------------------
@@ -114,7 +114,13 @@ class BernoulliFocalLoss(nn.Module):
         ignore_nans (bool): Ignore NaNs in target domain.
     """
 
-    def __init__(self, gamma: float = 2.0, alpha: float = 0.25, threshold: float = 1.0, ignore_nans: bool = False):
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: float = 0.25,
+        threshold: float = 1.0,
+        ignore_nans: bool = False,
+    ):
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
@@ -132,7 +138,9 @@ class BernoulliFocalLoss(nn.Module):
         """
 
         if target.shape != output.shape:
-            raise ValueError(f"Target and output must match shapes, got {target.shape} vs {output.shape}")
+            raise ValueError(
+                f"Target and output must match shapes, got {target.shape} vs {output.shape}"
+            )
 
         # --- Reshape to (B, C, G) ----------------------------------------
         if target.ndim == 4:
@@ -142,7 +150,9 @@ class BernoulliFocalLoss(nn.Module):
         elif target.ndim == 3:
             B, C, G = target.shape
         else:
-            raise ValueError(f"Unsupported shape {target.shape}. Must be (B,C,G) or (B,C,H,W)")
+            raise ValueError(
+                f"Unsupported shape {target.shape}. Must be (B,C,G) or (B,C,H,W)"
+            )
 
         # --- Binarize target using the same threshold for all channels ---
         target_bin = (target >= self.threshold).float()

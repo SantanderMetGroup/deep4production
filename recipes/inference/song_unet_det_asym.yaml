@@ -10,8 +10,8 @@ id_dir: path_to_your_output_dir/song_unet_det_asym
 ##### INPUT DATA #####
 input_data:
   paths:
-    - path_to_your_x_file_1.zarr
-    - path_to_your_x_file_2.zarr
+  - path_to_your_x_file_1.zarr
+  - path_to_your_x_file_2.zarr
     # Must match the zarr files used at training time (same variables and order)
   years: [1980, 1981]   # years to downscale
   load_in_memory: true
@@ -23,7 +23,7 @@ input_data:
 # identical), which is only useful for debugging. Keep this at 1 for production.
 ensemble_size: 1
 
-graph: null
+graph:
 
 
 ##### MODEL CHECKPOINT #####
@@ -41,7 +41,7 @@ d4p_downscaler:
 ##### OUTPUT #####
 saving_info:
   file: SongUNet_det_asym_1980-1981.nc   # saved at id_dir/predictions/
-  template: null  # optional NetCDF template for output coordinates;
+  template:       # optional NetCDF template for output coordinates;
                   # if null, lats/lons are taken from the checkpoint metadata
   # formatting:
   #   name: cordex_ml   # uncomment to apply CORDEX-ML output conventions

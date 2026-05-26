@@ -24,7 +24,7 @@ def cordex_ml(ds, attributes_dict):
         - 'training_experiment': What training experiment was used to train the model
         - 'evaluation_experiment': What evaluation experiment was used to evaluate the model
         - 'probabilistic_output': 'yes' if probabilistic method
-        - 'realization_generation_id': 
+        - 'realization_generation_id':
             For a single realization: 'rM' (where M is the realization number, e.g., 'r1')
             For an ensemble of realizations: 'ensemble'
         - 'institution_id': Institution identifier
@@ -39,8 +39,10 @@ def cordex_ml(ds, attributes_dict):
 
     # Fix the boolean
     if isinstance(attributes_dict.get("probabilistic_output"), bool):
-        attributes_dict["probabilistic_output"] = str(attributes_dict["probabilistic_output"])
-        
+        attributes_dict["probabilistic_output"] = str(
+            attributes_dict["probabilistic_output"]
+        )
+
     # Create a copy to avoid modifying the original
     ds_copy = ds.copy()
 
@@ -52,7 +54,14 @@ def cordex_ml(ds, attributes_dict):
         ds_copy.attrs[key] = value
 
     # Generate the source_id
-    if 'source_id' not in attributes_dict and 'esd_method_id' in attributes_dict and 'training_methodology_id' in attributes_dict and 'esd_version' in attributes_dict:
-        ds_copy.attrs['source_id'] = f"{attributes_dict['esd_method_id']}-{attributes_dict['esd_version']}-{attributes_dict['training_methodology_id']}-{attributes_dict['realization_generation_id']}"
+    if (
+        "source_id" not in attributes_dict
+        and "esd_method_id" in attributes_dict
+        and "training_methodology_id" in attributes_dict
+        and "esd_version" in attributes_dict
+    ):
+        ds_copy.attrs["source_id"] = (
+            f"{attributes_dict['esd_method_id']}-{attributes_dict['esd_version']}-{attributes_dict['training_methodology_id']}-{attributes_dict['realization_generation_id']}"
+        )
 
     return ds_copy

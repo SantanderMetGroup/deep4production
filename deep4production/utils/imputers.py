@@ -1,26 +1,27 @@
 import numpy as np
 from deep4production.utils.general import get_func_from_string
 
-class d4dimputers():
+
+class d4dimputers:
     def __init__(self, data, lat_gp, lon_gp, lats_ref, lons_ref):
         # Store reference and target coordinates
         self.lat_gp = lat_gp
         self.lon_gp = lon_gp
         self.lats_ref = lats_ref
         self.lons_ref = lons_ref
-        
+
         # Get idx of gridpoint
-        idx_lat_gp = np.where(np.array(lats_ref)==lat_gp)[0]
-        idx_lon_gp = np.where(np.array(lons_ref)==lon_gp)[0]
+        idx_lat_gp = np.where(np.array(lats_ref) == lat_gp)[0]
+        idx_lon_gp = np.where(np.array(lons_ref) == lon_gp)[0]
         self.idx = np.intersect1d(idx_lat_gp, idx_lon_gp)[0]
 
         # Store dataset
-        self.data = data # Shape: (G)
+        self.data = data  # Shape: (G)
 
     # ADD CUSTOM IMPUTERS BELOW
     # -----------------------------------
     def constant(self, value):
-        # Optionally assign value 
+        # Optionally assign value
         return value
 
     # -----------------------------------
@@ -49,15 +50,21 @@ class d4dimputers():
         # Vectorized haversine distance (great-circle)
         dlat = lat2 - lat1
         dlon = lon2 - lon1
-        a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2 # Harvesine formula. Since sin is periodic, it handles the cases where points are e.g., -178, 178 degrees of latitude (or equivalent in radians)
+        a = (
+            np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+        )  # Harvesine formula. Since sin is periodic, it handles the cases where points are e.g., -178, 178 degrees of latitude (or equivalent in radians)
         c = 2 * np.arcsin(np.sqrt(a))
         R = 6371.0  # Earth radius in km
         distances = R * c
 
         # Sort and select nearest neighbors (excluding the point itself)
         sorted_idx = np.argsort(distances)
-        valid_sorted_idx = sorted_idx[~np.isnan(self.data[sorted_idx])] # True: non-NaN, False: NaN
-        nearest_idx = valid_sorted_idx[1:num_nearest_neighbours + 1]  # skip self (idx 0)
+        valid_sorted_idx = sorted_idx[
+            ~np.isnan(self.data[sorted_idx])
+        ]  # True: non-NaN, False: NaN
+        nearest_idx = valid_sorted_idx[
+            1 : num_nearest_neighbours + 1
+        ]  # skip self (idx 0)
         # print(f"Grid point:({self.lat_gp},{self.lon_gp})")
         # print(f"Grid point (1-closest):({self.lats_ref[nearest_idx[0]]},{self.lons_ref[nearest_idx[0]]})")
         # print(f"Grid point (2-closest):({self.lats_ref[nearest_idx[1]]},{self.lons_ref[nearest_idx[1]]})")
@@ -68,8 +75,5 @@ class d4dimputers():
         aggr_function = get_func_from_string("numpy", aggr_function)
         nearest_values = self.data[nearest_idx]
         aggregated_value = aggr_function(nearest_values)
-    
-        return aggregated_value
-        
-        
 
+        return aggregated_value

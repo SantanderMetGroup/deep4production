@@ -1,8 +1,8 @@
 import numpy as np
-import xarray as xr 
-from numpy.fft import fft2, fftshift, fftfreq
-from scipy.stats import wasserstein_distance as wd
+import xarray as xr
+from numpy.fft import fft2, fftshift
 from deep4production.utils.general import get_func_from_string
+
 
 ######### ------------------------------------------------------------------------ #########
 # --- HELPER: _mean_over_members ------------------------------------------------------------
@@ -11,18 +11,20 @@ def _mean_over_members(da):
     if "member" in da.dims:
         return da.mean(dim="member")
     return da
+
+
 ######### ------------------------------------------------------------------------ #########
 
 
 # --- RMSE ------------------------------------------------------------
 def rmse(target, prediction, spatial=False):
     """
-    Compute Root Mean Square Error (RMSE) between a target and prediction 
+    Compute Root Mean Square Error (RMSE) between a target and prediction
     DataArray, optionally returning a spatial field (map).
-    
+
     - If prediction includes a 'member' dimension, the ensemble mean is used.
     - RMSE is computed over the time dimension.
-    
+
     Parameters
     ----------
     target : xarray.DataArray
@@ -32,7 +34,7 @@ def rmse(target, prediction, spatial=False):
     spatial : bool
         If True, return RMSE for each spatial point.
         If False, return a global scalar RMSE.
-    
+
     Returns
     -------
     float or xarray.DataArray
@@ -51,6 +53,7 @@ def rmse(target, prediction, spatial=False):
         return np.sqrt(se.mean(dim="time"))
     # Return scalar?
     return float(np.sqrt(se.mean().values))
+
 
 # --- PSD ------------------------------------------------------------
 def _radial_average(array_2d: np.ndarray) -> np.ndarray:
@@ -73,6 +76,7 @@ def _radial_average(array_2d: np.ndarray) -> np.ndarray:
     tbin = np.bincount(r.ravel(), array_2d.ravel())
     nr = np.bincount(r.ravel())
     return tbin / np.maximum(nr, 1)
+
 
 def radially_averaged_power_spectral_density(da, reshape_spatial_dims):
     """
@@ -98,15 +102,17 @@ def radially_averaged_power_spectral_density(da, reshape_spatial_dims):
         nt, ng = da_vals.shape
         nx, ny = reshape_spatial_dims
         if nx * ny != ng:
-            raise ValueError(f"Cannot reshape: point dimension = {ng}, but nx*ny = {nx*ny}")
+            raise ValueError(
+                f"Cannot reshape: point dimension = {ng}, but nx*ny = {nx*ny}"
+            )
         da_vals = da_vals.reshape(nt, ny, nx)
 
     # --- Transform NaN to 0 values ---
     da_vals = np.nan_to_num(da_vals, nan=0.0)
-    
+
     # --- FFT ---
     fft_da = fftshift(fft2(da_vals, axes=(-2, -1)), axes=(-2, -1))
-    power = np.abs(fft_da)**2
+    power = np.abs(fft_da) ** 2
 
     # --- Radial average for each time ---
     psd_list = [_radial_average(power[i]) for i in range(nt)]
@@ -118,10 +124,7 @@ def radially_averaged_power_spectral_density(da, reshape_spatial_dims):
 
     # --- Build coordinates and return DataArray ---
     psd_da = xr.DataArray(
-        psd_mean,
-        dims=("wavenumber",),
-        coords={"wavenumber": wavenumbers},
-        name="psd"
+        psd_mean, dims=("wavenumber",), coords={"wavenumber": wavenumbers}, name="psd"
     )
 
     # --- Return ---
@@ -151,7 +154,7 @@ def power_spectral_density(da, dim="time"):
         the original DataArray except for `dim`.
     """
 
-    ## Ensemble mean 
+    ## Ensemble mean
     if "member" in da.dims:
         da = da.mean(dim="member")
 
@@ -165,7 +168,7 @@ def power_spectral_density(da, dim="time"):
     X = np.fft.rfft(da_fft.values, axis=0)
     psd_vals = (np.abs(X) ** 2) / da.sizes[dim]
 
-    ## Frequency coordinates 
+    ## Frequency coordinates
     freqs = np.fft.rfftfreq(da.sizes[dim])
 
     ## Build output dims
@@ -175,18 +178,19 @@ def power_spectral_density(da, dim="time"):
         if d != dim:
             out_coords[d] = da.coords[d]
 
-    ## Return PSD 
+    ## Return PSD
     return xr.DataArray(psd_vals, dims=out_dims, coords=out_coords)
+
 
 # --- Lag-1 autocorrelation ------------------------------------------------------------
 def lag1autocorr(da, spatial=False):
     """
     Compute lag-1 autocorrelation along the time axis.
-    
+
     - If 'member' dimension exists, ensemble mean is used.
     - If spatial=True: returns spatial map.
     - If spatial=False: returns global mean scalar.
-    
+
     Parameters
     ----------
     da : xarray.DataArray
@@ -194,7 +198,7 @@ def lag1autocorr(da, spatial=False):
     spatial : bool
         If True, return per-gridpoint lag-1 autocorrelation.
         If False, return a scalar mean autocorrelation.
-    
+
     Returns
     -------
     float or xarray.DataArray
@@ -204,6 +208,7 @@ def lag1autocorr(da, spatial=False):
     # Handle ensemble dimension
     if "member" in da.dims:
         da = da.mean(dim="member")
+
     # Helper: lag1
     def _lag1(da):
         x1 = da.isel(time=slice(0, -1))
@@ -211,6 +216,7 @@ def lag1autocorr(da, spatial=False):
         num = ((x1 - x1.mean("time")) * (x2 - x2.mean("time"))).mean("time")
         den = x1.std("time") * x2.std("time")
         return num / den
+
     # Compute lag1 autocorrelation
     ac = _lag1(da)
     # Return spatial field?
@@ -218,6 +224,7 @@ def lag1autocorr(da, spatial=False):
         return ac
     # Return scalar?
     return float(ac.mean().values)
+
 
 # --- Quantile ------------------------------------------------------------
 def Pxx(da, percentile, spatial=False):
@@ -251,29 +258,34 @@ def Pxx(da, percentile, spatial=False):
     # Return scalar
     return float(q.mean().values)
 
+
 # --- P02 ------------------------------------------------------------
 def P02(da, spatial=False):
-    """ Compute 2nd percentile """
+    """Compute 2nd percentile"""
 
     return Pxx(da, 0.02, spatial=spatial)
 
+
 # --- P98 ------------------------------------------------------------
 def P98(da, spatial=False):
-    """ Compute 98th percentile """
+    """Compute 98th percentile"""
 
     return Pxx(da, 0.98, spatial=spatial)
 
+
 # --- Median ------------------------------------------------------------
 def median(da, spatial=False):
-    """ Compute median """
+    """Compute median"""
 
     return Pxx(da, 0.5, spatial=spatial)
 
+
 # --- Mean ------------------------------------------------------------
 def Mean(da, spatial=False):
-    """ Compute Mean """
+    """Compute Mean"""
 
     return da.mean(dim="time") if spatial else da.mean().values
+
 
 # --- R01 ------------------------------------------------------------
 def R01(da, threshold=1.0, percentage=False, spatial=False):
@@ -305,11 +317,12 @@ def R01(da, threshold=1.0, percentage=False, spatial=False):
     if percentage:
         r01 = wet.mean(dim="time", skipna=True) * 100
     else:
-        r01 = wet.sum(dim="time", skipna=True) 
+        r01 = wet.sum(dim="time", skipna=True)
 
     if spatial:
         return r01
     return float(r01.mean().values)
+
 
 # --- R20 ------------------------------------------------------------
 def R20(da, percentage=False, spatial=False):
@@ -330,7 +343,7 @@ def R20(da, percentage=False, spatial=False):
     """
 
     # Threshold 20mm
-    threshold=20.0
+    threshold = 20.0
 
     # Handle ensemble
     if "member" in da.dims:
@@ -348,6 +361,7 @@ def R20(da, percentage=False, spatial=False):
     if spatial:
         return r01
     return float(r01.mean().values)
+
 
 # --- Rx1day ------------------------------------------------------------
 def Rx1day(da, threshold=1.0, spatial=False):
@@ -447,15 +461,17 @@ def P98Wet(da, threshold=1.0, spatial=False):
         return p98
     return float(p98.mean().values)
 
+
 # --- Bias ------------------------------------------------------------
 def bias(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4production.utils.diagnostics", index)
     t = index_fn(target, spatial=True)
     p = index_fn(prediction, spatial=True)
-    bias = (p - t)
+    bias = p - t
     if spatial:
         return bias
     return bias.mean().values
+
 
 # --- Bias Absolute ------------------------------------------------------------
 def biasAbs(target, prediction, index, spatial=False):
@@ -467,6 +483,7 @@ def biasAbs(target, prediction, index, spatial=False):
         return biasAbs
     return biasAbs.mean().values
 
+
 # --- Relative Bias Absolute ------------------------------------------------------------
 def relbiasAbs(target, prediction, index, spatial=False):
     index_fn = get_func_from_string("deep4production.utils.diagnostics", index)
@@ -476,6 +493,7 @@ def relbiasAbs(target, prediction, index, spatial=False):
     if spatial:
         return relbiasAbs
     return relbiasAbs.mean().values
+
 
 # --- Relative Bias ------------------------------------------------------------
 def relbias(target, prediction, index, spatial=False):

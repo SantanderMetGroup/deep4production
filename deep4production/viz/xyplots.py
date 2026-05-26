@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
-import xarray as xr
-import numpy as np
 from deep4production.utils.general import get_func_from_string
+
 
 # ------------------------------------------------------------------------------------------
 def plot_psd(
@@ -12,7 +11,7 @@ def plot_psd(
     ax=None,
     title=None,
     labels=None,
-    colors=None
+    colors=None,
 ):
     """
     Plot PSD for multiple xarray DataArrays in one figure.
@@ -39,11 +38,9 @@ def plot_psd(
     if labels is None:
         labels = ["PSD"]
 
-
     # --- Import PSD function ---
     psd_func = get_func_from_string(
-        module_string="deep4production.utils.diagnostics",
-        func_string=compute_psd_func
+        module_string="deep4production.utils.diagnostics", func_string=compute_psd_func
     )
 
     # --- Compute PSDs for all datasets ---
@@ -88,16 +85,31 @@ def plot_psd(
     ax.legend()
     ## Return
     fig = ax.figure
-    return fig 
+    return fig
 
 
 # ------------------------------------------------------------------------------------------
 def plot_psd_spatial(data, reshape_spatial_dims):
-    return plot_psd(data=data, compute_psd_func="radially_averaged_power_spectral_density", compute_psd_kwargs={"reshape_spatial_dims": reshape_spatial_dims}, 
-        loglog=True, ax=None, title=None, labels=["target", "prediction"], colors=["blue", "orange"])
+    return plot_psd(
+        data=data,
+        compute_psd_func="radially_averaged_power_spectral_density",
+        compute_psd_kwargs={"reshape_spatial_dims": reshape_spatial_dims},
+        loglog=True,
+        ax=None,
+        title=None,
+        labels=["target", "prediction"],
+        colors=["blue", "orange"],
+    )
 
 
 # ------------------------------------------------------------------------------------------
 def plot_psd_temporal(data):
-    return plot_psd(data=data, compute_psd_func="power_spectral_density", 
-        loglog=True, ax=None, title=None, labels=["target", "prediction"], colors=["blue", "orange"])
+    return plot_psd(
+        data=data,
+        compute_psd_func="power_spectral_density",
+        loglog=True,
+        ax=None,
+        title=None,
+        labels=["target", "prediction"],
+        colors=["blue", "orange"],
+    )

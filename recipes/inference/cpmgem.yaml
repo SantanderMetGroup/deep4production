@@ -7,9 +7,9 @@ id_dir: your_id_dir             # e.g., /outputs/cpmgem
 ##### INPUT DATA #####
 input_data:
   paths:
-    - path_to_your_x_file_1.zarr
-    - path_to_your_x_file_2.zarr
-    - ...
+  - path_to_your_x_file_1.zarr
+  - path_to_your_x_file_2.zarr
+  - '...'
   years: [1981, 1982, 1983]     # years to downscale
   load_in_memory: true
 
@@ -20,7 +20,7 @@ input_data:
 # uncertainty estimation. The paper evaluates with 6 members per day.
 ensemble_size: 6
 
-graph: null
+graph:
 
 
 ##### MODEL CHECKPOINT #####
@@ -56,7 +56,7 @@ d4p_downscaler:
 ##### OUTPUT #####
 saving_info:
   file: CPMGEM_1981-1983.nc     # saved at id_dir/predictions/
-  template: null                # optional NetCDF template for coordinates
+  template:                     # optional NetCDF template for coordinates
   # formatting:
   #   name: null                # e.g., cordex_ml
   #   kwargs:
@@ -77,5 +77,5 @@ saving_info:
 #                one-shot compile cost very quickly.
 inference_params:
   batch_size: 4
-  amp_dtype: null
+  amp_dtype:
   compile: false

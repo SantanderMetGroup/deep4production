@@ -119,11 +119,11 @@ class EDMPrecond(nn.Module):
         if sigma.dim() == 1:
             sigma = sigma.view(-1, 1, 1, 1)
 
-        sd2 = self.sigma_data ** 2
-        s2 = sigma ** 2
-        c_in    = 1.0 / (sd2 + s2).sqrt()
-        c_skip  = sd2 / (sd2 + s2)
-        c_out   = self.sigma_data * sigma / (sd2 + s2).sqrt()
+        sd2 = self.sigma_data**2
+        s2 = sigma**2
+        c_in = 1.0 / (sd2 + s2).sqrt()
+        c_skip = sd2 / (sd2 + s2)
+        c_out = self.sigma_data * sigma / (sd2 + s2).sqrt()
         c_noise = 0.25 * sigma.log().view(-1)
 
         F_theta = self.backbone(

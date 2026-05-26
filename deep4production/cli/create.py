@@ -18,16 +18,16 @@ def main():
 
     # --- Get config from YAML ------------------------------------------
     config_file = sys.argv[1]
-    with open(config_file, 'r') as f:
+    with open(config_file, "r") as f:
         config = yaml.safe_load(f)
 
     # --- Unpack config -------------------------------------------------
-    date_init   = config["date_init"]
-    date_end    = config["date_end"]
-    freq        = config["freq"]
-    data        = config["data"]
+    date_init = config["date_init"]
+    date_end = config["date_end"]
+    freq = config["freq"]
+    data = config["data"]
     output_path = config.get("output_path", "./")
-    overwrite   = config.get("overwrite", False)
+    overwrite = config.get("overwrite", False)
 
     log.info("d4p create: %s → %s @ %s", date_init, date_end, freq)
     log.info("Output path: %s (overwrite=%s)", output_path, overwrite)

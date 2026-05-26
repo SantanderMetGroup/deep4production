@@ -30,23 +30,23 @@ import logging
 # colour carrying the level signal — visually consistent.
 # ─────────────────────────────────────────────────────────────────────────────
 _MARKERS = {
-    logging.DEBUG:    "·",
-    logging.INFO:     "✻",
-    logging.WARNING:  "✻",
-    logging.ERROR:    "✻",
+    logging.DEBUG: "·",
+    logging.INFO: "✻",
+    logging.WARNING: "✻",
+    logging.ERROR: "✻",
     logging.CRITICAL: "✻",
 }
 
 # 256-colour ANSI; falls through to basic 8-colour if the terminal can't do 256.
 _COLORS = {
-    logging.DEBUG:    "\033[2m",          # dim
-    logging.INFO:     "\033[38;5;208m",   # orange
-    logging.WARNING:  "\033[33m",         # yellow
-    logging.ERROR:    "\033[31m",         # red
-    logging.CRITICAL: "\033[1;31m",       # bold red
+    logging.DEBUG: "\033[2m",  # dim
+    logging.INFO: "\033[38;5;208m",  # orange
+    logging.WARNING: "\033[33m",  # yellow
+    logging.ERROR: "\033[31m",  # red
+    logging.CRITICAL: "\033[1;31m",  # bold red
 }
 _RESET = "\033[0m"
-_DIM   = "\033[2m"
+_DIM = "\033[2m"
 
 
 def _supports_color(stream) -> bool:
@@ -62,22 +62,22 @@ class D4PFormatter(logging.Formatter):
 
     def __init__(self, color: bool = True, show_logger: bool = False):
         super().__init__()
-        self.color       = color
+        self.color = color
         self.show_logger = show_logger
 
     def format(self, record: logging.LogRecord) -> str:
         marker = _MARKERS.get(record.levelno, "·")
-        msg    = record.getMessage()
+        msg = record.getMessage()
 
         # Optional ``[d4p.dataset]`` tag, dim-coloured.
         tag = ""
         if self.show_logger and record.name and record.name != "d4p":
             short = record.name.removeprefix("d4p.")
-            tag   = f"{_DIM}[{short}]{_RESET} " if self.color else f"[{short}] "
+            tag = f"{_DIM}[{short}]{_RESET} " if self.color else f"[{short}] "
 
         if self.color:
             color = _COLORS.get(record.levelno, "")
-            line  = f"{color}{marker}{_RESET} {tag}{msg}"
+            line = f"{color}{marker}{_RESET} {tag}{msg}"
         else:
             line = f"{marker} {tag}{msg}"
 
@@ -88,10 +88,12 @@ class D4PFormatter(logging.Formatter):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def setup_logging(level: str | int = "INFO",
-                  color: str | bool = "auto",
-                  show_logger: bool = False,
-                  stream=None) -> logging.Logger:
+def setup_logging(
+    level: str | int = "INFO",
+    color: str | bool = "auto",
+    show_logger: bool = False,
+    stream=None,
+) -> logging.Logger:
     """
     Configure the ``d4p`` root logger. Idempotent — safe to call multiple
     times (replaces existing handlers).

@@ -9,13 +9,11 @@ Authors:
 
 import torch
 import torch.nn as nn
-import numpy as np
 
 
 ### -------------------------------------------------------------------------------- ###
 ### -------------------- CRPS Spectral Loss --------------------------------------- ###
 class CRPSSpectralLoss(nn.Module):
-
     """
     Fair Continuous Ranked Probability Score (CRPS) with spectral component.
     Purpose: Computes CRPS and spectral CRPS for ensemble predictions.
@@ -28,11 +26,15 @@ class CRPSSpectralLoss(nn.Module):
         spatial_resolution (float): Spatial resolution for filtering.
     """
 
-    def __init__(self, ignore_nans: bool,
-                 H_shape: int, W_shape: int,
-                 beta: int = 1,
-                 lambda_spectral: float = 0.1,
-                 spatial_resolution: float = None) -> None:
+    def __init__(
+        self,
+        ignore_nans: bool,
+        H_shape: int,
+        W_shape: int,
+        beta: int = 1,
+        lambda_spectral: float = 0.1,
+        spatial_resolution: float = None,
+    ) -> None:
         super(CRPSSpectralLoss, self).__init__()
         self.ignore_nans = ignore_nans
         self.H_shape = H_shape
@@ -42,7 +44,9 @@ class CRPSSpectralLoss(nn.Module):
         if spatial_resolution is not None and spatial_resolution <= 0:
             raise ValueError("spatial_resolution must be > 0 when provided.")
         self.spatial_resolution = spatial_resolution
-        self.filter_nans = False # Control whether to filter out nans in _CRPS_pointwise
+        self.filter_nans = (
+            False  # Control whether to filter out nans in _CRPS_pointwise
+        )
 
     def _CRPS_pointwise(self, target: torch.Tensor, output) -> torch.Tensor:
         """
@@ -74,7 +78,7 @@ class CRPSSpectralLoss(nn.Module):
             for i in range(M):
                 for j in range(M):
                     second_term += torch.abs(output[i] - output[j]) ** self.beta
-            second_term = second_term / (2*M*(M-1)) # Fair CRPS
+            second_term = second_term / (2 * M * (M - 1))  # Fair CRPS
         else:
             second_term = 0.0
 
@@ -96,13 +100,14 @@ class CRPSSpectralLoss(nn.Module):
         self.filter_nans = False
 
         # Fill nans with 0 for the FFT computation
-        if isinstance(data, torch.Tensor): # For the target
+        if isinstance(data, torch.Tensor):  # For the target
             data = [torch.nan_to_num(data, nan=0.0)]
         else:
             data = [torch.nan_to_num(d, nan=0.0) for d in data]
 
-        B = data[0].shape[0] # Batch size
-        if data[0].ndim == 3: M = data[0].shape[1] # Number of ensemble members
+        B = data[0].shape[0]  # Batch size
+        if data[0].ndim == 3:
+            M = data[0].shape[1]  # Number of ensemble members
 
         # Reshape to spatial dimensions
         if data[0].ndim == 2:
@@ -116,8 +121,16 @@ class CRPSSpectralLoss(nn.Module):
         # Optionally remove frequencies beyond the Nyquist limit
         if self.spatial_resolution is not None:
             k_nyquist = 2.0 * torch.pi / (2.0 * self.spatial_resolution)
-            kx = 2.0 * torch.pi * torch.fft.rfftfreq(self.W_shape, d=self.spatial_resolution)
-            ky = 2.0 * torch.pi * torch.fft.fftfreq(self.H_shape, d=self.spatial_resolution)
+            kx = (
+                2.0
+                * torch.pi
+                * torch.fft.rfftfreq(self.W_shape, d=self.spatial_resolution)
+            )
+            ky = (
+                2.0
+                * torch.pi
+                * torch.fft.fftfreq(self.H_shape, d=self.spatial_resolution)
+            )
             k_radius = torch.sqrt(ky[:, None] ** 2 + kx[None, :] ** 2)
             low_pass_mask = k_radius <= k_nyquist
             low_pass_mask = low_pass_mask.to(device=data[0].device)

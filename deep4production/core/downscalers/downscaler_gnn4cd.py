@@ -1,8 +1,11 @@
 ## Load libraries
 import torch
 from torch_geometric.data import HeteroData, Batch
+
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
+
+
 ##################################################################################################################################
 class downscaler_custom(downscaler):
     """
@@ -17,7 +20,17 @@ class downscaler_custom(downscaler):
         graph (dict, optional): Graph configuration for GNN models.
         forcing_data (dict, optional): Forcing data configuration.
     """
-    def __init__(self, id_dir, input_data, model_file=None, saving_info=None, ensemble_size=1, graph=None, forcing_data=None):
+
+    def __init__(
+        self,
+        id_dir,
+        input_data,
+        model_file=None,
+        saving_info=None,
+        ensemble_size=1,
+        graph=None,
+        forcing_data=None,
+    ):
         """
         Initializes D4P GNN4CD's downscaler.
         """
@@ -29,11 +42,13 @@ class downscaler_custom(downscaler):
             saving_info=saving_info,
             ensemble_size=ensemble_size,
             graph=graph,
-            forcing_data=forcing_data
+            forcing_data=forcing_data,
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def graphPredict(self, x: torch.Tensor, edge_index, model, f: torch.Tensor) -> torch.Tensor:
+    def graphPredict(
+        self, x: torch.Tensor, edge_index, model, f: torch.Tensor
+    ) -> torch.Tensor:
         """
         Batched GNN prediction via PyG Batch.from_data_list.
 
@@ -58,18 +73,20 @@ class downscaler_custom(downscaler):
         graphs = []
         for b in range(B):
             data_graph = HeteroData()
-            data_graph["low", "to", "high"].edge_index      = edge_index[0].to(self.device)
-            data_graph["high", "within", "high"].edge_index = edge_index[1].to(self.device)
+            data_graph["low", "to", "high"].edge_index = edge_index[0].to(self.device)
+            data_graph["high", "within", "high"].edge_index = edge_index[1].to(
+                self.device
+            )
 
             # Low-res node features: (G_low, n_lag, C_low)
-            if x.dim() == 4:                        # (B, n_lag, C_low, G_low)
-                data_graph['low'].x = x[b].permute(2, 0, 1)        # (G_low, n_lag, C_low)
-            else:                                   # (B, C_low, G_low) — no lag
-                data_graph['low'].x = x[b].T.unsqueeze(1)           # (G_low, 1, C_low)
+            if x.dim() == 4:  # (B, n_lag, C_low, G_low)
+                data_graph["low"].x = x[b].permute(2, 0, 1)  # (G_low, n_lag, C_low)
+            else:  # (B, C_low, G_low) — no lag
+                data_graph["low"].x = x[b].T.unsqueeze(1)  # (G_low, 1, C_low)
 
             # High-res node features: (G_high, C_high)
             # f comes in as (B, C_high, G_high); transpose to PyG convention.
-            data_graph['high'].x = f[b].T                           # (G_high, C_high)
+            data_graph["high"].x = f[b].T  # (G_high, C_high)
 
             graphs.append(data_graph)
 
@@ -82,4 +99,3 @@ class downscaler_custom(downscaler):
         # Reshape (C_y, B * G_high) → (B, C_y, G_high)
         C_y = pred.shape[0]
         return pred.reshape(C_y, B, self.G_y).permute(1, 0, 2)
-

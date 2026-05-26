@@ -6,15 +6,15 @@ d4d_downscaler:
 
 input_data:
   paths:
-    - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
-    - ./AI_ready_datasets/files/UPSRCM_2080-2099.zarr
+  - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+  - ./AI_ready_datasets/files/UPSRCM_2080-2099.zarr
   years: [1980]
   load_in_memory: true
 
 ensemble_size: 2
 model_file: gnn4cd_qmse_best.pt # Model at: id_dir/models/
 
-graph: 
+graph:
   path: edge_index.pt
   ## Apply model to a different graph?
   # path: null
@@ -31,10 +31,4 @@ graph:
 
 saving_info:
   file: 1980.nc # Predictions will be saved at: id_dir/predictions/
-  template: null
-
-
-
-
-
-
+  template:

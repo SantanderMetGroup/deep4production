@@ -1,8 +1,8 @@
 import yaml
 import numpy as np
 import xarray as xr
-import pandas as pd
 import importlib
+
 
 # --------------------------------------------------------------------------------------------------------------
 def get_func_from_string(module_string, func_string, kwargs=None):
@@ -19,11 +19,13 @@ def get_func_from_string(module_string, func_string, kwargs=None):
     func = getattr(module, func_string)
     return func(**kwargs) if kwargs is not None else func
 
+
 # --------------------------------------------------------------------------------------------------------------
 def read_metadata_from_yaml(yaml_path: str) -> dict:
     with open(f"{yaml_path}", "r") as f:
         metadata = yaml.safe_load(f)
     return metadata
+
 
 # --------------------------------------------------------------------------------------------------------------
 def is_grid_regular(ds: xr.Dataset) -> bool:
@@ -38,7 +40,7 @@ def is_grid_regular(ds: xr.Dataset) -> bool:
       that are coordinates of the dataset, it is considered regular.
     - Otherwise, it is irregular (station, unstructured, etc.)
     """
-    
+
     # Identify likely spatial dimensions
     dims = [d for d in ds.dims if d in ("lat", "lon", "x", "y")]
     spatial_dims = [d for d in ds.dims if d in ("lat", "lon", "x", "y")]
@@ -56,10 +58,11 @@ def is_grid_regular(ds: xr.Dataset) -> bool:
             return True  # Regular gridded (2D+ spatial structure)
     return False  # Likely station-based or 1D
 
+
 def latlon_to_xyz(lat, lon):
     lat = np.deg2rad(lat)
     lon = np.deg2rad(lon)
-    x = np.cos(lat)*np.cos(lon)
-    y = np.cos(lat)*np.sin(lon)
+    x = np.cos(lat) * np.cos(lon)
+    y = np.cos(lat) * np.sin(lon)
     z = np.sin(lat)
     return np.stack([x, y, z], axis=-1)

@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import xarray as xr
+
 
 def plot_date_from_1D_spatial_field(
     data,
@@ -92,7 +92,7 @@ def plot_date_from_1D_spatial_field(
         vals = da_sel.values
         selected_fields.append(vals)
 
-        sc = ax.scatter(
+        ax.scatter(
             lon,
             lat,
             c=vals,
@@ -115,7 +115,9 @@ def plot_date_from_1D_spatial_field(
             transform=ax.transAxes,
             fontsize=10,
             verticalalignment="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="black", boxstyle="round"),
+            bbox=dict(
+                facecolor="white", alpha=0.7, edgecolor="black", boxstyle="round"
+            ),
         )
 
     # --- Shared colorbar ---
@@ -173,7 +175,9 @@ def plot_date_from_1D_spatial_field(
             transform=diff_ax.transAxes,
             fontsize=10,
             verticalalignment="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="black", boxstyle="round"),
+            bbox=dict(
+                facecolor="white", alpha=0.7, edgecolor="black", boxstyle="round"
+            ),
         )
 
         # Colorbar for diff

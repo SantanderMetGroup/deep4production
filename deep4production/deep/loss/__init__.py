@@ -19,7 +19,10 @@ from deep4production.deep.loss.nll import NLLGaussianLoss, NLLBerGammaLoss
 from deep4production.deep.loss.asym import Asym
 from deep4production.deep.loss.crps import CRPSSpectralLoss
 from deep4production.deep.loss.diffusion import WeightedDenoisingScoreMatchingLoss
-from deep4production.deep.loss.classification import BinaryCrossEntropyLoss, BernoulliFocalLoss
+from deep4production.deep.loss.classification import (
+    BinaryCrossEntropyLoss,
+    BernoulliFocalLoss,
+)
 
 __all__ = [
     "MaeLoss",

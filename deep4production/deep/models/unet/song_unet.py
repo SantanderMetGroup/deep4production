@@ -44,6 +44,7 @@ import torch.nn.functional as F
 # FIR up/downsampling
 # ──────────────────────────────────────────────────────────────────────────
 
+
 def _fir_kernel_2d(kernel, device, dtype):
     k = torch.tensor(kernel, dtype=torch.float32, device=device)
     k = torch.outer(k, k)
@@ -73,6 +74,7 @@ def fir_upsample(x: torch.Tensor, kernel=(1, 3, 3, 1)) -> torch.Tensor:
 # Noise-label embedding
 # ──────────────────────────────────────────────────────────────────────────
 
+
 class PositionalEmbedding(nn.Module):
     """Sinusoidal positional embedding of a 1-D scalar per sample."""
 
@@ -83,7 +85,9 @@ class PositionalEmbedding(nn.Module):
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         half = self.dim // 2
         freqs = torch.exp(
-            -math.log(10_000) * torch.arange(half, dtype=torch.float32, device=t.device) / (half - 1)
+            -math.log(10_000)
+            * torch.arange(half, dtype=torch.float32, device=t.device)
+            / (half - 1)
         )
         args = t[:, None].float() * freqs[None, :]
         return torch.cat([args.sin(), args.cos()], dim=-1)
@@ -109,6 +113,7 @@ class NoiseEmbedMLP(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────
 # BigGAN ResBlock and attention
 # ──────────────────────────────────────────────────────────────────────────
+
 
 def _num_groups(channels: int) -> int:
     return min(channels // 4, 32)
@@ -177,11 +182,17 @@ class ResBlock(nn.Module):
 
     def _resample(self, x: torch.Tensor) -> torch.Tensor:
         if self.up:
-            return fir_upsample(x, self.fir_kernel) if self.fir \
+            return (
+                fir_upsample(x, self.fir_kernel)
+                if self.fir
                 else F.interpolate(x, scale_factor=2, mode="nearest")
+            )
         if self.down:
-            return fir_downsample(x, self.fir_kernel) if self.fir \
+            return (
+                fir_downsample(x, self.fir_kernel)
+                if self.fir
                 else F.avg_pool2d(x, 2, stride=2)
+            )
         return x
 
     def forward(self, x: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
@@ -217,7 +228,7 @@ class AttnBlock(nn.Module):
         q = self.q(h).view(B, C, -1)
         k = self.k(h).view(B, C, -1)
         v = self.v(h).view(B, C, -1)
-        w = torch.bmm(q.permute(0, 2, 1), k) * (C ** -0.5)
+        w = torch.bmm(q.permute(0, 2, 1), k) * (C**-0.5)
         w = w.softmax(dim=-1)
         h = torch.bmm(v, w.permute(0, 2, 1)).view(B, C, H, W)
         out = x + self.proj(h)
@@ -227,6 +238,7 @@ class AttnBlock(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────
 # Progressive-input pyramid downsampler
 # ──────────────────────────────────────────────────────────────────────────
+
 
 class PyramidDown(nn.Module):
     """FIR-filtered (or avg-pool) spatial downsample followed by a 3×3 projection.
@@ -249,14 +261,18 @@ class PyramidDown(nn.Module):
         self.conv = nn.Conv2d(in_ch, out_ch, 3, padding=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = fir_downsample(x, self.fir_kernel) if self.fir \
+        x = (
+            fir_downsample(x, self.fir_kernel)
+            if self.fir
             else F.avg_pool2d(x, 2, stride=2)
+        )
         return self.conv(x)
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # SongUNet
 # ──────────────────────────────────────────────────────────────────────────
+
 
 class SongUNet(nn.Module):
     """
@@ -330,8 +346,10 @@ class SongUNet(nn.Module):
     ) -> None:
         super().__init__()
 
-        assert cond_upsample in ("fir", "nearest"), \
-            f"cond_upsample must be 'fir' or 'nearest', got '{cond_upsample}'"
+        assert cond_upsample in (
+            "fir",
+            "nearest",
+        ), f"cond_upsample must be 'fir' or 'nearest', got '{cond_upsample}'"
 
         act = nn.SiLU()
         emb_dim = nf * 4
@@ -355,7 +373,7 @@ class SongUNet(nn.Module):
         assert spatial_pe_freqs >= 0, "spatial_pe_freqs must be >= 0"
         self.spatial_pe_freqs = spatial_pe_freqs
         self.spatial_pe_channels = 4 * spatial_pe_freqs
-        self._spatial_pe_cache = None   # populated on first forward()
+        self._spatial_pe_cache = None  # populated on first forward()
 
         # Noise-label embedding
         self.noise_embed = NoiseEmbedMLP(nf)
@@ -377,7 +395,7 @@ class SongUNet(nn.Module):
         self.enc_resnets = nn.ModuleList()
         self.enc_attns = nn.ModuleList()
         self.enc_downs = nn.ModuleList()
-        self.prog_downs = nn.ModuleList()   # pyramid FIR-down + conv per level
+        self.prog_downs = nn.ModuleList()  # pyramid FIR-down + conv per level
 
         in_ch = nf
         pyramid_ch = net_in_ch
@@ -387,11 +405,21 @@ class SongUNet(nn.Module):
             lvl_res = nn.ModuleList()
             lvl_atn = nn.ModuleList()
             for _ in range(num_res_blocks):
-                lvl_res.append(ResBlock(act, in_ch, out_ch, emb_dim,
-                                        dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                                        skip_rescale=skip_rescale))
-                lvl_atn.append(AttnBlock(out_ch, skip_rescale=skip_rescale)
-                               if use_attn else None)
+                lvl_res.append(
+                    ResBlock(
+                        act,
+                        in_ch,
+                        out_ch,
+                        emb_dim,
+                        dropout=dropout,
+                        fir=fir,
+                        fir_kernel=fir_kernel,
+                        skip_rescale=skip_rescale,
+                    )
+                )
+                lvl_atn.append(
+                    AttnBlock(out_ch, skip_rescale=skip_rescale) if use_attn else None
+                )
                 in_ch = out_ch
             self.enc_resnets.append(lvl_res)
             self.enc_attns.append(lvl_atn)
@@ -399,9 +427,17 @@ class SongUNet(nn.Module):
             if level < num_levels - 1:
                 next_ch = chs[level + 1]
                 self.enc_downs.append(
-                    ResBlock(act, in_ch, next_ch, emb_dim, down=True,
-                             dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                             skip_rescale=skip_rescale)
+                    ResBlock(
+                        act,
+                        in_ch,
+                        next_ch,
+                        emb_dim,
+                        down=True,
+                        dropout=dropout,
+                        fir=fir,
+                        fir_kernel=fir_kernel,
+                        skip_rescale=skip_rescale,
+                    )
                 )
                 if progressive_input:
                     self.prog_downs.append(
@@ -417,19 +453,33 @@ class SongUNet(nn.Module):
 
         # Bottleneck
         ch = chs[-1]
-        self.mid_res1 = ResBlock(act, ch, ch, emb_dim,
-                                  dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                                  skip_rescale=skip_rescale)
+        self.mid_res1 = ResBlock(
+            act,
+            ch,
+            ch,
+            emb_dim,
+            dropout=dropout,
+            fir=fir,
+            fir_kernel=fir_kernel,
+            skip_rescale=skip_rescale,
+        )
         self.mid_attn = AttnBlock(ch, skip_rescale=skip_rescale)
-        self.mid_res2 = ResBlock(act, ch, ch, emb_dim,
-                                  dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                                  skip_rescale=skip_rescale)
+        self.mid_res2 = ResBlock(
+            act,
+            ch,
+            ch,
+            emb_dim,
+            dropout=dropout,
+            fir=fir,
+            fir_kernel=fir_kernel,
+            skip_rescale=skip_rescale,
+        )
 
         # Decoder — num_res_blocks+1 ResBlocks per level, each consuming a
         # fresh skip from the encoder via channel-wise concat (matches mlde).
         # One AttnBlock per attn level, applied after all resblocks.
         self.dec_resnets = nn.ModuleList()
-        self.dec_attns = nn.ModuleList()     # single AttnBlock or None, one per level
+        self.dec_attns = nn.ModuleList()  # single AttnBlock or None, one per level
         self.dec_ups = nn.ModuleList()
 
         # At each decoder level, all popped skips share the level's channel
@@ -444,9 +494,18 @@ class SongUNet(nn.Module):
 
             for i in range(num_res_blocks + 1):
                 in_ch_blk = (ch if i == 0 else out_ch) + skip_ch
-                lvl_res.append(ResBlock(act, in_ch_blk, out_ch, emb_dim,
-                                        dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                                        skip_rescale=skip_rescale))
+                lvl_res.append(
+                    ResBlock(
+                        act,
+                        in_ch_blk,
+                        out_ch,
+                        emb_dim,
+                        dropout=dropout,
+                        fir=fir,
+                        fir_kernel=fir_kernel,
+                        skip_rescale=skip_rescale,
+                    )
+                )
             self.dec_resnets.append(lvl_res)
             self.dec_attns.append(
                 AttnBlock(out_ch, skip_rescale=skip_rescale) if use_attn else None
@@ -455,9 +514,17 @@ class SongUNet(nn.Module):
 
             if level > 0:
                 self.dec_ups.append(
-                    ResBlock(act, ch, ch, emb_dim, up=True,
-                             dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                             skip_rescale=skip_rescale)
+                    ResBlock(
+                        act,
+                        ch,
+                        ch,
+                        emb_dim,
+                        up=True,
+                        dropout=dropout,
+                        fir=fir,
+                        fir_kernel=fir_kernel,
+                        skip_rescale=skip_rescale,
+                    )
                 )
             else:
                 self.dec_ups.append(None)
@@ -485,8 +552,8 @@ class SongUNet(nn.Module):
         K = 1 matches the 4-channel spatial PE used in CorrDiff.
         """
         K = self.spatial_pe_freqs
-        y = torch.arange(H, device=device, dtype=dtype).view(H, 1) / H    # (H, 1)
-        x = torch.arange(W, device=device, dtype=dtype).view(1, W) / W    # (1, W)
+        y = torch.arange(H, device=device, dtype=dtype).view(H, 1) / H  # (H, 1)
+        x = torch.arange(W, device=device, dtype=dtype).view(1, W) / W  # (1, W)
         freqs = (2.0 ** torch.arange(K, device=device, dtype=dtype)) * (2.0 * math.pi)
         chans = []
         for f in freqs:
@@ -494,7 +561,7 @@ class SongUNet(nn.Module):
             chans.append((f * y).cos().expand(H, W))
             chans.append((f * x).sin().expand(H, W))
             chans.append((f * x).cos().expand(H, W))
-        return torch.stack(chans, dim=0).unsqueeze(0)                      # (1, 4K, H, W)
+        return torch.stack(chans, dim=0).unsqueeze(0)  # (1, 4K, H, W)
 
     # ---------------------------------------------------------------------
     def _get_spatial_pe(self, target_hw: tuple, device, dtype) -> torch.Tensor:
@@ -503,15 +570,19 @@ class SongUNet(nn.Module):
         it's a pure function of (H, W) so we don't persist it in state_dict."""
         H, W = target_hw
         cache = self._spatial_pe_cache
-        if (cache is None
-                or cache.shape[-2:] != (H, W)
-                or cache.device != device
-                or cache.dtype != dtype):
+        if (
+            cache is None
+            or cache.shape[-2:] != (H, W)
+            or cache.device != device
+            or cache.dtype != dtype
+        ):
             self._spatial_pe_cache = self._build_spatial_pe(H, W, device, dtype)
         return self._spatial_pe_cache
 
     # ---------------------------------------------------------------------
-    def _upsample_cond_low(self, cond_low: torch.Tensor, target_hw: tuple) -> torch.Tensor:
+    def _upsample_cond_low(
+        self, cond_low: torch.Tensor, target_hw: tuple
+    ) -> torch.Tensor:
         if self.cond_upsample == "fir":
             up = fir_upsample(cond_low, self.fir_kernel)
         else:
@@ -570,8 +641,11 @@ class SongUNet(nn.Module):
                     # combined with h at the *downsampled* resolution, then
                     # replaces h so the next level sees the mixed signal.
                     x_pyramid = self.prog_downs[level](x_pyramid)
-                    h = (x_pyramid + h) / math.sqrt(2.0) if self.skip_rescale \
+                    h = (
+                        (x_pyramid + h) / math.sqrt(2.0)
+                        if self.skip_rescale
                         else (x_pyramid + h)
+                    )
                     x_pyramid = h
                 skips.append(h)
 

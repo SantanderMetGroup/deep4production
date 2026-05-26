@@ -1,10 +1,10 @@
 ## Load libraries
-import os
-import numpy as np
 import torch
-from torch_geometric.data import HeteroData
+
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
+
+
 ##################################################################################################################################
 class trainer_custom(trainer):
     """
@@ -19,10 +19,21 @@ class trainer_custom(trainer):
         d4dpy (dict): Custom pydataset configuration.
         Mlflow (dict): MLflow tracking configuration.
     """
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
-                 hardware=None):
 
+    def __init__(
+        self,
+        data,
+        dataloader,
+        id_dir,
+        model_info,
+        graph,
+        d4dpy,
+        Mlflow,
+        normalizer_info_x=None,
+        normalizer_info_y=None,
+        normalizer_info_f=None,
+        hardware=None,
+    ):
         ######### Call parent constructor to initialize common attributes #########
         super().__init__(
             data=data,
@@ -39,7 +50,16 @@ class trainer_custom(trainer):
         )
 
     # -------------------------------------------------------------------------
-    def model_backprop(self, model, data, optimizer, loss_function, device, is_this_training=True, members=2):
+    def model_backprop(
+        self,
+        model,
+        data,
+        optimizer,
+        loss_function,
+        device,
+        is_this_training=True,
+        members=2,
+    ):
         """
         Performs a single forward and backward pass for a batch using ensemble prediction.
         Purpose: Runs forward passes for each ensemble member, stacks predictions, computes loss, and performs backpropagation.
@@ -56,7 +76,7 @@ class trainer_custom(trainer):
         """
         # --- Get arrays ---
         x, y, f = data
-        non_blocking = (self.device_type == "cuda")
+        non_blocking = self.device_type == "cuda"
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
 

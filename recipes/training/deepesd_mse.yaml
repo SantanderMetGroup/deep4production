@@ -1,35 +1,34 @@
 ##### GENERAL INFO #####
 run_ID: deepesd_mse # example
-output_dir: path_to_your_output_dir 
+output_dir: path_to_your_output_dir
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 2080,
-                    2080, 2081, 2082, 2083, 2084, 2085, 2086, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2096, 2097, 2098, 2099]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 2080, 2080, 2081, 2082, 2083, 2084, 2085, 2086, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2096, 2097, 2098, 2099]
   validation_period: [1967, 1975, 2087, 2095]
 
   predictors:
     paths:
-      - path_to_your_x_file_1.zarr
-      - path_to_your_x_file_2.zarr
-      - ...
-    variables: null  # If null, uses all variables available in the zarrs. 
-    normalizer: 
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - '...'
+    variables:       # If null, uses all variables available in the zarrs.
+    normalizer:
       path_reference: path_to_your_x_file_1.zarr
       default: mean_std # Applies this type of standardization to all the variables in the predictor set
-    transform_to_2D: True
+    transform_to_2D: true
 
   predictands:
     paths:
-      - path_to_your_y_file_1.zarr
-      - path_to_your_y_file_2.zarr
-      - ...
+    - path_to_your_y_file_1.zarr
+    - path_to_your_y_file_2.zarr
+    - '...'
     variables:
-      - tasmax
-    transform_to_2D: True
+    - tasmax
+    transform_to_2D: true
 
 
 ##### DATA LOADER CONFIGURATION #####
@@ -55,15 +54,15 @@ hardware:
 
 
 ##### REGRESSOR CONFIGURATION #####
-model_info: 
+model_info:
   saving_params:
     model_save_name: DeepESD_Mse
-  loss_params: 
+  loss_params:
     name: MseLoss
     module: deep4production.deep.loss
     # kwargs (loss function)
     kwargs:
-      ignore_nans: True
+      ignore_nans: true
   model_params:
     name: DeepESD
     module: deep4production.deep.models.cnn.DeepESD
@@ -78,5 +77,3 @@ model_info:
     patience_early_stopping: 30
     optimizer_params:
       lr: 0.0001
-
-

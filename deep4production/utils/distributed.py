@@ -89,9 +89,7 @@ def init_distributed(hardware: dict | None = None) -> dict:
         world_size = int(os.environ.get("SLURM_NTASKS", world_expected))
         if "MASTER_ADDR" not in os.environ:
             os.environ["MASTER_ADDR"] = _resolve_master_addr_from_slurm()
-        os.environ.setdefault(
-            "MASTER_PORT", str(hardware.get("master_port", 29500))
-        )
+        os.environ.setdefault("MASTER_PORT", str(hardware.get("master_port", 29500)))
     elif "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         rank = int(os.environ["RANK"])
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -108,14 +106,15 @@ def init_distributed(hardware: dict | None = None) -> dict:
         log.warning(
             "Launcher world_size=%d differs from recipe hardware "
             "(num_nodes=%d × gpus_per_node=%d = %d). Using launcher value.",
-            world_size, num_nodes, gpus_per_node, world_expected,
+            world_size,
+            num_nodes,
+            gpus_per_node,
+            world_expected,
         )
 
     # --- Bind local GPU and start the process group ---
     if not torch.cuda.is_available():
-        raise RuntimeError(
-            "DDP requires CUDA but torch.cuda.is_available() is False."
-        )
+        raise RuntimeError("DDP requires CUDA but torch.cuda.is_available() is False.")
     if local_rank >= torch.cuda.device_count():
         raise RuntimeError(
             f"local_rank={local_rank} but only "
@@ -129,8 +128,12 @@ def init_distributed(hardware: dict | None = None) -> dict:
         log.info(
             "DDP initialized: backend=%s world_size=%d (num_nodes=%d × "
             "gpus_per_node=%d) MASTER_ADDR=%s MASTER_PORT=%s",
-            backend, world_size, num_nodes, gpus_per_node,
-            os.environ.get("MASTER_ADDR"), os.environ.get("MASTER_PORT"),
+            backend,
+            world_size,
+            num_nodes,
+            gpus_per_node,
+            os.environ.get("MASTER_ADDR"),
+            os.environ.get("MASTER_PORT"),
         )
 
     return {

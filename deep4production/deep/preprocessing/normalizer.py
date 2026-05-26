@@ -134,10 +134,13 @@ class InputNormalizer(nn.Module):
                         "Variable '%s' uses 'mean_std' with operator '%s'. "
                         "The raw zarr mean/std are not corrected for the operator; "
                         "use 'minmax_neg1_1' or recompute stats on operator-applied data.",
-                        var, stats_transform,
+                        var,
+                        stats_transform,
                     )
                 if std_i == 0.0:
-                    raise ValueError(f"std=0 for variable '{var}'; cannot mean_std-normalize.")
+                    raise ValueError(
+                        f"std=0 for variable '{var}'; cannot mean_std-normalize."
+                    )
                 mul[i] = 1.0 / std_i
                 add[i] = -mean_i / std_i
 
@@ -146,16 +149,21 @@ class InputNormalizer(nn.Module):
                     log.warning(
                         "Variable '%s' uses 'std' with operator '%s'. "
                         "The raw zarr std is not corrected for the operator.",
-                        var, stats_transform,
+                        var,
+                        stats_transform,
                     )
                 if std_i == 0.0:
-                    raise ValueError(f"std=0 for variable '{var}'; cannot std-normalize.")
+                    raise ValueError(
+                        f"std=0 for variable '{var}'; cannot std-normalize."
+                    )
                 mul[i] = 1.0 / std_i
                 add[i] = 0.0
 
             elif method == "max":
                 if max_i == 0.0:
-                    raise ValueError(f"max=0 for variable '{var}'; cannot max-normalize.")
+                    raise ValueError(
+                        f"max=0 for variable '{var}'; cannot max-normalize."
+                    )
                 mul[i] = 1.0 / max_i
                 add[i] = 0.0
 
@@ -273,5 +281,7 @@ class InputNormalizer(nn.Module):
         x.sub_(self._norm_add.view(shape)).div_(self._norm_mul.view(shape))
         return x
 
-    def forward(self, x: torch.Tensor, channel_dim: Optional[int] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, channel_dim: Optional[int] = None
+    ) -> torch.Tensor:
         return self.transform(x, in_place=True, channel_dim=channel_dim)

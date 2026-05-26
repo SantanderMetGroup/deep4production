@@ -3,7 +3,7 @@ This module contains functions for transforming and manipulating xarray.Dataset 
 It provides tools for data cleaning, alignment, standardization, and other common data operations.
 
 Author: Jose González-Abad, Jorge Baño-Medina
-""" 
+"""
 
 import xarray as xr
 import numpy as np
@@ -11,6 +11,7 @@ from typing import Union, List, Tuple
 from deep4production.utils.log import get_logger
 
 log = get_logger("trans")
+
 
 def from_xr_grid_to_vector(y):
     """
@@ -20,35 +21,37 @@ def from_xr_grid_to_vector(y):
     Returns:
         xarray.DataArray: Stacked 1D vector.
     """
- 
+
     ## Compute mask to identify NaNs in the output field
-    y_mask = compute_valid_mask(y) 
+    y_mask = compute_valid_mask(y)
 
     ## Predictand: Convert 2D grid to 1D vector
     if "x" in y.dims and "y" in y.dims:
-         if y.sizes["x"] > 1 and y.sizes["y"] > 1:
-              y_mask_stack = y_mask.stack(gridpoint=("y", "x"))
-              y_stack = y.stack(gridpoint=("y", "x"))
-         else:
-              raise ValueError("x or y dimension has size <= 1; cannot stack.")
-    
+        if y.sizes["x"] > 1 and y.sizes["y"] > 1:
+            y_mask_stack = y_mask.stack(gridpoint=("y", "x"))
+            y_stack = y.stack(gridpoint=("y", "x"))
+        else:
+            raise ValueError("x or y dimension has size <= 1; cannot stack.")
+
     elif "lat" in y.dims and "lon" in y.dims:
-       y_mask_stack = y_mask.stack(gridpoint=("lat", "lon"))
-       y_stack = y.stack(gridpoint=("lat", "lon"))
-    
+        y_mask_stack = y_mask.stack(gridpoint=("lat", "lon"))
+        y_stack = y.stack(gridpoint=("lat", "lon"))
+
     else:
-         raise ValueError("Cannot determine which dimensions to stack.")
+        raise ValueError("Cannot determine which dimensions to stack.")
 
     ## Drop NaNs
-    y_stack_filt = y_stack.where(y_stack['gridpoint'] == y_mask_stack['gridpoint'], drop=True) 
+    y_stack_filt = y_stack.where(
+        y_stack["gridpoint"] == y_mask_stack["gridpoint"], drop=True
+    )
 
     ## Return
     return y_stack_filt
 
 
-def remove_days_with_nans(data: xr.Dataset,
-                          coord_names: dict={'lat': 'lat',
-                                             'lon': 'lon'}) -> xr.Dataset:
+def remove_days_with_nans(
+    data: xr.Dataset, coord_names: dict = {"lat": "lat", "lon": "lon"}
+) -> xr.Dataset:
     """
     Removes days with at least one NaN across spatial domain for all variables.
     Parameters:
@@ -60,8 +63,9 @@ def remove_days_with_nans(data: xr.Dataset,
 
     # Get time indices with zero null values
     nans_indices = data.isnull()
-    nans_indices = nans_indices.sum(dim=(coord_names['lat'],
-                                         coord_names['lon'])).to_array().values
+    nans_indices = (
+        nans_indices.sum(dim=(coord_names["lat"], coord_names["lon"])).to_array().values
+    )
     nans_indices = np.logical_or.reduce(nans_indices, axis=0)
     nans_indices = ~nans_indices
 
@@ -72,12 +76,16 @@ def remove_days_with_nans(data: xr.Dataset,
     if np.sum(nans_indices) == len(nans_indices):
         log.debug("No observations containing null values")
     else:
-        log.info("Removing %d observations containing null values", int(np.sum(nans_indices)))
+        log.info(
+            "Removing %d observations containing null values", int(np.sum(nans_indices))
+        )
 
     return data
 
-def align_datasets(data_1: xr.Dataset, data_2: xr.Dataset, coord: str) -> (xr.Dataset, xr.Dataset):
 
+def align_datasets(
+    data_1: xr.Dataset, data_2: xr.Dataset, coord: str
+) -> (xr.Dataset, xr.Dataset):
     """
     Align two Datasets with respect to the coord
 
@@ -91,16 +99,15 @@ def align_datasets(data_1: xr.Dataset, data_2: xr.Dataset, coord: str) -> (xr.Da
 
     Returns
     -------
-    xr.Dataset, xr.Dataset) 
-        Aligned Datasets      
+    xr.Dataset, xr.Dataset)
+        Aligned Datasets
     """
 
-    data_1 = data_1.sel(time=np.in1d(data_1[coord].values,
-                                     data_2[coord].values))
-    data_2 = data_2.sel(time=np.in1d(data_2[coord].values,
-                                     data_1[coord].values))
+    data_1 = data_1.sel(time=np.in1d(data_1[coord].values, data_2[coord].values))
+    data_2 = data_2.sel(time=np.in1d(data_2[coord].values, data_1[coord].values))
 
     return data_1, data_2
+
 
 def standardize(
     data: xr.Dataset,
@@ -108,9 +115,8 @@ def standardize(
     path_mean: str = None,
     path_std: str = None,
     dims: Union[str, List[str]] = "time",
-    return_params: bool = False
+    return_params: bool = False,
 ) -> Union[xr.Dataset, Tuple[xr.Dataset, xr.Dataset, xr.Dataset]]:
-
     """
     Standardize the data with the mean and std computed over the data_ref.
     x' = (x - mean) / std
@@ -122,7 +128,7 @@ def standardize(
 
     data : xr.DataSet
         Data to standardize
-    
+
     dims : str or list of str, default "time"
         Dimensions over which to compute the mean and standard deviation.
 
@@ -149,8 +155,8 @@ def standardize(
     else:
         return data_stand
 
-def undo_standardization(data_ref: xr.Dataset, data: xr.Dataset) -> xr.Dataset:
 
+def undo_standardization(data_ref: xr.Dataset, data: xr.Dataset) -> xr.Dataset:
     """
     Undo the standardize data with the mean and std computed over the data_ref.
     x' = (x - mean) / std
@@ -166,19 +172,19 @@ def undo_standardization(data_ref: xr.Dataset, data: xr.Dataset) -> xr.Dataset:
 
     Returns
     -------
-    xr.Dataset        
+    xr.Dataset
         Standardize data
     """
 
-    mean = data_ref.mean('time')
-    std = data_ref.std('time')
+    mean = data_ref.mean("time")
+    std = data_ref.std("time")
 
     data_undo_stand = (data * std) + mean
 
     return data_undo_stand
 
-def xarray_to_numpy(data: xr.Dataset, ignore_vars: list[str]=None) -> np.ndarray:
 
+def xarray_to_numpy(data: xr.Dataset, ignore_vars: list[str] = None) -> np.ndarray:
     """
     Converts a xr.Dataset to np.ndarray by relying on to_numpy()
     from xarray.
@@ -189,7 +195,7 @@ def xarray_to_numpy(data: xr.Dataset, ignore_vars: list[str]=None) -> np.ndarray
         Data to convert
 
     ignore_vars : list[str]
-        Variables to ignore during the conversion. The returned 
+        Variables to ignore during the conversion. The returned
         numpy array will not include these variables. By default
         is NOne so no variable will be ignored.
 
@@ -214,8 +220,8 @@ def xarray_to_numpy(data: xr.Dataset, ignore_vars: list[str]=None) -> np.ndarray
 
     return final_data
 
-def compute_valid_mask(data: xr.Dataset) -> xr.Dataset:
 
+def compute_valid_mask(data: xr.Dataset) -> xr.Dataset:
     """
     Compute a mask indicating whether for each spatial point there is
     any nan (0) or not (1). This function collapses the time dimension.
@@ -231,13 +237,13 @@ def compute_valid_mask(data: xr.Dataset) -> xr.Dataset:
         Mask with 1 for spatial locations with non-nans and 0 otherwise
     """
 
-    data_mask = data.isnull().astype('int').mean('time')
+    data_mask = data.isnull().astype("int").mean("time")
     data_mask = xr.where(data_mask == 0, 1, 0)
 
     return data_mask
 
-def compute_valid_multivariate_mask(*data: xr.Dataset) -> xr.Dataset:
 
+def compute_valid_multivariate_mask(*data: xr.Dataset) -> xr.Dataset:
     """
     Compute a mask indicating whether for each spatial point there is
     any nan (0) or not (1) across all the Datasets provided. This
@@ -255,23 +261,24 @@ def compute_valid_multivariate_mask(*data: xr.Dataset) -> xr.Dataset:
     """
 
     if len(data) == 1:
-        raise ValueError('Use compute_valid_mask() instead.')
+        raise ValueError("Use compute_valid_mask() instead.")
 
     for idx, x in enumerate(data):
-        var_name =  list(x.data_vars)[0]
+        var_name = list(x.data_vars)[0]
         if idx == 0:
             data_mask = compute_valid_mask(x[var_name])
         else:
             data_mask = data_mask + compute_valid_mask(x[var_name])
 
     data_mask = xr.where(data_mask == len(data), 1, 0)
-    data_mask = data_mask.to_dataset(name='mask')
+    data_mask = data_mask.to_dataset(name="mask")
 
     return data_mask
 
-def split_data(*data: np.ndarray,
-               split_percentage: float, shuffle: bool, seed: int=None) -> np.ndarray:
 
+def split_data(
+    *data: np.ndarray, split_percentage: float, shuffle: bool, seed: int = None
+) -> np.ndarray:
     """
     Split the input data into two new datasets in the first dimension of the
     data, which in our context generally corresponds to time. This split is
@@ -283,7 +290,7 @@ def split_data(*data: np.ndarray,
         Data to split. It accepts any number of np.ndarray objects. It is
         required for these to have the same first dimension, otherwise this
         function will throw an error.
-    
+
     split_percentage : float
         What percentage of data to reserve for the new dataset. For instance,
         a value of 0.1 corresponds to the 10%.
@@ -313,23 +320,22 @@ def split_data(*data: np.ndarray,
 
     lens_data = [x.shape[0] for x in data]
     if len(set(lens_data)) != 1:
-        error_msg =\
-        'All data provided must have the same number of elements across'
-        'the first dimension'
-        
+        error_msg = "All data provided must have the same number of elements across"
+        "the first dimension"
+
         raise ValueError(error_msg)
 
     idxs = list(range(data[0].shape[0]))
 
     if shuffle:
         np.random.shuffle(idxs)
-    
+
     # This copy is needed for the reordering to have effect
     data_copy = []
     for x in data:
         data_copy.append(np.array(x[idxs, :], copy=True))
 
-    split_threshold = round((1-split_percentage) * len(idxs))
+    split_threshold = round((1 - split_percentage) * len(idxs))
 
     data_split_1 = []
     for x in data_copy:
@@ -341,12 +347,13 @@ def split_data(*data: np.ndarray,
 
     return (*data_split_1, *data_split_2)
 
-def scaling_delta_correction(data: xr.Dataset,
-                             gcm_hist: xr.Dataset, obs_hist: xr.Dataset) -> xr.Dataset:
 
+def scaling_delta_correction(
+    data: xr.Dataset, gcm_hist: xr.Dataset, obs_hist: xr.Dataset
+) -> xr.Dataset:
     """
     Apply the scaling delta correction proposed in Baño-Medina et al. 2024 to bias-correct
-    the mean and standard deviation of data (GCM in historical/future scenrios) to "take it 
+    the mean and standard deviation of data (GCM in historical/future scenrios) to "take it
     closer" to the distribution of the observations used to train the DL model (obs_hist).
     When bias-correcting a GCM in a future scenario, the climate change seasonal is not lost,
     as a delta between the future and historical climatology is added back to the bias-corrected
@@ -383,36 +390,38 @@ def scaling_delta_correction(data: xr.Dataset,
     data_final = data.copy(deep=True)
 
     # Define the scaling delta correction
-    def _correction(data: xr.Dataset,
-                    gcm_hist: xr.Dataset, obs_hist: xr.Dataset) -> xr.Dataset:
-
+    def _correction(
+        data: xr.Dataset, gcm_hist: xr.Dataset, obs_hist: xr.Dataset
+    ) -> xr.Dataset:
         data_final = data.copy(deep=True)
 
-        data_mean = data.mean('time')
-        gcm_hist_mean = gcm_hist.mean('time')
-        obs_hist_mean = obs_hist.mean('time')
+        data_mean = data.mean("time")
+        gcm_hist_mean = gcm_hist.mean("time")
+        obs_hist_mean = obs_hist.mean("time")
 
-        gcm_hist_sd = gcm_hist.std('time')
-        obs_hist_sd = obs_hist.std('time')
+        gcm_hist_sd = gcm_hist.std("time")
+        obs_hist_sd = obs_hist.std("time")
 
         delta = data_mean - gcm_hist_mean
 
-        data_final = ((((data_final - delta - gcm_hist_mean)/gcm_hist_sd) * \
-                   obs_hist_sd) + obs_hist_mean + delta)
+        data_final = (
+            (((data_final - delta - gcm_hist_mean) / gcm_hist_sd) * obs_hist_sd)
+            + obs_hist_mean
+            + delta
+        )
 
         return data_final
 
     # Apply the correction by month
-    months = np.unique(data['time.month'].values)
+    months = np.unique(data["time.month"].values)
     for month in months:
-
         data_month = data.sel(time=data.time.dt.month.isin(month))
         gcm_hist_month = gcm_hist.sel(time=gcm_hist.time.dt.month.isin(month))
         obs_hist_month = obs_hist.sel(time=obs_hist.time.dt.month.isin(month))
 
-        data_corrected = _correction(data=data_month,
-                                     gcm_hist=gcm_hist_month,
-                                     obs_hist=obs_hist_month)
+        data_corrected = _correction(
+            data=data_month, gcm_hist=gcm_hist_month, obs_hist=obs_hist_month
+        )
 
         # Assign the corrected variable to data_final
         for var in data_final.keys():
@@ -420,8 +429,8 @@ def scaling_delta_correction(data: xr.Dataset,
 
     return data_final
 
+
 def replicate_across_time(data: xr.Dataset, ref: xr.Dataset) -> xr.Dataset:
-    
     """
     Replicate data across the ref time dimension by replicating it.
 
@@ -443,20 +452,19 @@ def replicate_across_time(data: xr.Dataset, ref: xr.Dataset) -> xr.Dataset:
 
     # If data has the time dimension with remove all but the first values,
     # which is the one to be replicated across the time dimension of ref
-    if 'time' in data_final.dims:
-        data_final = data_final.sel(time=data_final['time'].values[0])
-        data_final = data_final.drop_vars('time')
+    if "time" in data_final.dims:
+        data_final = data_final.sel(time=data_final["time"].values[0])
+        data_final = data_final.drop_vars("time")
 
     # Get the name of the DataArray within the Dataset
     var_name = list(data_final.data_vars)[0]
 
     # Get the time values from ref
-    time_values = ref['time'].values
+    time_values = ref["time"].values
 
     # Replicate across time
-    data_rep = xr.concat([data_final[var_name]] * len(time_values),
-                          dim='time')
-    data_rep['time'] = time_values
+    data_rep = xr.concat([data_final[var_name]] * len(time_values), dim="time")
+    data_rep["time"] = time_values
 
     # Transform to Dataset
     data_rep = data_rep.to_dataset(name=var_name)
@@ -479,8 +487,17 @@ def replicate_across_time(data: xr.Dataset, ref: xr.Dataset) -> xr.Dataset:
 #     return mask
 
 
-
-def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H=None, W=None, precomputed_mask=None):
+def from_pred_to_xarray(
+    data_pred,
+    time_pred,
+    vars,
+    lats,
+    lons,
+    template=None,
+    H=None,
+    W=None,
+    precomputed_mask=None,
+):
     """
     Convert numpy predictions into an xarray.Dataset with OR without a template.
 
@@ -516,16 +533,24 @@ def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H
     elif data_pred.ndim == 3:
         B, C, G = data_pred.shape
     else:
-        raise ValueError(f"data_pred must be (B,C,G) or (B,C,H,W). Got {data_pred.shape}")
+        raise ValueError(
+            f"data_pred must be (B,C,G) or (B,C,H,W). Got {data_pred.shape}"
+        )
     # ----------------------------------------------------------
     # CASE 1 — Using template
     # ----------------------------------------------------------
     if template is not None:
         if data_pred.ndim == 3:
-            data_pred = data_pred.reshape(B, C, H, W) # Ensure shape is (B, C, H, W). B, C, G → B, C, H, W
+            data_pred = data_pred.reshape(
+                B, C, H, W
+            )  # Ensure shape is (B, C, H, W). B, C, G → B, C, H, W
         ds_list = []
         # Build spatial mask (use precomputed if provided)
-        mask = precomputed_mask if precomputed_mask is not None else compute_valid_mask(template)
+        mask = (
+            precomputed_mask
+            if precomputed_mask is not None
+            else compute_valid_mask(template)
+        )
         mask = mask.expand_dims(time=time)
         mask = mask.ffill("time")
         var_mask_name = list(mask.data_vars)[0]
@@ -541,7 +566,9 @@ def from_pred_to_xarray(data_pred, time_pred, vars, lats, lons, template=None, H
     # ----------------------------------------------------------
     else:
         if data_pred.ndim == 4:
-            data_pred = data_pred.reshape(B, C, H * W) # Ensure shape is (B, C, G). B, C, H, W → B, C, G
+            data_pred = data_pred.reshape(
+                B, C, H * W
+            )  # Ensure shape is (B, C, G). B, C, H, W → B, C, G
         ds = xr.Dataset()
         # Loop over variables
         for c, var_name in enumerate(vars):

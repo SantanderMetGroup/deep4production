@@ -8,11 +8,11 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
-import math
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.log import get_logger
 
 log = get_logger("deep.utils")
+
 
 # --------------------------------------------------------------------------------------------------------------
 class StandardDataset(Dataset):
@@ -48,6 +48,7 @@ class StandardDataset(Dataset):
         y = self.y[idx, :]
         return x, y
 
+
 # --------------------------------------------------------------------------------------------------------------
 def precipitation_NLL_trans(data: xr.Dataset, threshold: float) -> xr.Dataset:
     """
@@ -60,11 +61,12 @@ def precipitation_NLL_trans(data: xr.Dataset, threshold: float) -> xr.Dataset:
     """
     data_final = data.copy(deep=True)
     epsilon = 1e-06
-    threshold = threshold - epsilon # Include in the distribution of wet days the threshold value
+    threshold = (
+        threshold - epsilon
+    )  # Include in the distribution of wet days the threshold value
     data_final = data_final - threshold
-    data_final = xr.where(cond=data_final<0, x=0, y=data_final)
+    data_final = xr.where(cond=data_final < 0, x=0, y=data_final)
     return data_final
-
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -77,11 +79,16 @@ class EMA:
         device: Device string ('cpu' or 'cuda').
         decay (float): EMA decay rate.
     """
+
     def __init__(self, model, device, decay=0.5):
         self.model = model
         self.decay = decay
         # Initialize shadow weights as a copy of model parameters
-        self.shadow = {name: param.clone().detach().to(device) for name, param in model.named_parameters() if param.requires_grad}
+        self.shadow = {
+            name: param.clone().detach().to(device)
+            for name, param in model.named_parameters()
+            if param.requires_grad
+        }
 
     def update(self):
         """
@@ -93,7 +100,9 @@ class EMA:
         with torch.no_grad():
             for name, param in self.model.named_parameters():
                 if name in self.shadow:
-                    self.shadow[name] = self.decay * self.shadow[name] + (1 - self.decay) * param
+                    self.shadow[name] = (
+                        self.decay * self.shadow[name] + (1 - self.decay) * param
+                    )
 
     def apply_shadow(self):
         """
@@ -122,8 +131,19 @@ class EMA:
                 param.data.copy_(self.backup[name])
         self.backup = None
 
+
 # --------------------------------------------------------------------------------------------------------------
-def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_losses, metadata = None, scheduler=None):
+def save_model(
+    model,
+    path,
+    optimizer,
+    epoch,
+    global_step,
+    train_losses,
+    valid_losses,
+    metadata=None,
+    scheduler=None,
+):
     """
     Saves model checkpoint to disk, including optimizer, scheduler, losses, and metadata.
     Parameters:
@@ -140,20 +160,20 @@ def save_model(model, path, optimizer, epoch, global_step, train_losses, valid_l
         None
     """
     checkpoint = {
-        'epoch': epoch,
-        'global_step': global_step,
-        'train_losses': train_losses[-100:],
-        'valid_losses': valid_losses[-100:] if valid_losses else None,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
-        'metadata': metadata
+        "epoch": epoch,
+        "global_step": global_step,
+        "train_losses": train_losses[-100:],
+        "valid_losses": valid_losses[-100:] if valid_losses else None,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+        "metadata": metadata,
     }
     torch.save(checkpoint, path)
 
 
 # --------------------------------------------------------------------------------------------------------------
-def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
+def resume_model(model, path, optimizer=None, scheduler=None, device="cpu"):
     """
     Loads model checkpoint and resumes training state.
     Parameters:
@@ -166,16 +186,20 @@ def resume_model(model, path, optimizer=None, scheduler=None, device='cpu'):
         dict: Checkpoint dictionary.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    if scheduler and checkpoint['scheduler_state_dict'] is not None:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    log.info("Model resumed from epoch %s step %s", checkpoint['epoch'], checkpoint['global_step'])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler and checkpoint["scheduler_state_dict"] is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    log.info(
+        "Model resumed from epoch %s step %s",
+        checkpoint["epoch"],
+        checkpoint["global_step"],
+    )
     return checkpoint
 
 
-# --------------------------------------------------------------------------------------------------------------  
+# --------------------------------------------------------------------------------------------------------------
 def load_model(path, map_location=None, return_metadata=False):
     """
     Loads model from checkpoint, rebuilds model from metadata, loads weights, and returns model (and metadata).
@@ -190,7 +214,11 @@ def load_model(path, map_location=None, return_metadata=False):
     # Load checkpoint
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     # Use metadata to rebuild model
-    model_name, model_module, model_kwargs = checkpoint["metadata"]["model_params"]["name"], checkpoint["metadata"]["model_params"]["module"], checkpoint["metadata"]["model_params"]["kwargs"]
+    model_name, model_module, model_kwargs = (
+        checkpoint["metadata"]["model_params"]["name"],
+        checkpoint["metadata"]["model_params"]["module"],
+        checkpoint["metadata"]["model_params"]["kwargs"],
+    )
     model = get_func_from_string(model_module, model_name, model_kwargs)
     # Load weights
     model.load_state_dict(checkpoint["model_state_dict"])

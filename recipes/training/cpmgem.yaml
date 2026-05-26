@@ -19,28 +19,27 @@ data:
   # to keep recently-touched chunks warm without materialising the whole
   # dataset. Omit (or set null) to disable caching.
   # zarr_cache_mb: 512
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
     paths:
-      - path_to_your_x_file_1.zarr
-      - path_to_your_x_file_2.zarr
-      - ...
-    variables: null        # null → all variables in the zarr
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - '...'
+    variables:             # null → all variables in the zarr
     normalizer:
       path_reference: path_to_your_x_file_1.zarr
       default: mean_std    # standardise predictors to zero mean / unit variance
-    transform_to_2D: True  # flatten gridpoints → (C, H_x, W_x) spatial grid
+    transform_to_2D: true  # flatten gridpoints → (C, H_x, W_x) spatial grid
 
   predictands:
     paths:
-      - path_to_your_y_file_1.zarr
-      - path_to_your_y_file_2.zarr
-      - ...
+    - path_to_your_y_file_1.zarr
+    - path_to_your_y_file_2.zarr
+    - '...'
     variables:
-      - pr                 # adjust to your target variable(s)
+    - pr                   # adjust to your target variable(s)
     # Paper transform: pr  →  sqrt(pr)  →  linearly rescale to [-1, 1].
     # The operator is applied first, then the normalizer. Because sqrt is
     # monotone on pr ≥ 0, the post-operator min/max are derived automatically
@@ -51,7 +50,7 @@ data:
     normalizer:
       path_reference: path_to_your_y_file_1.zarr
       default: minmax_neg1_1  # 2*(x-min)/(max-min) - 1
-    transform_to_2D: True
+    transform_to_2D: true
 
 
 ##### DATA LOADER CONFIGURATION #####
@@ -119,7 +118,7 @@ model_info:
   # ── Training ──────────────────────────────────────────────────────────────────
   training_params:
     num_epochs: 400          # mlde paper trains for 400 epochs; don't stop early
-    patience_early_stopping: null  # null = disabled; diffusion models need full training
+    patience_early_stopping:       # null = disabled; diffusion models need full training
     optimizer_params:
       lr: 0.0002                  # Adam lr (paper value)
     ema_decay: 0.9999             # EMA for weight stabilisation (paper value)

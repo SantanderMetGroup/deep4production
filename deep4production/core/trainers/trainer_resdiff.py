@@ -1,13 +1,13 @@
 ## Load libraries
-import os
-import numpy as np
 import torch
+
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
-from deep4production.core.pydatasets.pydataset_resdiff import pydataset_custom
 from deep4production.utils.log import get_logger
 
 log = get_logger("trainer.resdiff")
+
+
 ##################################################################################################################################
 class trainer_custom(trainer):
     """
@@ -22,9 +22,21 @@ class trainer_custom(trainer):
         d4dpy (dict): Custom pydataset configuration.
         Mlflow (dict): MLflow tracking configuration.
     """
-    def __init__(self, data, dataloader, id_dir, model_info, graph, d4dpy, Mlflow,
-                 normalizer_info_x=None, normalizer_info_y=None, normalizer_info_f=None,
-                 hardware=None):
+
+    def __init__(
+        self,
+        data,
+        dataloader,
+        id_dir,
+        model_info,
+        graph,
+        d4dpy,
+        Mlflow,
+        normalizer_info_x=None,
+        normalizer_info_y=None,
+        normalizer_info_f=None,
+        hardware=None,
+    ):
         """
         Initializes the Residual Generator trainer.
         """
@@ -54,7 +66,6 @@ class trainer_custom(trainer):
         # --- UPDATE METADATA ---------------------------------------
         self.update_metadata()
 
-
     # -------------------------------------------------------------------------
     def update_metadata(self):
         """
@@ -69,7 +80,9 @@ class trainer_custom(trainer):
         # setdefault avoids clobbering anything the base trainer may put under
         # training_params in the future; canonical noise_params path is
         # metadata.training_params.noise_params (shared with trainer_cpmgem).
-        self.metadata_dict.setdefault("training_params", {})["noise_params"] = {k: v for k, v in self.noise_params.items()}
+        self.metadata_dict.setdefault("training_params", {})["noise_params"] = {
+            k: v for k, v in self.noise_params.items()
+        }
         self.metadata_dict["add_pred_mean"] = self.add_pred_mean
         self.metadata_dict["add_context_lowres"] = self.add_context_lowres
         self.metadata_dict["path_regressor"] = self.path_regressor
@@ -87,7 +100,12 @@ class trainer_custom(trainer):
             tuple: (train_dataset, valid_dataset)
         """
         ## Create pydatasets
-        kwargs_pydataset = {"predictors": self.data["predictors"], "predictands": self.data["predictands"], "load_in_memory": self.data.get("load_in_memory", True), "cache_mb": self.data.get("zarr_cache_mb", None)}
+        kwargs_pydataset = {
+            "predictors": self.data["predictors"],
+            "predictands": self.data["predictands"],
+            "load_in_memory": self.data.get("load_in_memory", True),
+            "cache_mb": self.data.get("zarr_cache_mb", None),
+        }
         kwargs_pydataset.update(**self.d4dpy)
         # The resdiff pydataset needs to normalize x and y on CPU for the
         # one-shot residuals precomputation (the regressor and its training
@@ -96,17 +114,21 @@ class trainer_custom(trainer):
         kwargs_pydataset["normalizer_info_x"] = self.normalizer_info_x
         kwargs_pydataset["normalizer_info_y"] = self.normalizer_info_y
         kwargs_pydataset.update({"dataset": "training"})
-        train_dataset = self.pydataset(temporal_period = self.data["training_period"], **kwargs_pydataset)
+        train_dataset = self.pydataset(
+            temporal_period=self.data["training_period"], **kwargs_pydataset
+        )
         valid_dataset = None
         if self.data.get("validation_period", None) is not None:
             kwargs_pydataset.update({"dataset": "validation"})
-            valid_dataset = self.pydataset(temporal_period = self.data["validation_period"], **kwargs_pydataset)
+            valid_dataset = self.pydataset(
+                temporal_period=self.data["validation_period"], **kwargs_pydataset
+            )
         ### Update metadata and save it with the new information
-        self.metadata_dict = self.cont_metadata(train_dataset) 
+        self.metadata_dict = self.cont_metadata(train_dataset)
         # self.save_metadata(self.metadata_path)
         log.info("Pydatasets ready")
         return train_dataset, valid_dataset
-        
+
     # -------------------------------------------------------------------------
     def sigma(self, P_mean, P_std, sigma_min, sigma_max, batch_size):
         """
@@ -123,11 +145,20 @@ class trainer_custom(trainer):
         """
         z = torch.randn(batch_size, 1, 1, 1)  # standard normal
         sigma_t = torch.exp(P_mean + P_std * z)
-        sigma_t = sigma_t.clamp(min=sigma_min, max=sigma_max) 
+        sigma_t = sigma_t.clamp(min=sigma_min, max=sigma_max)
         return sigma_t
 
     # -------------------------------------------------------------------------
-    def model_backprop(self, model, data, optimizer, loss_function, device, noise_params, is_this_training=True):
+    def model_backprop(
+        self,
+        model,
+        data,
+        optimizer,
+        loss_function,
+        device,
+        noise_params,
+        is_this_training=True,
+    ):
         """
         Performs a single forward and backward pass for a batch.
 
@@ -167,7 +198,7 @@ class trainer_custom(trainer):
         # --- Unpack batch ---
         r, c_low, c_high = data
         batch_size = r.shape[0]
-        non_blocking = (self.device_type == "cuda")
+        non_blocking = self.device_type == "cuda"
 
         r = r.to(device, non_blocking=non_blocking)
         if c_low is not None:
@@ -186,7 +217,13 @@ class trainer_custom(trainer):
             c_low = self.norm_x(c_low)
 
         # --- Sample noise level and corrupt the clean target — kept in fp32 ---
-        sigma_t = self.sigma(P_mean, P_std, sigma_min=sigma_min, sigma_max=sigma_max, batch_size=batch_size).to(device)
+        sigma_t = self.sigma(
+            P_mean,
+            P_std,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            batch_size=batch_size,
+        ).to(device)
         z = torch.randn_like(r)
         r_t = r + sigma_t * z
 

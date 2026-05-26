@@ -8,14 +8,14 @@ This section provides an overview of the internal structure of the `deep4product
 
 The package is organized into four main layers:
 
-- **CLI layer (`cli/`)** → User-facing commands  
-- **Core layer (`core/`)** → Main application logic  
-- **Utilities & deep learning modules (`utils/`, `deep/`)** → Supporting functionality and models  
+- **CLI layer (`cli/`)** → User-facing commands
+- **Core layer (`core/`)** → Main application logic
+- **Utilities & deep learning modules (`utils/`, `deep/`)** → Supporting functionality and models
 - **Visualization (`viz/`)** → code for visualize the predicted meteorological fields.
 
 This modular design separates responsibilities, making the codebase easier to maintain and extend.
 
----
+______________________________________________________________________
 
 ### CLI Layer (`cli/`)
 
@@ -23,49 +23,53 @@ The `cli/` module provides entry points for interacting with the library from th
 
 - `d4p-create` → Prepare AI ready datasets
 - `d4p-inspect` → Inspect AI ready datasets
-- `d4p-train` → Train deep learning models  
-- `d4p-downscale` → Run inference using trained models  
+- `d4p-train` → Train deep learning models
+- `d4p-downscale` → Run inference using trained models
 
 These commands orchestrate workflows and call into the `core/` modules.
 
----
+______________________________________________________________________
 
 ### Core Layer (`core/`)
 
 The `core/` directory contains the main building blocks:
 
 #### `datasets/`
-- Generates AI-ready datasets  
-- Handles preprocessing and formatting  
+
+- Generates AI-ready datasets
+- Handles preprocessing and formatting
 
 #### `pydatasets/`
-- Stores samples and corresponding labels  
-- Provides standardized dataset interfaces  
+
+- Stores samples and corresponding labels
+- Provides standardized dataset interfaces
 
 #### `trainers/`
-- Implements training pipelines  
-- Handles optimization and training loops  
+
+- Implements training pipelines
+- Handles optimization and training loops
 
 #### `downscalers/`
-- Performs inference using trained models  
-- Produces predictions with appropriate metadata 
 
----
+- Performs inference using trained models
+- Produces predictions with appropriate metadata
+
+______________________________________________________________________
 
 ### Deep Learning Modules (`deep/`)
 
 - Includes functions for training, postprocessors, schedulers and utilities.
 
----
+______________________________________________________________________
 
 ### Utilities (`utils/`)
 
-- General helper functions  
+- General helper functions
 
----
+______________________________________________________________________
 
 ### Visualization (`viz/`)
 
 - Utilities for visualizing outputs (e.g., prediction maps)
 
----
+______________________________________________________________________

@@ -16,7 +16,6 @@ Authors:
 
 import numpy as np
 import torch
-import xarray as xr
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.utils.log import get_logger
@@ -55,8 +54,15 @@ class downscaler_custom(downscaler):
         log.info("Deterministic SongUNet downscaler ready")
 
     # ─────────────────────────────────────────────────────────────────────────
-    def downscale(self, model=None, return_pred=False, verbose=True,
-                  batch_size=1, amp_dtype=None, compile=False):
+    def downscale(
+        self,
+        model=None,
+        return_pred=False,
+        verbose=True,
+        batch_size=1,
+        amp_dtype=None,
+        compile=False,
+    ):
         """
         Deterministic SongUNet inference loop. Date-outer; no member loop
         (model is deterministic, ensemble_size > 1 is broadcast at the end).
@@ -76,7 +82,7 @@ class downscaler_custom(downscaler):
         model = self._maybe_compile(model, compile)
         model.eval()
 
-        C_y     = len(self.vars_y)
+        C_y = len(self.vars_y)
         spatial = [self.H_y, self.W_y] if self.transform_to_2D_y else [self.G_y]
 
         all_dates_np = [np.datetime64(d) for d in self.target_dates]
@@ -91,11 +97,19 @@ class downscaler_custom(downscaler):
             batch_dates = self.target_dates[i : i + batch_size]
             B = len(batch_dates)
             if verbose:
-                log.info("Batch %d/%d: %s → %s (%d dates)",
-                         b_idx + 1, n_batches, batch_dates[0], batch_dates[-1], B)
+                log.info(
+                    "Batch %d/%d: %s → %s (%d dates)",
+                    b_idx + 1,
+                    n_batches,
+                    batch_dates[0],
+                    batch_dates[-1],
+                    B,
+                )
 
             # ── Preprocess low-res conditioning ──────────────────────────
-            inp = self._stack_to_device([self._preprocess_single_date(d) for d in batch_dates])  # (B, C_x, H_x, W_x)
+            inp = self._stack_to_device(
+                [self._preprocess_single_date(d) for d in batch_dates]
+            )  # (B, C_x, H_x, W_x)
 
             # ── GPU-side input normalization (mirrors trainer_song_unet_det) ──
             # Deterministic models always condition on normalized predictors;
@@ -106,7 +120,7 @@ class downscaler_custom(downscaler):
                 inp = self.norm_x(inp)
 
             # ── Deterministic forward pass ────────────────────────────────
-            t    = torch.zeros(B, device=self.device)
+            t = torch.zeros(B, device=self.device)
             x_in = torch.zeros(B, C_y, *spatial, device=self.device)
             with torch.inference_mode(), self._amp_ctx():
                 p_torch = model(x=x_in, t=t, cond_low=inp)
@@ -135,8 +149,14 @@ class downscaler_custom(downscaler):
         # ── Build xarray ONCE; broadcast across ensemble dim ─────────────
         all_preds_np = np.concatenate(all_preds, axis=0)  # (T, C, G)
         ds = from_pred_to_xarray(
-            all_preds_np, all_dates_np, self.vars_y,
-            self.lats, self.lons, self.template, self.H_y, self.W_y,
+            all_preds_np,
+            all_dates_np,
+            self.vars_y,
+            self.lats,
+            self.lons,
+            self.template,
+            self.H_y,
+            self.W_y,
             precomputed_mask=self._template_mask,
         )
         if self.ensemble_size > 1:
