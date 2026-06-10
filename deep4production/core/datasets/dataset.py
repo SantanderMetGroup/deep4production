@@ -17,6 +17,7 @@ from deep4production.utils.forcings import (
 from deep4production.utils.trans import xarray_to_numpy
 from deep4production.utils.general import is_grid_regular
 from deep4production.utils.imputers import d4dimputers
+from deep4production.utils.units import d4dunits
 from deep4production.utils.log import get_logger
 
 log = get_logger("dataset")
@@ -100,6 +101,9 @@ class dataset(Dataset):
 
         # --- IMPUTE NANS (if any) ------
         self.imputer = data.get("imputer", None)
+
+        # --- UNIT CONVERSION (if any) ------
+        self.unit_conversion = data.get("unit_conversion", None)
 
     # ---------------------------------------------------------------
     def get_spatial_dims(self, dataset):
@@ -283,6 +287,40 @@ class dataset(Dataset):
         return units
 
     # ---------------------------------------------------------------
+    def convert_units(self, var, xdata, source_units):
+        """
+        Applies a named physical unit conversion to a variable's array.
+
+        Conversions are configured per variable under ``data["unit_conversion"]``
+        and resolved against :class:`deep4production.utils.units.d4dunits`. The
+        conversion is applied at creation time (before stats are computed), and
+        the returned units string is recorded in the store's ``units`` attribute.
+
+        Parameters:
+            var (str): Variable name.
+            xdata (np.ndarray): Raw variable array read from NetCDF.
+            source_units (str): Units as found in the source NetCDF.
+        Returns:
+            tuple: (converted_array, target_units). Returns the inputs unchanged
+                   if no conversion is configured for ``var``.
+        """
+        if self.unit_conversion is None or var not in self.unit_conversion:
+            return xdata, source_units
+
+        conv = self.unit_conversion[var]
+        conv_name = conv["name"]
+        kwargs_conv = {k: v for k, v in conv.items() if k != "name"}
+        converted, target_units = getattr(d4dunits(xdata), conv_name)(**kwargs_conv)
+        log.info(
+            "[%s] Unit conversion '%s': %s -> %s",
+            var,
+            conv_name,
+            source_units,
+            target_units,
+        )
+        return converted.astype(np.float32), target_units
+
+    # ---------------------------------------------------------------
     def to_disk(self, zarr_path):
         """
         Saves the processed dataset to disk as a Zarr v2 store.
@@ -413,6 +451,9 @@ class dataset(Dataset):
                     xdata = xarray_to_numpy(x_).astype(np.float32)
                     x_.close()
                     del x_
+                    xdata, units_dict[var] = self.convert_units(
+                        var, xdata, units_dict[var]
+                    )
                     for i, t_idx in enumerate(idx_samples):
                         data_arr[t_idx, idx_var, :] = xdata[i]
                 else:
@@ -423,6 +464,9 @@ class dataset(Dataset):
                     xdata = xarray_to_numpy(x_).astype(np.float32)
                     x_.close()
                     del x_
+                    xdata, units_dict[var] = self.convert_units(
+                        var, xdata, units_dict[var]
+                    )
                     data_arr[:, idx_var, :] = np.tile(xdata, (self.num_samples, 1))
 
             x.close()

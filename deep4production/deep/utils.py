@@ -173,7 +173,7 @@ def save_model(
 
 
 # --------------------------------------------------------------------------------------------------------------
-def resume_model(model, path, optimizer=None, scheduler=None, device="cpu"):
+def resume_model(model, path, optimizer=None, scheduler=None):
     """
     Loads model checkpoint and resumes training state.
     Parameters:
@@ -181,15 +181,21 @@ def resume_model(model, path, optimizer=None, scheduler=None, device="cpu"):
         path (str): Checkpoint path.
         optimizer (optional): PyTorch optimizer.
         scheduler (optional): Learning rate scheduler.
-        device (str): Device string ('cpu' or 'cuda').
     Returns:
         dict: Checkpoint dictionary.
     """
-    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    # Load on CPU and dispatch to `device` parameter-by-parameter via
+    # load_state_dict. Loading the whole checkpoint with map_location=device
+    # would briefly hold (model_state + Adam moments ≈ 3× model size) on the
+    # GPU/CPU at once and then double the Adam state during deep-copy into the
+    # optimizer — enough to OOM at resume even when training from scratch fit.
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
+    del checkpoint["model_state_dict"]
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    if scheduler and checkpoint["scheduler_state_dict"] is not None:
+        del checkpoint["optimizer_state_dict"]
+    if scheduler and checkpoint.get("scheduler_state_dict") is not None:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     log.info(
         "Model resumed from epoch %s step %s",

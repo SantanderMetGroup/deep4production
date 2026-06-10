@@ -780,7 +780,6 @@ class trainer:
                     model=unwrap_model(model),
                     optimizer=optimizer,
                     scheduler=scheduler,
-                    device=device,
                 )
                 epoch_init = epoch_ref = epoch = checkpoint["epoch"]
                 step_ref = global_step = checkpoint["global_step"]

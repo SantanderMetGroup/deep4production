@@ -553,10 +553,25 @@ def from_pred_to_xarray(
         )
         mask = mask.expand_dims(time=time)
         mask = mask.ffill("time")
-        var_mask_name = list(mask.data_vars)[0]
+        mask_vars = list(mask.data_vars)
         # Loop over variables
         for c, var_name in enumerate(vars):
-            ds_var = mask.rename({var_mask_name: var_name}).copy()
+            # Pick THIS output variable's spatial mask, then keep only that one
+            # variable so the rename can never collide with the template's other
+            # fields. Priority:
+            #   1. a mask variable with the same name -> multi-variable templates
+            #      (e.g. all_vars_template.nc) give each field its own valid mask;
+            #   2. the lone mask variable -> single-variable template renamed to
+            #      every target (univariate case, unchanged behaviour);
+            #   3. positional fallback for a multi-variable mask whose names do
+            #      not line up with the targets.
+            if var_name in mask.data_vars:
+                src = var_name
+            elif len(mask_vars) == 1:
+                src = mask_vars[0]
+            else:
+                src = mask_vars[c] if c < len(mask_vars) else mask_vars[0]
+            ds_var = mask[[src]].rename({src: var_name}).copy()
             ds_var[var_name].values = data_pred[:, c, :].astype("float32")
             ds_list.append(ds_var)
         # Merge variables in a single object

@@ -257,7 +257,10 @@ class InputNormalizer(nn.Module):
         """
         cd = self._resolve_channel_dim(channel_dim)
         self._check_channels(x, cd)
-        if not in_place:
+        if not in_place or x.is_inference():
+            # ``clone()`` of an inference tensor yields a normal tensor, which
+            # is required because in-place ops on inference tensors outside an
+            # ``inference_mode`` context are forbidden.
             x = x.clone()
         shape = self._broadcast_shape(x.ndim, cd)
         x.mul_(self._norm_mul.view(shape)).add_(self._norm_add.view(shape))
@@ -275,7 +278,10 @@ class InputNormalizer(nn.Module):
         """
         cd = self._resolve_channel_dim(channel_dim)
         self._check_channels(x, cd)
-        if not in_place:
+        if not in_place or x.is_inference():
+            # ``clone()`` of an inference tensor yields a normal tensor, which
+            # is required because in-place ops on inference tensors outside an
+            # ``inference_mode`` context are forbidden.
             x = x.clone()
         shape = self._broadcast_shape(x.ndim, cd)
         x.sub_(self._norm_add.view(shape)).div_(self._norm_mul.view(shape))

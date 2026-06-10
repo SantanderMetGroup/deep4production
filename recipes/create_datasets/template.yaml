@@ -5,6 +5,17 @@ freq: 1D
 data:
   paths: [path_to_your_input_file.nc]
   vars: [pr, tasmax] # example
+  unit_conversion: # optional, applied at creation time before stats. See "deep4production.utils.units"
+    pr:
+      name: flux_to_mm_day # kg m-2 s-1 -> mm/day (water-density assumption)
+    tasmax:
+      name: kelvin_to_celsius # K -> degC
+    # generic fallback for one-offs:
+    # some_var:
+    #   name: affine
+    #   scale: 1.0
+    #   offset: 0.0
+    #   units: "your_target_units"
   imputer:
     default:
       name: nearest_spatial # See available options at: "deep4downscaling.utils.imputers"
