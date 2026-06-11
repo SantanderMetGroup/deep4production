@@ -144,6 +144,7 @@ class downscaler_custom(downscaler):
         dt: float,
         model,
         add_noise: bool = True,
+        f_cond: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         One Euler-Maruyama reverse-SDE step: t → t − dt.
@@ -156,6 +157,9 @@ class downscaler_custom(downscaler):
         dt       : float                 step size (positive)
         model    : CPMGEM instance
         add_noise: bool                  whether to add stochastic noise term
+        f_cond   : (B, C_f, H_y, W_y) or None  high-res conditioning (cond_high,
+                   e.g. orography); constant across steps. None when the model
+                   was trained without forcings (cond_high_channels=0).
 
         Returns
         -------
@@ -164,13 +168,14 @@ class downscaler_custom(downscaler):
         B = y_t.shape[0]
         t_batch = t_scalar.expand(B)  # (B,)
 
-        # Predict noise  ε̂ = model(y_t, cond_low=x_cond, t · 999)
+        # Predict noise  ε̂ = model(y_t, cond_low=x_cond, cond_high=f_cond, t · 999)
         # SongUNet signature: (x, t, cond_low, cond_high). The 999 factor
         # rescales the continuous noise label to the integer-positional-encoding
         # grid the network was trained on (mlde / score_sde_pytorch convention,
-        # applied identically in trainer_cpmgem).
+        # applied identically in trainer_cpmgem). cond_high carries high-res
+        # forcings already at predictand resolution (None when unused).
         t_label = t_batch * 999.0
-        eps_pred = model(x=y_t, t=t_label, cond_low=x_cond)
+        eps_pred = model(x=y_t, t=t_label, cond_low=x_cond, cond_high=f_cond)
 
         # SDE coefficients at current t
         beta_t, g2, std_t = self._sde_coeffs(t_scalar)
@@ -191,7 +196,9 @@ class downscaler_custom(downscaler):
 
     # ─────────────────────────────────────────────────────────────────────────
     @torch.inference_mode()
-    def sample(self, x_cond: torch.Tensor, model) -> torch.Tensor:
+    def sample(
+        self, x_cond: torch.Tensor, model, f_cond: torch.Tensor = None
+    ) -> torch.Tensor:
         """
         Full reverse-diffusion chain: y_T ∼ N(0, I)  →  y_0.
 
@@ -199,6 +206,9 @@ class downscaler_custom(downscaler):
         ----------
         x_cond : (B, C_x, H_x, W_x)  preprocessed low-res conditioning (batch of dates)
         model  : CPMGEM
+        f_cond : (B, C_f, H_y, W_y) or None  high-res conditioning (cond_high,
+                 e.g. orography), shared across every reverse-SDE step and every
+                 ensemble member. None when the model was trained without forcings.
 
         Returns
         -------
@@ -216,7 +226,9 @@ class downscaler_custom(downscaler):
             # This "tweedie" denoising step reduces residual variance.
             last_step = i == self.num_steps - 1
             add_noise = not (last_step and self.denoise)
-            y_t = self._reverse_step(y_t, x_cond, t, dt, model, add_noise=add_noise)
+            y_t = self._reverse_step(
+                y_t, x_cond, t, dt, model, add_noise=add_noise, f_cond=f_cond
+            )
 
         log.debug(
             "y_0 min=%.3f max=%.3f mean=%.3f std=%.3f",
@@ -301,10 +313,24 @@ class downscaler_custom(downscaler):
             if self.norm_x is not None:
                 inp = self.norm_x(inp)
 
+            # ── High-res conditioning (cond_high), e.g. orography ─────────────
+            # Preprocessed once per date batch and shared across all members and
+            # all reverse-SDE steps. Mirrors trainer_cpmgem normalization (norm_f).
+            # None when the model was trained without forcings.
+            f_cond = None
+            if self.forcing_data is not None:
+                f_cond = self._stack_to_device(
+                    [self._preprocess_forcing_date(d) for d in batch_dates]
+                )  # (B, C_f, H_y, W_y)
+                if self.norm_f is not None:
+                    f_cond = self.norm_f(f_cond)
+
             # ── Reverse diffusion: one chain per member ──────────────────────
             for member in range(M):
                 with self._amp_ctx():
-                    p_torch = self.sample(x_cond=inp, model=model)  # (B, C_y, H_y, W_y)
+                    p_torch = self.sample(
+                        x_cond=inp, model=model, f_cond=f_cond
+                    )  # (B, C_y, H_y, W_y)
                 # Sample is in normalized y-space (target was normalized at
                 # training time); denormalize on GPU so it arrives in
                 # operator-applied space, which is what _postprocess_numpy
@@ -317,7 +343,7 @@ class downscaler_custom(downscaler):
                 member_buffers[member].append(self._postprocess_numpy(p_cpu.numpy()))
                 del p_torch, p_cpu
 
-            del inp
+            del inp, f_cond
 
         # ── Build xarray per member, concat along member ─────────────────────
         ds_out = []

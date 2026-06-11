@@ -135,25 +135,44 @@ class trainer_custom(trainer):
         data          : (x, y, f) from standard pydataset DataLoader
                         x : (B, C_x, H_x, W_x)  low-res conditioning
                         y : (B, C_y, H_y, W_y)  high-res target
-                        f : forcing or "N/A" sentinel (unused)
+                        f : (B, C_f, H_y, W_y)  high-res conditioning (e.g.
+                            fine-scale orography), already at predictand
+                            resolution; or the "N/A" sentinel when no forcings
+                            are configured. When present it is routed to the
+                            SongUNet ``cond_high`` stream and concatenated with
+                            the target grid *after* cond_low is upsampled —
+                            requires model_params.cond_high_channels == C_f.
         optimizer     : torch.optim.Optimizer
         loss_function : MseLoss(target=ε, output=ε̂)
         noise_params  : dict with beta_min, beta_max, t_min
         device        : str
         is_this_training : bool
         """
-        x, y, _ = data
+        x, y, f = data
         non_blocking = self.device_type == "cuda"
         x = x.to(device, non_blocking=non_blocking)
         y = y.to(device, non_blocking=non_blocking)
         B = y.shape[0]
 
-        # --- GPU-side normalization (predictors + predictands) ---
+        # High-res conditioning (cond_high). pydataset emits the "N/A" string
+        # sentinel when no forcings are configured; only a real tensor is routed
+        # to the model. This keeps recipes without forcings (cond_high_channels=0)
+        # working unchanged, where cond_high stays None.
+        use_cond_high = not isinstance(f, str)
+        if use_cond_high:
+            f = f.to(device, non_blocking=non_blocking)
+
+        # --- GPU-side normalization (predictors + predictands + forcings) ---
         # Predictand normalization is essential for cpmgem because the diffusion
         # process operates on the normalized field y (e.g. sqrt(pr) rescaled to
         # [-1, 1]). The operator (sqrt) is still applied on CPU per-sample by
-        # pydataset; only the affine rescale happens here.
-        x, y, _ = self._normalize_inputs(x=x, y=y)
+        # pydataset; only the affine rescale happens here. The forcing f (e.g.
+        # orography) is normalized with its own InputNormalizer (norm_f) when a
+        # forcing normalizer is configured.
+        if use_cond_high:
+            x, y, f = self._normalize_inputs(x=x, y=y, f=f)
+        else:
+            x, y, _ = self._normalize_inputs(x=x, y=y)
 
         beta_min = noise_params["beta_min"]
         beta_max = noise_params["beta_max"]
@@ -172,8 +191,10 @@ class trainer_custom(trainer):
         optimizer.zero_grad(set_to_none=True)
 
         # ── Predict noise ε̂ + loss under AMP autocast ────────────────────────
-        # SongUNet signature: (x, t, cond_low, cond_high). CPMGEM uses only
-        # the low-res conditioning stream.
+        # SongUNet signature: (x, t, cond_low, cond_high). cond_low is the
+        # low-res predictor stream (upsampled inside the UNet); cond_high carries
+        # any high-res forcing already at predictand resolution (e.g. orography)
+        # and is None when no forcings are configured.
         #
         # Continuous sub-VP convention (score_sde_pytorch / mlde): the scalar
         # noise label passed to the sinusoidal PE is `t · 999`, not raw t.
@@ -183,7 +204,12 @@ class trainer_custom(trainer):
         # trainer provides — so the rescaling lives here.
         t_label = t * 999.0
         with self._amp_ctx():
-            eps_pred = model(x=y_t, t=t_label, cond_low=x)
+            eps_pred = model(
+                x=y_t,
+                t=t_label,
+                cond_low=x,
+                cond_high=f if use_cond_high else None,
+            )
             loss = loss_function(target=eps, output=eps_pred)
 
         if is_this_training:
