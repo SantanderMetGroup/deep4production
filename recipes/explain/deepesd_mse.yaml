@@ -1,0 +1,46 @@
+# Gradient input-attribution (XAI) for a deterministic DeepESD (MSE) checkpoint.
+# Run with:  d4p-explain recipes/explain/deepesd_mse.yaml
+# Attribution targets the model's direct output channel for `target_var`, so it
+# is only valid for DETERMINISTIC (MSE / asym) regressors — NOT for BerGamma /
+# Gaussian NLL checkpoints (the explainer will refuse those).
+id_dir: your_id_dir              # e.g., ./outputs/deepesd_mse  (model at id_dir/models/)
+
+input_data:
+  paths:
+  - path_to_your_x_file.zarr     # UPSRCM*.zarr (perfect) or GCM*.zarr (imperfect)
+  years: [1980]
+  load_in_memory: true
+
+graph:
+ensemble_size: 1
+
+model_file: DeepESD_best.pt      # Model at: id_dir/models/
+
+saving_info:
+  file: xai_1980.nc              # Saved at: id_dir/xai/
+  template: path_to_your_template.nc   # Optional; lets the explainer mask NaN gridpoints
+
+# DeepESD forward is model(x, f) → the base Explainer handles it (no subclass).
+d4p_explainer:
+  name: Explainer
+  module: deep4production.core.explainers.explainer
+
+# Forwarded as **kwargs to Explainer.explain().
+explain_params:
+  method: gradient               # gradient | integrated-gradients (not implemented)
+  target_var: pr                 # predictand whose response is differentiated
+  reduction: mean                # mean | sum  over the target region
+  input_space: normalized        # normalized (unit-comparable) | raw (physical predictor units)
+  target_space: physical         # physical (denormalised — comparable across models) | model
+  percent: true                  # also emit saliency_percent / channel_contribution_percent
+  batch_size: 8
+  # Predictand box / gridpoint the gradient is computed over. Choose ONE style:
+  #   whole valid domain:   {type: all}
+  #   index box:            {type: box, i: [40, 88], j: [40, 88]}   (half-open, numpy-style)
+  #   single gridpoint:     {type: point, i: 64, j: 64}
+  #   geographic box:       {type: box, lat: [44, 48], lon: [5, 15]}  (needs 1D lats_y/lons_y)
+  #   geographic point:     {type: point, lat: 46.0, lon: 10.0}
+  target_region:
+    type: box
+    i: [40, 88]
+    j: [40, 88]

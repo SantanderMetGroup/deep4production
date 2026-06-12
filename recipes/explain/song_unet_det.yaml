@@ -1,0 +1,37 @@
+# Gradient input-attribution (XAI) for a deterministic SongUNet regressor
+# (e.g. the UNet / UNet-MultiVar baselines).
+# Run with:  d4p-explain recipes/explain/song_unet_det.yaml
+id_dir: your_id_dir              # e.g., ./outputs/unet_multivar  (model at id_dir/models/)
+
+input_data:
+  paths:
+  - path_to_your_x_file.zarr     # UPSRCM*.zarr (perfect) or GCM*.zarr (imperfect)
+  years: [1980]
+  load_in_memory: false
+
+graph:
+ensemble_size: 1
+
+model_file: UNet_best.pt         # Model at: id_dir/models/
+
+saving_info:
+  file: xai_1980.nc              # Saved at: id_dir/xai/
+  template: path_to_your_template.nc   # Optional; masks NaN gridpoints in the target region
+
+# Deterministic SongUNet forward: model(x=zeros, t=0, cond_low=predictors).
+d4p_explainer:
+  name: ExplainerSongUNetDet
+  module: deep4production.core.explainers.explainer_song_unet_det
+
+explain_params:
+  method: gradient
+  target_var: tasmax             # required when the model predicts several variables
+  reduction: mean                # mean | sum
+  input_space: normalized        # normalized | raw
+  target_space: physical         # physical | model
+  percent: true
+  batch_size: 32
+  target_region:
+    type: box
+    i: [40, 88]
+    j: [40, 88]
