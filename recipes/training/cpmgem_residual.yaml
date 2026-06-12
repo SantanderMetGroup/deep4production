@@ -1,0 +1,169 @@
+##### GENERAL INFO #####
+run_ID: cpmgem_residual
+output_dir: path_to_your_output_dir
+overwrite: true
+
+
+##### TRAINER SELECTION #####
+# CPMGEM-residual: the sub-VP × residual cell of the 2x2 decoupling study.
+# Models the regression residual r = y - ŷ_det with the continuous-time sub-VP
+# SDE (CPMGEM formulation) instead of the EDM formulation used by ResDiff.
+d4p_trainer:
+  name: trainer_custom
+  module: deep4production.core.trainers.trainer_cpmgem_residual
+
+
+##### CUSTOM PYDATASET #####
+# Reused VERBATIM from ResDiff. Loads predictors + predictands, runs the frozen
+# deterministic regressor at init, caches residuals + regression means to a zarr,
+# and serves (r, c_low, c_high) triples. c_high is the regressor mean ŷ_det.
+#
+# STUDY CONTROL: this must be the SAME regressor checkpoint used by the ResDiff
+# cell, so both residual cells operate on identical residuals.
+d4p_pydataset:
+  name: pydataset_custom
+  module: deep4production.core.pydatasets.pydataset_resdiff
+  kwargs:
+    path_regressor: path_to_your_regressor_best.pt
+    # Feed the regressor mean to the diffusion UNet as cond_high (CorrDiff-style).
+    # Keep `true` — sub-VP-residual conditions on ŷ_det exactly as ResDiff does.
+    add_pred_mean: true
+    # Also feed the raw low-res predictors to the UNet as cond_low.
+    add_context_lowres: true
+    # Residuals cache (written once on first run, reused thereafter).
+    residuals:
+      path: path_to_your_residuals_dir/residuals.zarr
+      template: path_to_your_target_template.nc
+
+
+##### TRAINING DATA CONFIGURATION #####
+data:
+  load_in_memory: true
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  validation_period: [1967, 1975]
+
+  predictors:
+    paths:
+    - path_to_your_x_file_1.zarr
+    - path_to_your_x_file_2.zarr
+    - '...'
+    variables:
+    normalizer:
+      path_reference: path_to_your_x_file_1.zarr
+      default: mean_std
+    transform_to_2D: true
+
+  predictands:
+    paths:
+    - path_to_your_y_file_1.zarr
+    - path_to_your_y_file_2.zarr
+    - '...'
+    variables:
+    - pr
+    # The operator + normalizer define the *normalized space* in which the
+    # residual r = y - ŷ_det is computed. STUDY CONTROL: these MUST match the
+    # transform the shared regressor was trained with, otherwise the residual
+    # is inconsistent between the two residual cells.
+    operator:
+      default: sqrt
+    normalizer:
+      path_reference: path_to_your_y_file_1.zarr
+      default: minmax_neg1_1
+    transform_to_2D: true
+
+  # ── OPTIONAL: high-res forcings (e.g. orography) ──────────────────────────────
+  # Forcings are concatenated onto the regressor mean in the cond_high stream:
+  #   cond_high = [ŷ_det, f]   (regressor mean first, forcing second)
+  # so they condition the stochastic residual generator. The regressor itself is
+  # unchanged (it sees cond_low only). To enable:
+  #   1. Uncomment this block; `variables` must be a subset of the predictand
+  #      store's variables (forcings are read from the predictand zarr at train
+  #      time, same convention as CPMGEM-direct).
+  #   2. Bump model_params.cond_high_channels to C_y + C_f below.
+  #   3. Provide the matching `forcing_data` block in the inference recipe.
+  # forcings:
+  #   variables:
+  #   - orog
+  #   operator:            # optional, e.g. standardize orography
+  #     default: none
+  #   normalizer:
+  #     path_reference: path_to_your_y_file_1.zarr
+  #     default: mean_std
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 16
+  shuffle: true
+  num_workers: 4
+
+
+##### MODEL CONFIGURATION #####
+model_info:
+  saving_params:
+    model_save_name: CPMGEM_residual
+
+  # ── Loss ────────────────────────────────────────────────────────────────────
+  # MSE on predicted noise ε (sub-VP formulation; no EDM λ(σ) weighting).
+  loss_params:
+    name: MseLoss
+    module: deep4production.deep.loss
+    kwargs:
+      ignore_nans: false
+
+  # ── Architecture ─────────────────────────────────────────────────────────────
+  # PLAIN SongUNet (no EDM preconditioner — sub-VP calls the backbone directly).
+  # cond_high carries the regressor mean ŷ_det, so cond_high_channels = C_y.
+  model_params:
+    name: SongUNet
+    module: deep4production.deep.models.unet.song_unet
+    kwargs:
+      in_channels: 1              # C_y — channels of the residual (= predictands)
+      cond_low_channels: 15       # C_x — use `d4p-inspect your_x.zarr` to get this
+      # cond_high = [ŷ_det, f]: C_y (regressor mean) + C_f (forcings, if any).
+      # With no forcings this is just C_y (=1 here); if you enable the `forcings`
+      # block above, set this to C_y + C_f.
+      cond_high_channels: 1
+      nf: 128                     # base channel width
+      ch_mult: [1, 2, 2, 2]       # channel multipliers per encoder level
+      num_res_blocks: 4
+      # Attention at the level whose feature map is ~16x16; pick from H_y and
+      # ch_mult (level k has resolution H_y / 2^k). See cpmgem.yaml for the rule.
+      attn_at_levels: [3]
+      dropout: 0.1
+      fir: true
+      fir_kernel: [1, 3, 3, 1]
+      skip_rescale: true
+      progressive_input: true
+      cond_upsample: nearest
+
+  # ── Training ──────────────────────────────────────────────────────────────────
+  training_params:
+    num_epochs: 400
+    patience_early_stopping:       # null = disabled; diffusion models need full training
+    optimizer_params:
+      lr: 0.0002
+    ema_decay: 0.9999
+    grad_clip: 1.0
+
+    scheduler_params:
+      type: LambdaLR
+      lr_lambda: rampup_expdecay
+      kwargs:
+        base_lr: 0.0002
+        rampup_steps: 5000
+        decay_rate: 1.0
+        decay_interval: 1
+        terminal_value: 1.0e-6
+
+    # Forwarded as **kwargs to model_backprop.
+    kwargs:
+      noise_params:
+        beta_min: 0.1             # sub-VP SDE β at t=0  (paper / mlde default)
+        beta_max: 20.0            # sub-VP SDE β at t=1  (paper / mlde default)
+        t_min: 1.0e-5             # lower bound for continuous-time sampling
+      # Standardize the residual to ~unit variance before the sub-VP process.
+      # Strongly recommended: sub-VP's SNR schedule assumes O(1) data and, unlike
+      # EDM, has no sigma_data scale-handling. Stats come from the residuals zarr
+      # and are saved to metadata for the downscaler to invert.
+      standardize_residual: true

@@ -103,6 +103,7 @@ class trainer_custom(trainer):
         kwargs_pydataset = {
             "predictors": self.data["predictors"],
             "predictands": self.data["predictands"],
+            "forcings": self.data.get("forcings", {}),
             "load_in_memory": self.data.get("load_in_memory", True),
             "cache_mb": self.data.get("zarr_cache_mb", None),
         }
@@ -113,6 +114,9 @@ class trainer_custom(trainer):
         # it can build its own local InputNormalizer instances.
         kwargs_pydataset["normalizer_info_x"] = self.normalizer_info_x
         kwargs_pydataset["normalizer_info_y"] = self.normalizer_info_y
+        # Forcings (if configured) are normalized CPU-side in the pydataset and
+        # concatenated onto the regressor mean in the cond_high stream.
+        kwargs_pydataset["normalizer_info_f"] = self.normalizer_info_f
         kwargs_pydataset.update({"dataset": "training"})
         train_dataset = self.pydataset(
             temporal_period=self.data["training_period"], **kwargs_pydataset

@@ -59,14 +59,21 @@ class pydataset_custom(pydataset):
         add_context_lowres: bool = True,
         normalizer_info_x: dict = None,
         normalizer_info_y: dict = None,
+        normalizer_info_f: dict = None,
+        forcings: dict = None,
         cache_mb: int = None,
         regressor_batch_size: int = 32,
     ):
         # --- Call parent constructor (loads x/y, builds pipelines, temporal info) ---
+        # Forwarding `forcings` lets the parent set up self.vars_f / idx_vars_f /
+        # _ops_f so high-res forcings (e.g. orography) can be served as extra
+        # cond_high channels alongside the regressor mean. Empty/None → no
+        # forcings, identical to the previous behavior.
         super().__init__(
             predictors=predictors,
             predictands=predictands,
             temporal_period=temporal_period,
+            forcings=forcings or {},
             load_in_memory=load_in_memory,
             cache_mb=cache_mb,
         )
@@ -82,6 +89,7 @@ class pydataset_custom(pydataset):
         # trainer holds its own copies on the GPU for the actual training loop.
         self._norm_x_cpu = None
         self._norm_y_cpu = None
+        self._norm_f_cpu = None
         if normalizer_info_x is not None:
             resolved = pydataset._resolve_normalizer_info(
                 normalizer_info_x, self.vars_x, predictand=False
@@ -92,6 +100,16 @@ class pydataset_custom(pydataset):
                 normalizer_info_y, self.vars_y, predictand=True
             )
             self._norm_y_cpu = InputNormalizer(resolved, self.vars_y, channel_dim=1)
+        # Forcings live in the cond_high stream and are concatenated onto the
+        # regressor mean in __getitem__, so — unlike the standard pydataset, which
+        # normalizes f GPU-side in the trainer — they must be normalized here on
+        # CPU before that concat (consistent with the regressor mean, which is
+        # already stored normalized in the residuals zarr).
+        if self.forcings and normalizer_info_f is not None:
+            resolved = pydataset._resolve_normalizer_info(
+                normalizer_info_f, self.vars_f, forcing=True
+            )
+            self._norm_f_cpu = InputNormalizer(resolved, self.vars_f, channel_dim=1)
 
         # --- Regressor ---
         log.info("Loading regressor model from %s", path_regressor)
@@ -353,11 +371,33 @@ class pydataset_custom(pydataset):
         if self.transform_to_2D_y:
             residual = residual.reshape(num_vars, self.H_y, self.W_y)
 
-        c_high = None
+        # --- High-res conditioning (cond_high) ---------------------------------
+        # cond_high = [ŷ_det, f]: the regressor mean (if add_pred_mean) followed
+        # by any high-res forcings (if configured). The order — regressor mean
+        # first, forcing second — is fixed and MUST match the downscaler's concat.
+        c_high_parts = []
         if self.add_pred_mean:
-            c_high = r_raw[num_vars:]
+            c_high_det = r_raw[num_vars:]
             if self.transform_to_2D_y:
-                c_high = c_high.reshape(num_vars, self.H_y, self.W_y)
+                c_high_det = c_high_det.reshape(num_vars, self.H_y, self.W_y)
+            c_high_parts.append(c_high_det)
+
+        if self.forcings:
+            f = self.preprocess(
+                target_date,
+                self.data["y"],
+                self.idx_vars_f,
+                self.sample_map_y,
+                ops=self._ops_f,
+                transform_to_2D=self.transform_to_2D_y,
+                H=self.H_y,
+                W=self.W_y,
+            )
+            if self._norm_f_cpu is not None:
+                f = self._norm_f_cpu(f.unsqueeze(0)).squeeze(0)
+            c_high_parts.append(f)
+
+        c_high = torch.cat(c_high_parts, dim=0) if c_high_parts else None
 
         # --- Low-res predictor context ---
         # preprocess() applies operator → reshape → tensor; normalization is

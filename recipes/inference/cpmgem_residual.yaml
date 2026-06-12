@@ -1,0 +1,96 @@
+##### GENERAL INFO #####
+# Directory created by d4p-train for the cpmgem_residual run_ID.
+# Contains:  models/  predictions/  aux_files/  metadata.json
+id_dir: your_id_dir             # e.g., /outputs/cpmgem_residual
+
+
+##### INPUT DATA #####
+input_data:
+  paths:
+  - path_to_your_x_file_1.zarr
+  - path_to_your_x_file_2.zarr
+  - '...'
+  years: [1981, 1982, 1983]
+  load_in_memory: true
+
+
+##### ENSEMBLE SIZE #####
+# Stochastic — each reverse sub-VP trajectory draws fresh Gaussian noise, so
+# ensemble_size > 1 produces independent realisations.
+ensemble_size: 6
+
+graph:
+
+
+##### MODEL CHECKPOINT #####
+# Plain SongUNet (no EDM preconditioner). Metadata also stores `path_regressor`
+# and `residual_norm` (the per-variable residual mean/std), both written by
+# trainer_cpmgem_residual and consumed automatically by the downscaler.
+model_file: CPMGEM_residual_best.pt
+
+
+##### DOWNSCALER CLASS #####
+# CPMGEM-residual downscaler:
+#   1. Loads the regressor (from `path_regressor` in training metadata, or the
+#      optional override below).
+#   2. For each date: runs regressor(x) → ŷ_det, then samples a standardized
+#      residual r_std via the reverse sub-VP SDE chain (Euler-Maruyama) on the
+#      plain SongUNet, with ŷ_det routed into cond_high.
+#   3. Un-standardizes (r̂ = r_std·σ_res + μ_res, from metadata.residual_norm),
+#      returns ŷ_det + r̂; the downscaler denormalises (norm_y.inverse_transform)
+#      before the D2H copy, then _postprocess_numpy applies the operator inverse.
+# beta_min / beta_max default to the values stored in training metadata.
+d4p_downscaler:
+  name: downscaler_custom
+  module: deep4production.core.downscalers.downscaler_cpmgem_residual
+  kwargs:
+    # Optional: override the regressor path stored in training metadata.
+    # path_regressor: /new/path/to/regressor_best.pt
+    sampling_params:
+      # Number of reverse sub-VP SDE steps. Paper value: 1000; reduce to
+      # 200-500 for a speed-up at some quality cost.
+      num_steps: 1000
+      # Deterministic (noise-free) final step — sharper output, less variance.
+      denoise: true
+      # beta_min / beta_max read automatically from checkpoint metadata.
+      # t_min is decoupled from training (default 1e-3) to avoid the σ → 0
+      # blow-up of the score correction g²·ε̂/σ.
+      # beta_min: 0.1
+      # beta_max: 20.0
+      # t_min: 1.0e-3
+
+
+##### OPTIONAL: high-res forcings (must match the training recipe) #####
+# Only needed if the model was TRAINED with forcings (data.forcings in the
+# training recipe + cond_high_channels = C_y + C_f). The downscaler concatenates
+# these onto the regressor mean: cond_high = [ŷ_det, f]. The forcing normalizer
+# (norm_f) is restored automatically from training metadata.
+# forcing_data:
+#   paths:
+#   - path_to_your_forcing.zarr   # e.g. orography at predictand resolution
+#   years: [1981, 1982, 1983]
+#   # format: auto
+
+
+##### OUTPUT #####
+saving_info:
+  file: CPMGEM_residual_1981-1983.nc   # saved at id_dir/predictions/
+  template:
+  # formatting:
+  #   name: null
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: ...
+
+
+##### INFERENCE RUNTIME #####
+# Forwarded as **kwargs to downscaler.downscale().
+#   batch_size : number of dates whose reverse-SDE chains run in parallel on the
+#                GPU (each chain shares the same num_steps iterations).
+#   amp_dtype  : 'bfloat16' (Ampere+ recommended) / 'float16' / null.
+#   compile    : true wraps the score network with torch.compile; the regressor
+#                is NOT compiled (one-shot pass).
+inference_params:
+  batch_size: 4
+  amp_dtype:
+  compile: false

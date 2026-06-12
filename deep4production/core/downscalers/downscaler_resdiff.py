@@ -282,6 +282,19 @@ class downscaler_custom(downscaler):
                     x=x_dummy, t=t_dummy, cond_low=c_low
                 )  # (B, C_y, H_y, W_y)
 
+            # ── High-res forcings (cond_high = [y_hat, f]) ───────────────────
+            # Concatenate any configured forcings (e.g. orography) onto the
+            # regressor mean, in the SAME order as pydataset_resdiff at training
+            # (regressor mean first, forcing second). The base downscaler loads
+            # forcing_data and builds norm_f from metadata.
+            if self.forcing_data is not None:
+                f_cond = self._stack_to_device(
+                    [self._preprocess_forcing_date(d) for d in batch_dates]
+                )  # (B, C_f, H_y, W_y)
+                if self.norm_f is not None:
+                    f_cond = self.norm_f(f_cond)
+                c_high = torch.cat([c_high, f_cond], dim=1)
+
             # ── Stochastic residual: one draw per member ─────────────────────
             for member in range(M):
                 with self._amp_ctx():
