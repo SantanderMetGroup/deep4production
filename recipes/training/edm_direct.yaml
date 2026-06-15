@@ -91,7 +91,12 @@ model_info:
   #
   # STUDY NOTE: for a clean 2x2 comparison, keep the backbone capacity
   # (nf / ch_mult / num_res_blocks / attn) matched to the cell(s) you compare
-  # against (CPMGEM-direct for the formulation axis; ResDiff for the target axis).
+  # against (CPMGEM-direct for the formulation axis; the EDM-residual cell for the
+  # target axis). The three clean-2x2 cells (CPMGEM, CPMGEM-residual, EDM-direct)
+  # share this predictand convention (sqrt + minmax_neg1_1, sigma_data ~ 0.5).
+  # ResDiff is intentionally kept on CorrDiff's native std normalization, so it is
+  # a faithful-CorrDiff baseline rather than the normalization-matched EDM-residual
+  # corner — keep that in mind when reading the target-axis comparison.
   model_params:
     name: build_edm_model
     module: deep4production.deep.models.diffusion.edm_precond

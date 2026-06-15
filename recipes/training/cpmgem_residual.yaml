@@ -18,8 +18,12 @@ d4p_trainer:
 # deterministic regressor at init, caches residuals + regression means to a zarr,
 # and serves (r, c_low, c_high) triples. c_high is the regressor mean ŷ_det.
 #
-# STUDY CONTROL: this must be the SAME regressor checkpoint used by the ResDiff
-# cell, so both residual cells operate on identical residuals.
+# STUDY CONTROL: the regressor must have been trained with the SAME predictand
+# transform used here — the 2x2 convention sqrt + minmax_neg1_1. This is its OWN
+# regressor; do NOT reuse the std-trained regressor from the ResDiff cell, which
+# is deliberately kept on CorrDiff's native normalization (a separate baseline,
+# outside the clean 2x2). See the CPMGEM-residual tutorial step 6.1 for the
+# matching regressor recipe.
 d4p_pydataset:
   name: pydataset_custom
   module: deep4production.core.pydatasets.pydataset_resdiff
@@ -62,8 +66,10 @@ data:
     - pr
     # The operator + normalizer define the *normalized space* in which the
     # residual r = y - ŷ_det is computed. STUDY CONTROL: these MUST match the
-    # transform the shared regressor was trained with, otherwise the residual
-    # is inconsistent between the two residual cells.
+    # transform the regressor (above) was trained with — the 2x2 convention
+    # sqrt + minmax_neg1_1 — otherwise the residual is ill-defined. The same
+    # convention is used by the CPMGEM and EDM-direct cells; only ResDiff differs
+    # (it keeps CorrDiff's native std normalization, by design).
     operator:
       default: sqrt
     normalizer:

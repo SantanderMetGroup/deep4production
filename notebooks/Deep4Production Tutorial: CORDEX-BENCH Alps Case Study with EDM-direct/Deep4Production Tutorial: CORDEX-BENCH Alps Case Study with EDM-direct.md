@@ -22,6 +22,8 @@ EDM-direct is the other off-diagonal cell of the **2×2 decoupling study** that 
 
 EDM-direct shares the **target** with CPMGEM (full field) and the **formulation** with ResDiff (EDM), so it is the pivot for isolating which axis matters.
 
+> **Normalization convention (important).** The clean-2×2 cells — **CPMGEM, CPMGEM-residual, EDM-direct** — all use the same precipitation preprocessing, `sqrt` then `minmax_neg1_1` (with `sigma_data ≈ 0.5` for the EDM cells), so the predictand transform is not a confound. **ResDiff is the exception**: it keeps CorrDiff's native `std` normalization, by design, as a faithful-CorrDiff baseline. So when EDM-direct is compared to ResDiff along the *target* axis, remember that comparison also carries a normalization difference (see section 9).
+
 ______________________________________________________________________
 
 ## 2. Case study: CORDEX-BENCH
@@ -188,7 +190,7 @@ Train it:
 d4p-train ./training/configs/edm_direct.yaml
 ```
 
-> 🔬 **Fair-comparison note.** For a clean 2×2, keep the backbone capacity (`nf` / `ch_mult` / `num_res_blocks` / attention) matched to the cell you compare against: CPMGEM for the formulation axis (same direct target), ResDiff for the target axis (same EDM formulation). The recipe above mirrors CPMGEM's backbone for direct comparability; adjust per your iso-params / iso-FLOPs budget.
+> 🔬 **Fair-comparison note.** For a clean 2×2, keep the backbone capacity (`nf` / `ch_mult` / `num_res_blocks` / attention) matched to the cell you compare against: **CPMGEM** for the formulation axis (same direct target, same `sqrt + minmax` convention → clean). For the *target* axis the natural counterpart is the EDM-residual cell; **ResDiff** fills that slot but on `std` normalization, so a fully clean target-axis comparison would use a `sqrt + minmax` EDM-residual variant. The recipe above mirrors CPMGEM's backbone for direct comparability; adjust per your iso-params / iso-FLOPs budget.
 
 ______________________________________________________________________
 
@@ -305,7 +307,7 @@ You have run the **EDM × direct** cell of the 2×2 study:
 - Trained a single-stage EDM-preconditioned SongUNet to generate the **full field** directly — no regressor, no residual, no standardization (EDM `sigma_data` handles the data scale).
 - Generated ensemble fields with the fast (~18-step) EDM Heun sampler.
 
-Compare against [CPMGEM](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM.md) (same direct target, sub-VP formulation) and [ResDiff](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md) (same EDM formulation, residual target) to isolate each axis. With all four cells trained, the 2×2 is complete.
+Compare against [CPMGEM](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM.md) (same direct target, sub-VP formulation — and the same `sqrt + minmax` convention, so the **formulation axis is cleanly isolated**). The EDM-residual corner is [ResDiff](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md), but on `std` normalization, so an EDM-direct ↔ ResDiff (target-axis) comparison also carries the normalization difference; train a `sqrt + minmax` EDM-residual variant for a clean isolation. The three `sqrt + minmax` cells (CPMGEM, CPMGEM-residual, EDM-direct) are mutually confound-free.
 
 ______________________________________________________________________
 

@@ -20,6 +20,8 @@ CPMGEM-residual is one of the two off-diagonal cells of a **2×2 decoupling stud
 
 The point of building both off-diagonal cells is that the formulation effect and the target effect can only be disentangled when all four cells exist.
 
+> **Normalization convention (important).** To avoid the predictand transform becoming a confound, the clean-2×2 cells — **CPMGEM, CPMGEM-residual, EDM-direct** — all use the same precipitation preprocessing: `sqrt` then `minmax_neg1_1` (and, for the EDM cell, `sigma_data ≈ 0.5`). **ResDiff is the exception**: it deliberately keeps CorrDiff's native `std` normalization, so it serves as a *faithful-CorrDiff baseline* rather than the normalization-matched EDM-residual corner. A practical consequence for this tutorial: CPMGEM-residual needs **its own regressor trained with `sqrt + minmax_neg1_1`** — it does **not** share the `std`-trained regressor from the ResDiff tutorial.
+
 ______________________________________________________________________
 
 ## 2. Case study: CORDEX-BENCH
@@ -49,11 +51,119 @@ ______________________________________________________________________
 
 ## 6. Train CPMGEM-residual — a two-step workflow
 
-### 6.1. Step 1 — Train the deterministic SongUNet regressor
+### 6.1. Step 1 — Train the deterministic SongUNet regressor (`sqrt + minmax_neg1_1`)
 
-**This step is identical to ResDiff step 6.1** — the same `song_unet_det.yaml`, producing `./outputs/song_unet_det/models/SongUNet_det_best.pt`. If you already trained the regressor for the ResDiff tutorial, **reuse that exact checkpoint** — sharing one regressor across the two residual cells (ResDiff and CPMGEM-residual) is what makes their comparison fair (they then operate on identical residuals).
+The regressor is a SongUNet trained *deterministically* (noisy slot = 0, noise label `t` = 0, conditioning only through `cond_low`) to predict the conditional mean `ŷ`. The residual stage then models `r = y − ŷ` **in the regressor's normalized space**, so the regressor's predictand transform fixes the space the whole cell lives in.
 
-See [ResDiff section 6.1](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md#61-step-1--train-the-deterministic-songunet-regressor) for the full regressor recipe.
+> ⚠️ **Use the 2×2 transform here, not ResDiff's.** This regressor is structurally the same as the [ResDiff regressor](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md#61-step-1--train-the-deterministic-songunet-regressor), but the predictand normalizer differs: here it is `sqrt + minmax_neg1_1` (the clean-2×2 convention), whereas the ResDiff tutorial uses `std`. So CPMGEM-residual needs **its own regressor checkpoint** — do not reuse ResDiff's `std`-trained one, or the residuals would be computed in the wrong space.
+
+`./training/configs/song_unet_det_minmax.yaml`:
+
+```yaml
+##### GENERAL INFO #####
+run_ID: song_unet_det_minmax
+output_dir: ./outputs
+overwrite: true
+
+
+##### TRAINER SELECTION #####
+# Deterministic SongUNet trainer: bypasses diffusion by setting x_in=0, t=0
+# and conditioning the UNet exclusively through cond_low (the low-res predictor).
+d4p_trainer:
+  name: trainer_custom
+  module: deep4production.core.trainers.trainer_song_unet_det
+
+
+##### TRAINING DATA CONFIGURATION #####
+data:
+  load_in_memory: true
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+  validation_period: [1967, 1975]
+
+  predictors:
+    paths:
+      - ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+    variables: [u_850, u_700, u_500, v_850, v_700, v_500,
+                t_850, t_700, t_500, q_850, q_700, q_500,
+                z_850, z_700, z_500]
+    normalizer:
+      path_reference: ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+      default: mean_std
+      q_850: std
+      q_700: std
+      q_500: std
+    transform_to_2D: True
+
+  predictands:
+    paths:
+      - ./AI_ready_datasets/files/RCM_1961-1980.zarr
+    variables:
+      - pr
+    # 2x2 convention: sqrt then minmax_neg1_1 (NOT std). Must match the residual
+    # stage's predictand transform in section 6.2.
+    operator:
+      default: sqrt
+    normalizer:
+      path_reference: ./AI_ready_datasets/files/RCM_1961-1980.zarr
+      default: minmax_neg1_1
+    transform_to_2D: true
+
+
+##### DATA LOADER CONFIGURATION #####
+dataloader:
+  batch_size: 16
+  shuffle: true
+  num_workers: 1
+
+
+##### MODEL CONFIGURATION #####
+model_info:
+  saving_params:
+    model_save_name: SongUNet_det_minmax
+    save_every_n_epochs: 50
+
+  loss_params:
+    name: MseLoss
+    module: deep4production.deep.loss
+    kwargs:
+      ignore_nans: false
+
+  model_params:
+    name: SongUNet
+    module: deep4production.deep.models.unet.song_unet
+    kwargs:
+      in_channels: 1
+      cond_low_channels: 15
+      cond_high_channels: 0
+      nf: 128
+      ch_mult: [1, 2, 2, 2]
+      num_res_blocks: 4
+      attn_at_levels: [3]
+      dropout: 0.1
+      fir: true
+      fir_kernel: [1, 3, 3, 1]
+      skip_rescale: true
+      progressive_input: true
+      cond_upsample: nearest
+      spatial_pe_freqs: 1
+
+  training_params:
+    amp: false
+    compile: false
+    num_epochs: 1000
+    patience_early_stopping: 30
+    optimizer_params:
+      lr: 0.0001
+```
+
+Train it:
+
+```bash
+d4p-train ./training/configs/song_unet_det_minmax.yaml
+```
+
+The best checkpoint is written to `./outputs/song_unet_det_minmax/models/SongUNet_det_minmax_best.pt`. **You will need this path for step 2.**
 
 ### 6.2. Step 2 — Train the sub-VP residual diffusion model
 
@@ -83,13 +193,13 @@ d4p_trainer:
   module: deep4production.core.trainers.trainer_cpmgem_residual
 
 
-##### CUSTOM PYDATASET (same as ResDiff) #####
+##### CUSTOM PYDATASET (same machinery as ResDiff) #####
 d4p_pydataset:
   name: pydataset_custom
   module: deep4production.core.pydatasets.pydataset_resdiff
   kwargs:
-    # Share this with the ResDiff cell for a fair comparison.
-    path_regressor: ./outputs/song_unet_det/models/SongUNet_det_best.pt
+    # The sqrt+minmax regressor from step 6.1 (NOT ResDiff's std-trained one).
+    path_regressor: ./outputs/song_unet_det_minmax/models/SongUNet_det_minmax_best.pt
     add_pred_mean: true        # feed ŷ as cond_high
     add_context_lowres: true   # feed raw predictors as cond_low
     residuals:
@@ -123,8 +233,9 @@ data:
       - ./AI_ready_datasets/files/RCM_1961-1980.zarr
     variables:
       - pr
-    # Must match the transform the shared regressor was trained with, so the
-    # residual is consistent across the two residual cells.
+    # Must match the regressor's transform from step 6.1 (sqrt + minmax_neg1_1),
+    # so the residual r = y - ŷ is well-defined. Same convention as CPMGEM and
+    # EDM-direct; ResDiff is the only cell on a different (std) normalization.
     operator:
       default: sqrt
     normalizer:
@@ -205,7 +316,7 @@ Train it:
 d4p-train ./training/configs/cpmgem_residual.yaml
 ```
 
-> 💡 **First-run cost.** Like ResDiff, the very first run iterates over every date, runs the regressor, and writes `residuals_training.zarr` + `residuals_validation.zarr`. Subsequent runs reuse the cache. If you point `residuals.path` at the **same** file the ResDiff tutorial used, even that cost is shared.
+> 💡 **First-run cost.** Like ResDiff, the very first run iterates over every date, runs the regressor, and writes `residuals_training.zarr` + `residuals_validation.zarr`. Subsequent runs reuse the cache. Note these residuals are specific to *this* regressor (`sqrt + minmax`), so they are a **different** cache from ResDiff's `std` residuals — keep `residuals.path` distinct.
 
 ______________________________________________________________________
 
@@ -250,7 +361,7 @@ d4p_downscaler:
   module: deep4production.core.downscalers.downscaler_cpmgem_residual
   kwargs:
     # Optional: override the regressor path stored in training metadata.
-    # path_regressor: /new/path/to/SongUNet_det_best.pt
+    # path_regressor: ./outputs/song_unet_det_minmax/models/SongUNet_det_minmax_best.pt
     sampling_params:
       # Reverse sub-VP SDE steps (as in CPMGEM). 200–500 is a good trade-off.
       num_steps: 1000
@@ -325,11 +436,11 @@ ______________________________________________________________________
 
 You have run the **sub-VP × residual** cell of the 2×2 study:
 
-- Reused the deterministic SongUNet regressor from the ResDiff tutorial (step 1).
+- Trained a deterministic SongUNet regressor on the 2×2 `sqrt + minmax_neg1_1` transform (step 1) — its own checkpoint, not ResDiff's `std` one.
 - Trained a **plain** SongUNet to denoise the **residual** under the **continuous-time sub-VP SDE**, with the residual standardized to unit variance so the sub-VP schedule is well-conditioned.
 - Generated ensemble fields with the regressor + reverse sub-VP sampler, un-standardizing the residual before adding it back to `ŷ`.
 
-Compare against [ResDiff](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md) (same residual target, EDM formulation) and [CPMGEM](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM.md) (same sub-VP formulation, direct target) to isolate each axis.
+Compare against [CPMGEM](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20CPMGEM.md) (same sub-VP formulation, direct target — and the same `sqrt + minmax` convention, so the target axis is cleanly isolated). The EDM-residual corner is represented by [ResDiff](../Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff/Deep4Production%20Tutorial:%20CORDEX-BENCH%20Alps%20Case%20Study%20with%20ResDiff.md), but on CorrDiff's native `std` normalization — so a CPMGEM-residual ↔ ResDiff comparison mixes the formulation axis with the normalization difference. To isolate the formulation axis cleanly you would train a `sqrt + minmax` variant of the EDM-residual cell.
 
 ______________________________________________________________________
 
