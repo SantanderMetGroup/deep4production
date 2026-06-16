@@ -3,7 +3,7 @@ Loss functions for deep4production, organized by family.
 
 Submodules
 ----------
-standard       : MaeLoss, MseLoss, QuantisedMSELoss, WeightedMseLoss
+standard       : MaeLoss, MseLoss, QuantisedMSELoss, WeightedMseLoss, DWAWeightedMseLoss
 nll            : NLLGaussianLoss, NLLBerGammaLoss
 asym           : Asym
 crps           : CRPSSpectralLoss
@@ -19,6 +19,7 @@ from deep4production.deep.loss.standard import (
     MseLoss,
     QuantisedMSELoss,
     WeightedMseLoss,
+    DWAWeightedMseLoss,
 )
 from deep4production.deep.loss.nll import NLLGaussianLoss, NLLBerGammaLoss
 from deep4production.deep.loss.asym import Asym
@@ -34,6 +35,7 @@ __all__ = [
     "MseLoss",
     "QuantisedMSELoss",
     "WeightedMseLoss",
+    "DWAWeightedMseLoss",
     "NLLGaussianLoss",
     "NLLBerGammaLoss",
     "Asym",
