@@ -261,3 +261,111 @@ class QuantisedMSELoss(nn.Module):
         mse_val = self.mse(target, output)
         qmse_val = self._compute_qmse(target, output)
         return mse_val + self.alpha * qmse_val
+
+
+### -------------------------------------------------------------------------------- ###
+### -------------------- Per-channel Weighted MSE Loss ---------------------------- ###
+class WeightedMseLoss(nn.Module):
+    """
+    Per-channel weighted Mean Squared Error (MSE) loss for multivariate
+    regression.
+
+    Each output channel's MSE is computed independently and the channels are
+    combined as a weighted average:
+
+        loss = sum_c ( w_c * MSE_c ) / sum_c ( w_c )     # normalize_weights=True (default)
+        loss = sum_c ( w_c * MSE_c )                     # normalize_weights=False
+
+    where ``MSE_c`` is the mean squared error of channel ``c`` (averaged over the
+    batch and spatial dimensions) and ``w_c`` is its weight. Use it to prioritise
+    a hard channel (e.g. precipitation) over easier ones while keeping a single
+    shared backbone. With all weights equal and ``normalize_weights=True`` this
+    reduces exactly to ``MseLoss``.
+
+    Parameters
+    ----------
+    weights : list[float] | tuple[float] | torch.Tensor
+        One weight per output channel, in the SAME order as
+        ``data.predictands.variables`` in the recipe. Its length must equal the
+        number of predictand channels (``model_params.kwargs.in_channels``).
+    ignore_nans : bool
+        Whether to ignore NaNs in the target domain. NaNs are dropped per
+        channel before that channel's mean is taken.
+    normalize_weights : bool
+        If True (default) divide by ``sum(weights)`` so equal weights recover the
+        plain ``MseLoss``; if False use the raw weighted sum.
+
+    YAML usage
+    ----------
+    Select it in a training recipe under ``model_info.loss_params``. The
+    ``module`` stays ``deep4production.deep.loss`` (the class is re-exported
+    there), so no path change is needed:
+
+        loss_params:
+          name: WeightedMseLoss
+          module: deep4production.deep.loss
+          kwargs:
+            # one weight per predictand channel, in `data.predictands.variables`
+            # order. e.g. 8 targets [tas, tasmax, tasmin, pr, hurs, psl, uas, vas]
+            # with precipitation (index 3) up-weighted x5:
+            weights: [1.0, 1.0, 1.0, 5.0, 1.0, 1.0, 1.0, 1.0]
+            ignore_nans: false
+            normalize_weights: true
+    """
+
+    def __init__(
+        self,
+        weights,
+        ignore_nans: bool = False,
+        normalize_weights: bool = True,
+    ) -> None:
+        super(WeightedMseLoss, self).__init__()
+        self.ignore_nans = ignore_nans
+        self.normalize_weights = normalize_weights
+        # Stored as a buffer so it follows the module across .to(device) and is
+        # saved/restored with the loss state_dict.
+        self.register_buffer("weights", torch.as_tensor(weights, dtype=torch.float32))
+
+    def forward(self, target: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the per-channel weighted MSE between target and output.
+        Parameters:
+            target (torch.Tensor): Target data, shape (B, C, H, W) or (B, C, G).
+            output (torch.Tensor): Model output, same shape as target.
+        Returns:
+            torch.Tensor: Scalar loss value.
+        """
+
+        # --- Handle both spatial (H, W) and flattened (GP) shapes ---
+        if target.ndim > 3:  # stack spatial dimensions
+            B, C, H, W = target.shape
+            target = target.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
+        if output.ndim > 3:  # stack spatial dimensions
+            B, C, H, W = output.shape
+            output = output.reshape(B, C, -1)  # From shape: (B, C, H, W) to (B, C, H*W)
+
+        # --- Validate weights against the channel dimension ---
+        C = target.shape[1]
+        w = self.weights.to(target.device)
+        assert w.numel() == C, (
+            f"WeightedMseLoss got {w.numel()} weights but the target has {C} "
+            f"channels; provide one weight per predictand channel."
+        )
+
+        # --- Per-channel squared error: (B, C, G) ---
+        sq_err = (target - output) ** 2
+
+        # --- Reduce to a per-channel MSE: (C,) ---
+        if self.ignore_nans:
+            nan_mask = torch.isnan(target)
+            sq_err = torch.where(nan_mask, torch.zeros_like(sq_err), sq_err)
+            valid = (~nan_mask).sum(dim=(0, 2)).clamp(min=1)  # (C,) valid count
+            per_channel_mse = sq_err.sum(dim=(0, 2)) / valid
+        else:
+            per_channel_mse = sq_err.mean(dim=(0, 2))  # (C,)
+
+        # --- Weighted combination across channels ---
+        weighted = (w * per_channel_mse).sum()
+        if self.normalize_weights:
+            weighted = weighted / w.sum()
+        return weighted
