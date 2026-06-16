@@ -11,6 +11,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 from deep4production.utils.zarr import open_zarr_store
+from deep4production.utils.log import get_logger
+
+log = get_logger("loss.standard")
 
 
 ### ---------------------------------------------------------------------------------------- ###
@@ -511,11 +514,24 @@ class DWAWeightedMseLoss(WeightedMseLoss):
         self._epoch_loss_sum.zero_()
         self._epoch_count.zero_()
 
-        # Need two completed epochs to form the ratio; until then stay uniform.
-        if torch.isnan(self._prev_prev_loss).any():
-            return
+        # Update the weights once two completed epochs allow the ratio; until
+        # then they stay uniform (plain MSE).
+        if not torch.isnan(self._prev_prev_loss).any():
+            # Relative descending rate and DWA weights (sum to N).
+            r = self._prev_loss / self._prev_prev_loss.clamp(min=1e-12)
+            w = self.num_channels * torch.softmax(r / self.temperature, dim=0)
+            self.weights = w.detach().to(self.weights.device)
 
-        # Relative descending rate and DWA weights (sum to N).
-        r = self._prev_loss / self._prev_prev_loss.clamp(min=1e-12)
-        w = self.num_channels * torch.softmax(r / self.temperature, dim=0)
-        self.weights = w.detach().to(self.weights.device)
+        # --- Log the per-channel training loss and the weights now in effect ---
+        # One host<->device sync per epoch (negligible). The weights logged here
+        # are those that will be applied during the NEXT epoch.
+        loss_str = ", ".join(
+            f"{v:.4e}" for v in self._prev_loss.detach().cpu().tolist()
+        )
+        w_str = ", ".join(f"{v:.4f}" for v in self.weights.detach().cpu().tolist())
+        log.info(
+            "DWA | epoch %s | per-channel train MSE: [%s] | weights: [%s]",
+            epoch,
+            loss_str,
+            w_str,
+        )
