@@ -50,6 +50,10 @@ log = get_logger("tracker")
 
 DIAGNOSTIC_MODULE = "deep4production.utils.diagnostics"
 
+# Diagnostics that rely on physical-unit (mm) thresholds and are therefore
+# meaningless in the model's normalized [-1,1] space.
+_THRESHOLD_INDICES = {"R01", "R20", "Rx1day", "SDII", "P98Wet"}
+
 
 # -------------------------------------------------------------------------
 def _epoch_dir(tracker_dir, epoch):
@@ -63,24 +67,35 @@ def _epoch_dir(tracker_dir, epoch):
 def _parse_metric_entry(entry):
     """
     Translate one configured metric entry into
-    ``(display_name, diagnostic, index, take_abs)``.
+    ``(display_name, diagnostic, index, take_abs, space, group)``.
 
     Accepted forms (same ``default`` + per-variable convention as MLflow):
       * ``"rmse"``                       -> diagnostic only
       * ``["Mean", "bias"]``             -> [index, diagnostic]
-      * ``{diagnostic: bias, index: Mean, abs: true, name: ...}``  (dict form,
-        the only form that exposes the ``abs`` toggle and a name override)
+      * ``{diagnostic: bias, index: Mean, abs: true, space: model, group: true}``
+        (dict form, the only one exposing ``abs`` / ``space`` / ``group`` / ``name``)
 
     ``abs`` takes the absolute value of the per-gridpoint field *before* the
     spatial min/mean/max reduction (e.g. mean |bias| instead of mean signed
     bias, which would let positive and negative errors cancel).
+
+    ``space`` is ``"physical"`` (default) or ``"model"``; the latter computes the
+    diagnostic on the normalized [-1,1] fields (dimensionless, comparable across
+    variables) and prefixes the display name with ``model_``.
+
+    ``group`` (model-space cross-variable metrics) replaces the per-variable
+    panel with a single combined panel overlaying every variable.
     """
     name = None
     take_abs = False
+    space = "physical"
+    group = False
     if isinstance(entry, dict):
         diagnostic = entry["diagnostic"]
         index = entry.get("index")
         take_abs = bool(entry.get("abs", False))
+        space = entry.get("space", "physical")
+        group = bool(entry.get("group", False))
         name = entry.get("name")
     elif isinstance(entry, (list, tuple)) and len(entry) == 2:
         index, diagnostic = entry
@@ -91,7 +106,9 @@ def _parse_metric_entry(entry):
         name = f"{index}_{diagnostic}" if index is not None else str(diagnostic)
         if take_abs:
             name = f"abs_{name}"
-    return name, str(diagnostic), index, take_abs
+        if space == "model":
+            name = f"model_{name}"
+    return name, str(diagnostic), index, take_abs, space, group
 
 
 # -------------------------------------------------------------------------
@@ -205,17 +222,82 @@ def _plot_metric_evolution(csv_path, png_path, title):
 
 
 # -------------------------------------------------------------------------
-def _metric_logs(tgt, prd, vars, metrics_info, tracker_dir, fig_dir, epoch):
+def _plot_metric_group(name, group_vars, tracker_dir, fig_dir):
+    """
+    Combined cross-variable panel: overlay the spatial-MEAN evolution of every
+    variable that shares this metric (one colored line per variable, legend by
+    variable name). Reuses the already-persisted ``metric_<name>_<var>.csv``
+    files. Only meaningful for dimensionless (model-space) metrics, where the
+    variables live on a common scale.
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
+    plotted = False
+    for var in group_vars:
+        csv_path = os.path.join(tracker_dir, f"metric_{name}_{var}.csv")
+        if not os.path.exists(csv_path):
+            continue
+        epochs, _mins, means, _maxs = _read_metric_csv(csv_path)
+        ax.plot(epochs, means, "o-", markersize=3, linewidth=1.2, label=var)
+        plotted = True
+    if not plotted:
+        plt.close(fig)
+        return
+    ax.axhline(0.0, color="grey", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel(name)
+    ax.set_title(f"{name} — spatial mean, all variables")
+    ax.legend(ncol=2, fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.savefig(
+        os.path.join(fig_dir, f"group_{name}.png"), bbox_inches="tight", dpi=150
+    )
+    plt.close(fig)
+
+
+# -------------------------------------------------------------------------
+def _metric_logs(
+    tgt, prd, tgt_model, prd_model, vars, metrics_info, tracker_dir, fig_dir, epoch
+):
     """
     For each variable/diagnostic, compute the per-gridpoint field, reduce it to
     (min, mean, max) across gridpoints, append those to the persistent per-metric
     CSV at the tracker root, and (re)draw the evolution figure into ``fig_dir``.
+
+    ``space: model`` entries are computed on the normalized [-1,1] fields
+    (``tgt_model``/``prd_model``). ``group: true`` entries skip the per-variable
+    panel and are instead drawn as one combined cross-variable panel per metric.
     """
+    grouped = {}  # metric name -> [vars successfully written], for combined panels
     for var in vars:
         logged = []
         for entry in _resolve_metric_entries(metrics_info, var):
-            name, diagnostic, index, take_abs = _parse_metric_entry(entry)
-            kwargs = {"target": tgt[var], "prediction": prd[var], "spatial": True}
+            name, diagnostic, index, take_abs, space, group = _parse_metric_entry(
+                entry
+            )
+
+            # --- Pick the field space (physical vs normalized model space) ---
+            if space == "model":
+                if index in _THRESHOLD_INDICES or diagnostic in _THRESHOLD_INDICES:
+                    log.warning(
+                        "[%s] metric %s uses a physical-threshold index in model "
+                        "space; skipping.",
+                        var,
+                        name,
+                    )
+                    continue
+                if tgt_model is None or prd_model is None:
+                    log.warning(
+                        "[%s] metric %s requested model space but none is "
+                        "available; skipping.",
+                        var,
+                        name,
+                    )
+                    continue
+                t_ds, p_ds = tgt_model, prd_model
+            else:
+                t_ds, p_ds = tgt, prd
+
+            kwargs = {"target": t_ds[var], "prediction": p_ds[var], "spatial": True}
             if index is not None:
                 kwargs["index"] = index
             field = get_func_from_string(DIAGNOSTIC_MODULE, diagnostic, kwargs=kwargs)
@@ -230,7 +312,6 @@ def _metric_logs(tgt, prd, vars, metrics_info, tracker_dir, fig_dir, epoch):
                 continue
 
             csv_path = os.path.join(tracker_dir, f"metric_{name}_{var}.csv")
-            png_path = os.path.join(fig_dir, f"evolution_{name}_{var}.png")
             _append_metric_row(
                 csv_path,
                 epoch,
@@ -238,10 +319,20 @@ def _metric_logs(tgt, prd, vars, metrics_info, tracker_dir, fig_dir, epoch):
                 float(np.nanmean(values)),
                 float(np.nanmax(values)),
             )
-            _plot_metric_evolution(csv_path, png_path, f"{name} [{var}]")
+            if group:
+                # Combined panel drawn once after the variable loop.
+                grouped.setdefault(name, []).append(var)
+            else:
+                png_path = os.path.join(fig_dir, f"evolution_{name}_{var}.png")
+                _plot_metric_evolution(csv_path, png_path, f"{name} [{var}]")
             logged.append(name)
         if logged:
             log.info("[%s] Tracker metrics logged: %s", var, logged)
+
+    # --- Combined cross-variable panels (one line per variable) ---
+    for name, gvars in grouped.items():
+        _plot_metric_group(name, gvars, tracker_dir, fig_dir)
+        log.info("Tracker grouped panel: %s (%d vars)", name, len(gvars))
 
 
 # -------------------------------------------------------------------------
@@ -297,16 +388,24 @@ def tracker_epoch_logs(
     valid_losses=None,
     metrics_info=None,
     maps_info=None,
+    tgt_model=None,
+    prd_model=None,
 ):
     """
     Render a full per-epoch snapshot into ``tracker/epoch_XXXX/``: the loss
     curve, the per-gridpoint metric-evolution figures, and the random-date
     ground-truth vs. prediction maps. Persistent metric CSVs are appended at
     the tracker root. Called on diagnostic epochs only.
+
+    ``tgt_model``/``prd_model`` are the same fields in the model's normalized
+    [-1,1] space, used by metrics declared with ``space: model``. Maps always use
+    the physical fields.
     """
     fig_dir = _epoch_dir(tracker_dir, epoch)
     _plot_losses(train_losses, valid_losses, fig_dir)
     if metrics_info is not None:
-        _metric_logs(tgt, prd, vars, metrics_info, tracker_dir, fig_dir, epoch)
+        _metric_logs(
+            tgt, prd, tgt_model, prd_model, vars, metrics_info, tracker_dir, fig_dir, epoch
+        )
     if maps_info is not None:
         _map_logs(tgt, prd, vars, maps_info, fig_dir, epoch)

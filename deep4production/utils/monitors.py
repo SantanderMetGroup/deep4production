@@ -41,6 +41,9 @@ class Monitor:
     # The trainer sets up the validation-prediction machinery only when a
     # backend actually needs predictions for its diagnostics.
     needs_predictions = False
+    # True when any configured metric is computed in the model's normalized
+    # [-1,1] space, so the trainer transforms the fields before logging.
+    needs_model_space = False
     # Preserves the historical coupling whereby step-checkpointing was gated on
     # an active MLflow run (see the trainer's "save every n steps" block).
     logs_checkpoints = False
@@ -55,11 +58,14 @@ class Monitor:
     def log_checkpoint(self, path):
         """Log a just-saved checkpoint file as a backend artifact."""
 
-    def maybe_log_diagnostics(self, epoch, vars, tgt, predict):
+    def maybe_log_diagnostics(self, epoch, vars, tgt, predict, to_model_space=None):
         """
         Run + log validation diagnostics if this epoch is due. ``predict`` is a
         zero-arg callback returning the prediction Dataset; it is only invoked
         when the backend decides to log (so prediction stays lazy).
+        ``to_model_space`` is an optional callable mapping a physical-units
+        Dataset to the model's normalized [-1,1] space (used when a metric
+        declares ``space: model``).
         """
 
     def on_training_end(self, epoch_best, vars, tgt, best_checkpoint_path, predict_from_best):
@@ -120,7 +126,7 @@ class MLflowMonitor(Monitor, _CadenceMixin):
 
         mlflow.log_artifact(path, artifact_path="checkpoints")
 
-    def maybe_log_diagnostics(self, epoch, vars, tgt, predict):
+    def maybe_log_diagnostics(self, epoch, vars, tgt, predict, to_model_space=None):
         if self.diagnostics is None:
             return
         if not self._due(epoch, self._diag_ref, self.compute_every):
@@ -172,6 +178,7 @@ class TrackerMonitor(Monitor, _CadenceMixin):
         self.maps = cfg.get("maps", None)
         self.compute_every = cfg.get("compute_diagnostics_every_n_epochs", None)
         self.needs_predictions = self.metrics is not None or self.maps is not None
+        self.needs_model_space = _any_model_space(self.metrics)
         self._diag_ref = 0
         # Cached so the per-epoch snapshot can redraw the loss curve.
         self._train_losses = []
@@ -183,13 +190,18 @@ class TrackerMonitor(Monitor, _CadenceMixin):
         # Cheap CSV, refreshed every epoch; the figure renders with the snapshot.
         tracker_write_losses(train_losses, valid_losses, self.tracker_dir)
 
-    def maybe_log_diagnostics(self, epoch, vars, tgt, predict):
+    def maybe_log_diagnostics(self, epoch, vars, tgt, predict, to_model_space=None):
         if not self.needs_predictions:
             return
         if not self._due(epoch, self._diag_ref, self.compute_every):
             return
         self._diag_ref = epoch
         prd = predict()
+        # Transform to normalized [-1,1] model space only when a metric needs it.
+        tgt_model = prd_model = None
+        if self.needs_model_space and to_model_space is not None:
+            tgt_model = to_model_space(tgt)
+            prd_model = to_model_space(prd)
         tracker_epoch_logs(
             tgt=tgt,
             prd=prd,
@@ -200,7 +212,22 @@ class TrackerMonitor(Monitor, _CadenceMixin):
             valid_losses=self._valid_losses,
             metrics_info=self.metrics,
             maps_info=self.maps,
+            tgt_model=tgt_model,
+            prd_model=prd_model,
         )
+
+
+# =========================================================================
+def _any_model_space(metrics):
+    """True if any metric entry in the (default + per-variable) config asks for
+    ``space: model`` — only the dict form can."""
+    if not metrics:
+        return False
+    for entries in metrics.values():
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("space") == "model":
+                return True
+    return False
 
 
 # =========================================================================

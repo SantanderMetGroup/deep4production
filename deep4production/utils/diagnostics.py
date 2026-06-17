@@ -259,6 +259,13 @@ def Pxx(da, percentile, spatial=False):
     return float(q.mean().values)
 
 
+# --- P01 ------------------------------------------------------------
+def P01(da, spatial=False):
+    """Compute 1st percentile"""
+
+    return Pxx(da, 0.01, spatial=spatial)
+
+
 # --- P02 ------------------------------------------------------------
 def P02(da, spatial=False):
     """Compute 2nd percentile"""
@@ -271,6 +278,13 @@ def P98(da, spatial=False):
     """Compute 98th percentile"""
 
     return Pxx(da, 0.98, spatial=spatial)
+
+
+# --- P99 ------------------------------------------------------------
+def P99(da, spatial=False):
+    """Compute 99th percentile"""
+
+    return Pxx(da, 0.99, spatial=spatial)
 
 
 # --- Median ------------------------------------------------------------

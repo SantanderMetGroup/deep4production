@@ -273,6 +273,47 @@ class trainer:
         return runner.downscale(return_pred=True, verbose=False)
 
     # -------------------------------------------------------------------------
+    def _to_model_space(self, ds):
+        """
+        Forward-transform a physical-units predictand xarray.Dataset into the
+        model's normalized [-1,1] space, reproducing the exact training transform:
+        per-variable operator forward (``operator_y``, e.g. ``sqrt`` for pr/hurs)
+        followed by the affine normalizer (``self.norm_y``). Used by tracker
+        metrics declared with ``space: model`` so per-variable errors become
+        dimensionless and comparable across variables.
+
+        No-op when no predictand normalizer is configured (``self.norm_y is
+        None``); in that case the fields are already in raw operator space.
+        """
+        if self.norm_y is None:
+            return ds
+        vars_y = self.metadata_dict["vars_y"]
+        # Stack variables into (T, C, G) in channel order.
+        arr = np.stack(
+            [np.asarray(ds[v].values, dtype=np.float32) for v in vars_y], axis=1
+        )
+        # Operator forward per channel (e.g. sqrt for pr/hurs), if any — this
+        # must precede the affine, exactly as in pydataset.preprocess.
+        op_info = self.metadata_dict.get("operator_y", None)
+        if op_info is not None:
+            for c, v in enumerate(vars_y):
+                op_name = op_info["operator_func_per_variable"].get(v)
+                if op_name is not None:
+                    op_fn = get_func_from_string(op_info["module"], op_name)
+                    arr[:, c] = op_fn(arr[:, c])
+        # Affine normalize (operator space -> [-1,1]) via the trainer's
+        # InputNormalizer, on the normalizer's buffer device.
+        device = next(self.norm_y.buffers()).device
+        t = torch.from_numpy(arr).to(device)
+        t = self.norm_y.transform(t, in_place=False, channel_dim=1)
+        arr = t.detach().cpu().numpy()
+        # Rebuild a Dataset preserving the original coords/dims.
+        out = ds.copy()
+        for c, v in enumerate(vars_y):
+            out[v] = (ds[v].dims, arr[:, c])
+        return out
+
+    # -------------------------------------------------------------------------
     def _amp_ctx(self):
         """Return an autocast context (or nullcontext) depending on AMP state."""
         if self._amp_enabled:
@@ -1089,6 +1130,7 @@ class trainer:
                 vars=self.metadata_dict["vars_y"],
                 tgt=getattr(self, "tgt_monitor", None),
                 predict=lambda: self._monitor_predict(model, kwargs_save),
+                to_model_space=self._to_model_space,
             )
 
             # --- Per-epoch summary line --------------------------------------------

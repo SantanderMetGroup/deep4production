@@ -109,12 +109,25 @@ tracker:
   # so the mean marker is the mean absolute error rather than the mean signed
   # error (where positive/negative biases would cancel). `default` applies to
   # every predictand; add a per-variable key (e.g. `tasmax:`) to extend it.
+  #
+  # Two extra dict-only options:
+  #   * `space: model` — compute the diagnostic on the model's normalized [-1,1]
+  #     fields instead of physical units, so per-variable errors are
+  #     dimensionless and comparable across variables. relbias and physical-mm
+  #     threshold indices (R01/SDII/Rx1day/R20/P98Wet) are invalid in [-1,1] and
+  #     are skipped. Filenames are tagged `model_` so they never collide.
+  #   * `group: true` — replace the 8 per-variable panels with ONE combined panel
+  #     (`group_<name>.png`) overlaying every variable's spatial-mean line, with
+  #     the variable name in the legend. Only meaningful for `space: model`
+  #     (a shared, dimensionless scale).
   metrics:
     default:
       - [Mean, bias]                              # signed bias of the time-mean
       - {diagnostic: bias, index: Mean, abs: true}  # mean |bias| (no cancelling)
       - [Mean, relbias]                           # relative bias (%) of the mean
       - rmse                                      # per-gridpoint RMSE
+      # Cross-variable comparison in normalized [-1,1] space, one combined panel:
+      - {diagnostic: bias, index: Mean, abs: true, space: model, group: true}
     # tasmax:
     #   - [P98, bias]     # bias of the 98th percentile, per gridpoint
 
