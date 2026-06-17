@@ -68,6 +68,17 @@ def main():
         overwrite = config.get("overwrite", False)
         graph = config.get("graph", None)
         Mlflow = config.get("Mlflow", None)
+        tracker = config.get("tracker", None)
+
+        # --- Monitoring backend: MLflow and d4p-tracker are mutually exclusive
+        # — pick at most one. They both consume the validation-period prediction
+        # machinery, so allowing both would double the work for no benefit.
+        if Mlflow is not None and tracker is not None:
+            log.error(
+                "Both 'Mlflow' and 'tracker' are configured in the recipe; they "
+                "are mutually exclusive. Keep only one."
+            )
+            sys.exit(1)
 
         # --- Assign run ID ----------------------------------
         # Under DDP every rank must agree on the same run_ID (it drives the
@@ -106,8 +117,9 @@ def main():
 
         # --- Start Mlflow and log config (rank 0 only) -----------------------
         # MLflow autologging, run starts and artifact uploads only happen on the
-        # main process; downstream code uses ``self.Mlflow is None`` to skip
-        # MLflow work on the other ranks.
+        # main process. The trainer wraps the active backend in a Monitor that
+        # is a no-op on non-main ranks (see deep4production.utils.monitors), so
+        # monitoring I/O stays on rank 0.
         if Mlflow is not None and is_main_process():
             ## Set tracking uri, i.e., MLFlow server
             tracking_uri = Mlflow["tracking_uri"]
@@ -161,9 +173,11 @@ def main():
                 )
 
             mlflow.log_artifact("config.yaml", artifact_path="config")
-        # Non-zero ranks must not receive the MLflow config; this gates every
-        # ``if self.Mlflow is not None`` block inside the trainer.
+        # The trainer builds a no-op Monitor on non-main ranks regardless, but
+        # we also withhold the backend configs here so only rank 0 ever drives
+        # monitoring (MLflow run + tracker filesystem writes).
         trainer_mlflow = Mlflow if is_main_process() else None
+        trainer_tracker = tracker if is_main_process() else None
 
         # --- Extract normalizer blocks from the recipe and pass them directly
         # to the trainer. The pydataset no longer applies normalization per-sample
@@ -190,6 +204,7 @@ def main():
                 "graph": graph,
                 "d4dpy": d4dpy,
                 "Mlflow": trainer_mlflow,
+                "tracker": trainer_tracker,
                 "normalizer_info_x": normalizer_info_x,
                 "normalizer_info_y": normalizer_info_y,
                 "normalizer_info_f": normalizer_info_f,

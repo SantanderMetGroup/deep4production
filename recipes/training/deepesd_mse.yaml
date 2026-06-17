@@ -77,3 +77,50 @@ model_info:
     patience_early_stopping: 30
     optimizer_params:
       lr: 0.0001
+
+
+##### MONITORING: d4p-tracker (in-house, no external server) #####
+# In-house training monitor — a dependency-free alternative to MLflow.
+# Writes figures + CSV to <output_dir>/<run_ID>/tracker/ on the local
+# filesystem. d4p-tracker and the `Mlflow` block are MUTUALLY EXCLUSIVE:
+# configure at most one of them (training aborts if both are present).
+#
+# Produces three monitors:
+#   * tracker/loss_curve.png + losses.csv         — train/val loss per epoch
+#   * tracker/metrics/<diag>_<var>.png + .csv      — per-gridpoint min/mean/max
+#       evolution: each logged epoch is drawn as a vertical min->max line with
+#       a mean marker (only 3 scalars/epoch are persisted, never the fields)
+#   * tracker/maps/<var>/epoch_XXXX_<date>.png     — ground-truth vs prediction
+#       maps for a few random (but fixed across epochs) validation dates
+tracker:
+  # How often (in epochs) to run the metric/map diagnostics. Loss curves are
+  # refreshed every epoch regardless (they are cheap).
+  compute_diagnostics_every_n_epochs: 10
+
+  # --- Per-gridpoint metric evolution (min/mean/max markers) ---
+  # Each entry is one of:
+  #   * a diagnostic name from deep4production.utils.diagnostics, called with
+  #     spatial=True            ->  e.g.  rmse
+  #   * an [index, diagnostic] pair, where `index` summarises the field first
+  #                             ->  e.g.  [Mean, bias]  (bias of the time-mean)
+  #   * a dict, the only form exposing `abs` and a `name` override
+  #                             ->  {diagnostic: bias, index: Mean, abs: true}
+  # `abs: true` takes |field| per gridpoint BEFORE the min/mean/max reduction,
+  # so the mean marker is the mean absolute error rather than the mean signed
+  # error (where positive/negative biases would cancel). `default` applies to
+  # every predictand; add a per-variable key (e.g. `tasmax:`) to extend it.
+  metrics:
+    default:
+      - [Mean, bias]                              # signed bias of the time-mean
+      - {diagnostic: bias, index: Mean, abs: true}  # mean |bias| (no cancelling)
+      - [Mean, relbias]                           # relative bias (%) of the mean
+      - rmse                                      # per-gridpoint RMSE
+    # tasmax:
+    #   - [P98, bias]     # bias of the 98th percentile, per gridpoint
+
+  # --- Random-date ground-truth vs prediction maps ---
+  maps:
+    num_dates: 3          # how many validation dates to plot
+    seed: 42              # fixed seed -> same dates every epoch (comparable)
+    diff: true            # add a (prediction - ground truth) difference panel
+    cmap: YlGnBu

@@ -11,18 +11,12 @@ from torch.utils.data import DataLoader as TorchDataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-## MLFlow
-import mlflow
-import mlflow.pytorch
-
-# from mlflow.tracking import MlflowClient
-# from mlflow.exceptions import MlflowException
 ## Deep4production
 from deep4production.deep.utils import EMA
 from deep4production.deep.utils import save_model, resume_model
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.general import get_func_from_string
-from deep4production.utils.mlflow import mlflow_scalars_logs, mlflow_figures_logs
+from deep4production.utils.monitors import build_monitor
 from deep4production.utils.log import get_logger
 from deep4production.utils.distributed import (
     is_distributed,
@@ -48,6 +42,7 @@ class trainer:
         graph=None,
         d4dpy={},
         Mlflow=None,
+        tracker=None,
         normalizer_info_x=None,
         normalizer_info_y=None,
         normalizer_info_f=None,
@@ -192,48 +187,90 @@ class trainer:
         # --- CREATE AND SAVE METADATA ---------------------------------------
         self.metadata_dict = self.build_metadata()
 
-        # --- Mlflow ---------------------------------------
-        self.Mlflow = Mlflow
-        if self.Mlflow is not None:
-            ## Mlflow dirs
-            # print(run.info.experiment_id)
-            # print(run.info.artifact_uri)
-            # print(run.info.run_id)
-            ## Tags:
-            tags = Mlflow.get("tags", {})
-            for key, value in tags.items():
-                if value is not None:
-                    mlflow.set_tag(key, value)
-            ## Mlflow diagnostics and saving info
-            self.Mlflow_diagnostics = Mlflow.get("diagnostics", None)
-            self.Mlflow_compute_diagnostics_every_n_epochs = Mlflow.get(
-                "compute_diagnostics_every_n_epochs", None
+        # --- Monitoring backend (MLflow or d4p-tracker) ---------------------
+        # MLflow and d4p-tracker are mutually exclusive (enforced in
+        # cli/train.py). The active backend is wrapped in a single ``Monitor``
+        # so the training loop never branches on which one is in use; non-main
+        # ranks get a no-op monitor so monitoring I/O stays on rank 0.
+        self._monitor_runner = None  # lazily built on the first diagnostic epoch
+        self.monitor = build_monitor(
+            Mlflow, tracker, id_dir=id_dir, is_main=self._is_main
+        )
+        # Predictions over the validation period are only needed when the active
+        # backend logs diagnostics; set up that machinery once here.
+        if self.monitor.needs_predictions:
+            self._setup_monitor_inputs(Mlflow if Mlflow is not None else tracker, data)
+
+    # -------------------------------------------------------------------------
+    def _setup_monitor_inputs(self, cfg, data):
+        """
+        Resolve the d4p downscaler function and the validation-period input /
+        forcing specs used to produce predictions for monitoring diagnostics.
+
+        Shared by the MLflow and d4p-tracker backends (they are mutually
+        exclusive, so only one ever calls this) so the prediction machinery is
+        defined in a single place.
+        """
+        d4p_name = cfg.get("func_name", "downscaler")
+        d4p_module = cfg.get(
+            "func_module", "deep4production.core.downscalers.downscaler"
+        )
+        self.d4p_func = get_func_from_string(
+            module_string=d4p_module, func_string=d4p_name
+        )
+        self.input_data = {
+            "paths": data["predictors"]["paths"],
+            "years": data["validation_period"],
+            "load_in_memory": data["load_in_memory"],
+        }
+        if data.get("forcings", None) is not None:
+            self.forcing_data = {
+                "paths": data["predictands"]["paths"],
+                "years": data["validation_period"],
+                "load_in_memory": data["load_in_memory"],
+            }
+        else:
+            self.forcing_data = None
+
+    # -------------------------------------------------------------------------
+    def _monitor_predict(self, model, kwargs_save):
+        """
+        Run a validation-period prediction for monitoring diagnostics.
+
+        The d4p downscaler ``runner`` is built lazily on the first call (it
+        needs a checkpoint that carries the metadata) and cached for reuse on
+        subsequent epochs. Returns the prediction xarray.Dataset; the matching
+        ground truth lives in ``self.tgt_monitor``.
+        """
+        if self._monitor_runner is None:
+            path_placeholder = f"{self.model_dir}/modelPlaceholder_monitor.pt"
+            save_model(path=os.path.expanduser(path_placeholder), **kwargs_save)
+            self._monitor_runner = self.d4p_func(
+                id_dir=self.id_dir,
+                input_data=self.input_data,
+                forcing_data=self.forcing_data,
+                model_file="modelPlaceholder_monitor.pt",
+                graph=self.graph_loc,
             )
-            self.Mlflow_save_checkpoint_every_n_epochs = Mlflow.get(
-                "save_checkpoint_every_n_epochs", None
-            )
-            if self.Mlflow_diagnostics is not None:
-                ## Get d4p_downscaler function
-                d4p_name = Mlflow.get("func_name", "downscaler")
-                d4p_module = Mlflow.get(
-                    "func_module", "deep4production.core.downscalers.downscaler"
-                )
-                self.d4p_func = get_func_from_string(
-                    module_string=d4p_module, func_string=d4p_name
-                )
-                self.input_data = {
-                    "paths": data["predictors"]["paths"],
-                    "years": data["validation_period"],
-                    "load_in_memory": data["load_in_memory"],
-                }
-                if data.get("forcings", None) is not None:
-                    self.forcing_data = {
-                        "paths": data["predictands"]["paths"],
-                        "years": data["validation_period"],
-                        "load_in_memory": data["load_in_memory"],
-                    }
-                else:
-                    self.forcing_data = None
+        model.eval()
+        return self._monitor_runner.downscale(
+            model=unwrap_model(model), return_pred=True, verbose=False
+        )
+
+    # -------------------------------------------------------------------------
+    def _predict_from_best(self):
+        """
+        Run a validation-period prediction loading the *best* checkpoint from
+        disk (used by the MLflow on-best figures hook at the end of training).
+        """
+        runner = self.d4p_func(
+            id_dir=self.id_dir,
+            input_data=self.input_data,
+            forcing_data=self.forcing_data,
+            model_file=f"{self.model_save_name}_best.pt",
+            graph=self.graph_loc,
+        )
+        return runner.downscale(return_pred=True, verbose=False)
 
     # -------------------------------------------------------------------------
     def _amp_ctx(self):
@@ -407,9 +444,10 @@ class trainer:
             valid_dataset = self.pydataset(
                 temporal_period=self.data["validation_period"], **kwargs_pydataset
             )
-            if self.Mlflow is not None:
-                if self.Mlflow_diagnostics is not None:
-                    self.tgt_mlflow = valid_dataset.get_target_samples()
+            # Validation-period ground truth for monitoring diagnostics, needed
+            # only when the active monitoring backend logs diagnostics.
+            if self.monitor.needs_predictions:
+                self.tgt_monitor = valid_dataset.get_target_samples()
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset)
         # self.save_metadata(self.metadata_path)
@@ -811,9 +849,10 @@ class trainer:
         if ema_decay is not None:
             ema = EMA(unwrap_model(model), decay=ema_decay, device=device)
 
-        # --- Mlflow counter ---
-        epoch_ref_mlflow = 0
-        epoch_ref_mlflow_diagnostic = 0
+        # Best-checkpoint bookkeeping (referenced by the end-of-training monitor
+        # hook even if no best checkpoint is ever written).
+        epoch_best = 0
+        path_save_final = None
 
         # --- Loop over epochs ------------------------------------------
         if self._is_main:
@@ -893,8 +932,6 @@ class trainer:
             train_loss_local = all_reduce_mean(train_loss_local)
             train_loss = train_loss_local.item()  # one sync per epoch
             train_losses.append(train_loss)
-            if self.Mlflow is not None:
-                mlflow.log_metric("train_loss_epoch", train_loss, step=int(epoch))
 
             # -----------------------------------------------------------------------------------------
             # --- Validation phase: Loop over batches -------------------------------------------------
@@ -920,9 +957,16 @@ class trainer:
                     val_loss_local = val_loss_sum / num_batches
                     val_loss_local = all_reduce_mean(val_loss_local)
                     val_loss = val_loss_local.item()
-                    if self.Mlflow is not None:
-                        mlflow.log_metric("val_loss_epoch", val_loss, step=int(epoch))
                 valid_losses.append(val_loss)
+
+            # --- Monitoring: record epoch losses (backend-agnostic) -----------
+            # No-op on non-main ranks; MLflow logs the scalars, d4p-tracker
+            # refreshes its losses.csv (the figure renders with the snapshot).
+            self.monitor.log_losses(
+                epoch,
+                train_losses,
+                valid_losses if valid_data is not None else None,
+            )
 
             # --- Compute epoch time -----------------------------------------------
             epoch_time = np.round(time.time() - epoch_start, 2)
@@ -1005,7 +1049,9 @@ class trainer:
                     epoch_ref = epoch
 
             # --- Save model also every n steps? ----------------------------------
-            if self.Mlflow is not None:
+            # (Historically gated on an active MLflow run; preserved via the
+            # monitor's ``logs_checkpoints`` flag.)
+            if self.monitor.logs_checkpoints:
                 if saving_params.get("save_every_n_steps", None) is not None:
                     save_step_interval = global_step - step_ref
                     if save_step_interval >= saving_params["save_every_n_steps"]:
@@ -1020,27 +1066,13 @@ class trainer:
                         log_msg += " | 💾 model saved (step)"
                         step_ref = global_step
 
-            # --------------- MLFLOW --------------------------------------------------------
-            # --- Save model also every n epochs (mlflow)? ----------------------------------
-            if self.Mlflow is not None:
-                if self.Mlflow_save_checkpoint_every_n_epochs is not None:
-                    mlflow_save_epoch_interval = epoch - epoch_ref_mlflow
-                    if (
-                        mlflow_save_epoch_interval
-                        >= self.Mlflow_save_checkpoint_every_n_epochs
-                    ):
-                        path_save_mlflow = (
-                            f"{self.model_path[:-3]}_epoch{epoch}_mlflow.pt"
-                        )
-                        if self._is_main:
-                            save_model(
-                                path=os.path.expanduser(path_save_mlflow), **kwargs_save
-                            )
-                            mlflow.log_artifact(
-                                path_save_mlflow, artifact_path="checkpoints"
-                            )
-                        log_msg += " | 💾 model saved (mlflow)"
-                        epoch_ref_mlflow = epoch
+            # --- Save + log a checkpoint artifact at the backend's cadence -------
+            if self.monitor.should_save_checkpoint(epoch):
+                path_save_ckpt = f"{self.model_path[:-3]}_epoch{epoch}_mlflow.pt"
+                if self._is_main:
+                    save_model(path=os.path.expanduser(path_save_ckpt), **kwargs_save)
+                    self.monitor.log_checkpoint(path_save_ckpt)
+                log_msg += " | 💾 model saved (mlflow)"
             # Restore training weights after all saves so the optimizer keeps working.
             if ema is not None and self._is_main:
                 ema.restore()
@@ -1048,108 +1080,29 @@ class trainer:
             # writing checkpoints / Mlflow artifacts.
             barrier()
 
-            # --- Compute diagnostics (mlflow)? ----------------------------------
-            if self.Mlflow is not None:
-                if self.Mlflow_compute_diagnostics_every_n_epochs is not None:
-                    ## Init downscaler
-                    if epoch == 0:
-                        path_save_mlflow = (
-                            f"{self.model_dir}/modelPlaceholder_mlflow.pt"
-                        )
-                        save_model(
-                            path=os.path.expanduser(path_save_mlflow), **kwargs_save
-                        )  # Save a model that contains all the metadata necessary to init properly downscaler
-                        runner = self.d4p_func(
-                            id_dir=self.id_dir,
-                            input_data=self.input_data,
-                            forcing_data=self.forcing_data,
-                            model_file="modelPlaceholder_mlflow.pt",
-                            graph=self.graph_loc,
-                        )  # Run init
-                        # print("🌐 (Mlflow) D4P DOWNSCALER READY ")
-
-                    ## Determine if diagnostics are computed in this epoch
-                    mlflow_diagnostic_epoch_interval = (
-                        epoch - epoch_ref_mlflow_diagnostic
-                    )
-                    if (
-                        mlflow_diagnostic_epoch_interval
-                        >= self.Mlflow_compute_diagnostics_every_n_epochs
-                    ):
-                        ## Predict and postprocess prediction
-                        model.eval()
-                        # Downscaler expects the unwrapped module (its forward
-                        # signatures don't go through DDP's wrapper).
-                        prd_mlflow = runner.downscale(
-                            model=unwrap_model(model), return_pred=True, verbose=False
-                        )
-                        # print(f"Pred (mlflow): {prd_mlflow}")
-                        # print(f"Target (mlflow): {self.tgt_mlflow}")
-
-                        ## Log scalars ------------------------------------------------------------------------------
-                        Mlflow_scalars = self.Mlflow_diagnostics.get("scalars", None)
-                        if Mlflow_scalars is not None:
-                            mlflow_scalars_logs(
-                                tgt=self.tgt_mlflow,
-                                prd=prd_mlflow,
-                                vars=self.metadata_dict["vars_y"],
-                                mlflow_info=Mlflow_scalars,
-                                epoch=epoch,
-                            )
-
-                        ## Log figures ------------------------------------------------------------------------------
-                        Mlflow_figures = self.Mlflow_diagnostics.get("figures", None)
-                        if Mlflow_figures is not None:
-                            if not Mlflow_figures.get("on_best", False):
-                                mlflow_figures_logs(
-                                    tgt=self.tgt_mlflow,
-                                    prd=prd_mlflow,
-                                    vars=self.metadata_dict["vars_y"],
-                                    mlflow_info=Mlflow_figures,
-                                    epoch=epoch,
-                                )
-
-                        ## Log scalars (xai) ------------------------------------------------------------------------------
-                        Mlflow_scalars_xai = self.Mlflow_diagnostics.get(
-                            "xai_scalars", None
-                        )
-                        if Mlflow_scalars_xai is not None:
-                            # mlflow_scalars_xai_logs(tgt=self.tgt_mlflow, prd=prd_mlflow, vars=self.metadata_dict["vars_y"], mlflow_info=Mlflow_scalars_xai, epoch=epoch)
-                            log.warning("XAI scalars logs not implemented; skipping.")
-
-                        ## Update epoch ref
-                        epoch_ref_mlflow_diagnostic = epoch
+            # --- Monitoring: validation diagnostics at the backend's cadence ----
+            # The monitor decides whether this epoch is due; the prediction
+            # (potentially expensive) only runs when it will be logged. The
+            # downscaler runner is built lazily inside ``_monitor_predict``.
+            self.monitor.maybe_log_diagnostics(
+                epoch=epoch,
+                vars=self.metadata_dict["vars_y"],
+                tgt=getattr(self, "tgt_monitor", None),
+                predict=lambda: self._monitor_predict(model, kwargs_save),
+            )
 
             # --- Per-epoch summary line --------------------------------------------
             if self._is_main:
                 log.info("%s", log_msg)
 
-        # --- Save best model to Mlflow and log figures (optional) ---
-        if self.Mlflow is not None:
-            ## Save best model ---
-            if self.Mlflow.get("save_best", False):
-                mlflow.log_artifact(path_save_final, artifact_path="checkpoints")
-            ## Log figures ---
-            Mlflow_figures = self.Mlflow_diagnostics.get("figures", None)
-            if Mlflow_figures is not None:
-                if Mlflow_figures.get("on_best", False):
-                    # Predict
-                    runner = self.d4p_func(
-                        id_dir=self.id_dir,
-                        input_data=self.input_data,
-                        forcing_data=self.forcing_data,
-                        model_file=f"{self.model_save_name}_best.pt",
-                        graph=self.graph_loc,
-                    )  # Run init
-                    prd_mlflow = runner.downscale(return_pred=True, verbose=False)
-                    # Log figures
-                    mlflow_figures_logs(
-                        tgt=self.tgt_mlflow,
-                        prd=prd_mlflow,
-                        vars=self.metadata_dict["vars_y"],
-                        mlflow_info=Mlflow_figures,
-                        epoch=epoch_best,
-                    )
+        # --- Monitoring: end-of-training hook (best checkpoint / on-best figures)
+        self.monitor.on_training_end(
+            epoch_best=epoch_best,
+            vars=self.metadata_dict["vars_y"],
+            tgt=getattr(self, "tgt_monitor", None),
+            best_checkpoint_path=path_save_final,
+            predict_from_best=self._predict_from_best,
+        )
 
         # --- Return losses ---
         if self._is_main:
@@ -1162,7 +1115,7 @@ class trainer:
         High-level method to start training using the training loop.
 
         Purpose:
-            Calls the training loop, handles MLflow run ending, and prints completion message.
+            Calls the training loop, tears down the monitoring backend, and prints completion message.
 
         Parameters:
             train_dataloader: Training DataLoader.
@@ -1184,9 +1137,8 @@ class trainer:
             kwargs=self.kwargs_training,
         )
 
-        # --- End Mlflow ---
-        if self.Mlflow is not None:
-            mlflow.end_run()
+        # --- Tear down the monitoring backend (e.g. end the MLflow run) ---
+        self.monitor.close()
 
         log.info("%s: training finished successfully.", self.model_save_name)
         return train_loss, val_loss
