@@ -95,6 +95,7 @@ class Explainer(downscaler):
         input_space="normalized",
         target_space="physical",
         percent=True,
+        time_reduction="none",
         batch_size=32,
         verbose=True,
         **kwargs,
@@ -135,6 +136,19 @@ class Explainer(downscaler):
             ``channel_contribution_percent``) where each date's |saliency| is
             normalised to sum to 100% across all predictor pixels and variables,
             removing day-to-day magnitude swings (see ``_build_xai_dataset``).
+            For ``input_space="raw"`` the |saliency| is first put into
+            normalized (scale-comparable) space via σ_c = 1/mul_c, so the
+            cross-channel % is not dominated by predictors of small physical
+            magnitude (e.g. specific humidity). The signed ``saliency_mean`` and
+            ``channel_importance`` stay in raw units.
+        time_reduction : {"none", "mean_std"}
+            How the time axis is collapsed. "none" (default) writes the full
+            per-date stack (``saliency`` / ``channel_importance`` / percent
+            views). "mean_std" streams the temporal statistics over the batch
+            loop — never materialising the daily stack — and writes only their
+            reductions: ``saliency_mean`` (signed E_t[J]), ``saliency_std``,
+            ``channel_importance_mean`` (E_t[mean_g|J|]) and, when ``percent``,
+            ``saliency_percent_mean`` / ``channel_contribution_percent_mean``.
         batch_size : int
             Dates per forward/backward pass. Samples are independent, so a single
             summed backward yields correct per-sample gradients.
@@ -146,6 +160,11 @@ class Explainer(downscaler):
         if target_space not in ("physical", "model"):
             raise ValueError(
                 f"target_space must be 'physical' or 'model'; got {target_space!r}"
+            )
+        if time_reduction not in ("none", "mean_std"):
+            raise ValueError(
+                f"time_reduction must be 'none' or 'mean_std'; got "
+                f"{time_reduction!r}"
             )
         if (self.num_lagged_x or 1) > 1:
             raise NotImplementedError(
@@ -194,7 +213,21 @@ class Explainer(downscaler):
         self.model.eval()
         T = len(self.target_dates)
         n_batches = (T + batch_size - 1) // batch_size
+        # time_reduction="none" keeps every per-date map (sal_batches → concat);
+        # "mean_std" streams the temporal statistics so the daily stack is never
+        # materialised (acc holds running sums, updated per batch).
+        reduce_time = time_reduction == "mean_std"
         sal_batches = []
+        acc = None
+
+        # Per-channel weights for the relative ("percent") views ONLY. A % over
+        # raw-space |J| mixes predictors of different physical scale (e.g. tiny
+        # specific-humidity gradients get inflated), so for input_space="raw" we
+        # weight each channel by σ_c = 1/mul_c to put |J| in NORMALIZED (scale-
+        # comparable) space: σ_c·|∂S/∂x_raw| = |∂S/∂x_norm|. The signed
+        # saliency_mean / channel_importance stay in raw units (exact for the
+        # shift_decomposition contraction); only the percent allocation changes.
+        chan_weights = self._percent_channel_weights(input_space) if percent else None
 
         for b_idx in range(n_batches):
             i = b_idx * batch_size
@@ -255,17 +288,32 @@ class Explainer(downscaler):
 
             self.model.zero_grad(set_to_none=True)
             scalar.backward()
-            sal_batches.append(grad_leaf.grad.detach().to("cpu").numpy())
+            g = grad_leaf.grad.detach().to("cpu").numpy()  # (B, C_x, *spatial_x)
+            if reduce_time:
+                acc = self._accumulate_reduction(
+                    acc, g, percent=percent, chan_weights=chan_weights
+                )
+            else:
+                sal_batches.append(g)
             leaf_is_model = x_model is grad_leaf
-            del inp, out, sel, masked, per_sample, scalar, grad_leaf
+            del inp, out, sel, masked, per_sample, scalar, grad_leaf, g
             if not leaf_is_model:
                 del x_model
 
-        saliency = np.concatenate(sal_batches, axis=0)  # (T, C_x, *spatial_x)
-        ds = self._build_xai_dataset(
-            saliency, method, target_name, reduction, target_region,
-            input_space=input_space, target_space=target_space, percent=percent,
-        )
+        if reduce_time:
+            ds = self._build_reduced_xai_dataset(
+                acc, method, target_name, reduction, target_region,
+                input_space=input_space, target_space=target_space,
+                percent=percent,
+            )
+        else:
+            saliency = np.concatenate(sal_batches, axis=0)  # (T, C_x, *spatial_x)
+            ds = self._build_xai_dataset(
+                saliency, method, target_name, reduction, target_region,
+                input_space=input_space, target_space=target_space,
+                percent=percent, time_reduction=time_reduction,
+                chan_weights=chan_weights,
+            )
 
         os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
         log.info("Writing attribution Dataset to %s", self.output_path)
@@ -423,9 +471,40 @@ class Explainer(downscaler):
         return a, b + 1  # inclusive upper for geographic ranges
 
     # ─────────────────────────────────────────────────────────────────────────
+    def _percent_channel_weights(self, input_space):
+        """
+        Per-channel weights ``σ_c`` that put raw-space |saliency| into
+        normalized (scale-comparable) space for the relative "percent" views,
+        or ``None`` when no weighting is needed.
+
+        The affine normalizer maps ``x_norm = mul·x + add`` so
+        ``∂S/∂x_norm = ∂S/∂x_raw / mul``; hence ``σ_c = 1/mul_c`` (= the
+        predictor std for mean_std/std). Only meaningful for
+        ``input_space="raw"`` with a normalizer present — for "normalized"
+        inputs |J| is already comparable (returns None), and with no normalizer
+        raw == normalized (None).
+        """
+        if input_space != "raw" or self.norm_x is None:
+            return None
+        mul = np.asarray(self.norm_x._norm_mul.detach().cpu(), dtype=np.float64)
+        with np.errstate(divide="ignore"):
+            w = np.where(mul != 0.0, 1.0 / mul, 0.0)
+        return w  # (C,)
+
+    @staticmethod
+    def _apply_chan_weights(abs_arr, chan_weights):
+        """Multiply |saliency| (…, C, *spatial) by per-channel σ_c on axis 1."""
+        if chan_weights is None:
+            return abs_arr
+        shape = [1] * abs_arr.ndim
+        shape[1] = abs_arr.shape[1]  # channel axis
+        return abs_arr * np.asarray(chan_weights).reshape(shape)
+
+    # ─────────────────────────────────────────────────────────────────────────
     def _build_xai_dataset(
         self, saliency, method, target_var, reduction, region,
         input_space="normalized", target_space="physical", percent=True,
+        time_reduction="none", chan_weights=None,
     ):
         """
         Wrap (T, C_x, *spatial_x) saliency into an xarray.Dataset.
@@ -467,7 +546,8 @@ class Explainer(downscaler):
         ds["channel_importance"] = np.abs(ds["saliency"]).mean(dim=abs_axes)
 
         if percent:
-            absS = np.abs(saliency)
+            # Scale-comparable (normalized-space) |J| for the cross-channel %.
+            absS = self._apply_chan_weights(np.abs(saliency), chan_weights)
             sum_axes = tuple(range(1, absS.ndim))  # over var_x and all spatial
             total = absS.sum(axis=sum_axes, keepdims=True)
             total = np.where(total == 0, np.nan, total)  # avoid 0/0 on null dates
@@ -485,14 +565,225 @@ class Explainer(downscaler):
                 "target_region": str(region),
                 "input_space": input_space,
                 "target_space": target_space,
+                "time_reduction": time_reduction,
                 "id_dir": str(getattr(self, "id_dir", "")),
                 "output_path": str(getattr(self, "output_path", "")),
                 "description": (
                     "Gradient of the reduced target-variable response (S) w.r.t. "
                     "the predictor input. 'channel_importance' ranks predictor "
-                    "channels by mean |saliency|; 'saliency_percent' gives each "
-                    "pixel/variable's % of the per-date total attribution."
+                    "channels by mean |saliency| (raw units); 'saliency_percent' "
+                    "gives each pixel/variable's % of the per-date total "
+                    "attribution, computed in normalized (scale-comparable) space "
+                    "for input_space=raw so the cross-channel % is not dominated "
+                    "by small-magnitude predictors."
                 ),
             }
         )
+        return self._attach_predictor_coords(ds)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _load_predictor_latlon(self):
+        """
+        (lat, lon) arrays on the PREDICTOR grid, or (None, None) if unavailable.
+
+        Priority: ``saving_info['predictor_template']`` (a NetCDF carrying the
+        predictor-grid lat/lon — 1D for a regular grid, 2D for a projected one),
+        else the predictor zarr's ``latitudes`` / ``longitudes``.
+        """
+        tpl = (self.saving_info or {}).get("predictor_template")
+        if tpl:
+            try:
+                t = xr.open_dataset(tpl)
+                lat = next(t[n] for n in ("lat", "latitude", "lats") if n in t.variables)
+                lon = next(t[n] for n in ("lon", "longitude", "lons") if n in t.variables)
+                return np.asarray(lat.values), np.asarray(lon.values)
+            except (OSError, StopIteration, KeyError) as e:
+                log.warning("Could not read predictor_template '%s' (%s).", tpl, e)
+        # Fallback: lat/lon stored alongside the predictor zarr.
+        try:
+            return (
+                np.asarray(self.x[0]["latitudes"][:]),
+                np.asarray(self.x[0]["longitudes"][:]),
+            )
+        except (KeyError, IndexError, TypeError):
+            return None, None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _attach_predictor_coords(self, ds):
+        """
+        Attach geographic ``lat`` / ``lon`` coordinates to the XAI dataset so the
+        saliency maps can be drawn on the predictor grid (plot_saliency reads
+        ``da['lat']`` / ``da['lon']``). Handles regular (1D lat/lon) and
+        projected (2D lat/lon) grids; warns and leaves the index dims untouched
+        if no coordinates can be resolved or their shapes do not match.
+        """
+        lat, lon = self._load_predictor_latlon()
+        if lat is None or lon is None:
+            log.warning(
+                "No predictor lat/lon available (set saving_info.predictor_template); "
+                "saliency written on index dims only."
+            )
+            return ds
+
+        if "y_x" in ds.dims and "x_x" in ds.dims:
+            H, W = ds.sizes["y_x"], ds.sizes["x_x"]
+            if lat.ndim == 2 and lat.shape == (H, W) and lon.shape == (H, W):
+                return ds.assign_coords(
+                    lat=(("y_x", "x_x"), lat), lon=(("y_x", "x_x"), lon)
+                )
+            if lat.ndim == 1 and lat.size == H and lon.size == W:
+                return ds.assign_coords(lat=(("y_x",), lat), lon=(("x_x",), lon))
+        elif "gridpoint_x" in ds.dims:
+            G = ds.sizes["gridpoint_x"]
+            if lat.size == G and lon.size == G:
+                return ds.assign_coords(
+                    lat=(("gridpoint_x",), lat.ravel()),
+                    lon=(("gridpoint_x",), lon.ravel()),
+                )
+
+        log.warning(
+            "Predictor lat/lon shapes (%s, %s) do not match the saliency grid "
+            "%s; coordinates not attached.",
+            lat.shape, lon.shape, dict(ds.sizes),
+        )
         return ds
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _accumulate_reduction(self, acc, g, percent=True, chan_weights=None):
+        """
+        Fold one batch of saliency ``g`` (B, C_x, *spatial_x) into the running
+        temporal-statistics accumulators (``time_reduction="mean_std"``).
+
+        Tracks running sums of the signed gradient, its square, and the per-date
+        channel importance (mean_g|J|); when ``percent`` also the per-date
+        relative attribution. ``chan_weights`` (σ_c) scales |J| into normalized
+        space for the percent views only — sum_J / sum_J2 / sum_CI stay raw. All
+        in float64 for stability over thousands of dates. The daily stack is
+        never kept.
+        """
+        g = g.astype(np.float64)
+        spatial_axes = tuple(range(2, g.ndim))  # over the predictor's spatial dims
+        absg = np.abs(g)
+
+        if acc is None:
+            c_spatial = g.shape[1:]  # (C_x, *spatial_x)
+            n_channels = g.shape[1]
+            acc = {
+                "sum_J": np.zeros(c_spatial, dtype=np.float64),
+                "sum_J2": np.zeros(c_spatial, dtype=np.float64),
+                "sum_CI": np.zeros(n_channels, dtype=np.float64),
+                "n": 0,
+                "percent": percent,
+            }
+            if percent:
+                acc["sum_pct"] = np.zeros(c_spatial, dtype=np.float64)
+                acc["sum_chan_pct"] = np.zeros(n_channels, dtype=np.float64)
+                acc["n_pct"] = 0  # number of non-null dates contributing to pct
+
+        acc["sum_J"] += g.sum(axis=0)
+        acc["sum_J2"] += np.square(g).sum(axis=0)
+        # per-date channel importance = mean_g|J| over spatial dims → (B, C)
+        acc["sum_CI"] += absg.mean(axis=spatial_axes).sum(axis=0)
+        acc["n"] += g.shape[0]
+
+        if percent:
+            # Scale-comparable (normalized-space) |J| for the cross-channel %.
+            absg_w = self._apply_chan_weights(absg, chan_weights)
+            # per-date total over var_x AND spatial; null (all-zero) dates are
+            # NaN-ed so they neither inflate the sum nor the date count (matches
+            # the per-date layout's skipna mean over time).
+            sum_axes = tuple(range(1, g.ndim))
+            total = absg_w.sum(axis=sum_axes, keepdims=True)  # (B,1,...)
+            valid = total[(slice(None),) + (0,) * (g.ndim - 1)] > 0  # (B,)
+            total = np.where(total == 0, np.nan, total)
+            pct = absg_w / total * 100.0  # (B, C, *spatial); NaN on null dates
+            acc["sum_pct"] += np.nansum(pct, axis=0)
+            # Channel contribution: spatial NaN-sum per date (null date → 0, so
+            # it IS counted, denom = n) — mirrors the per-date layout's
+            # channel_contribution_percent = saliency_percent.sum(spatial).
+            acc["sum_chan_pct"] += np.nansum(pct, axis=spatial_axes).sum(axis=0)
+            acc["n_pct"] += int(valid.sum())
+
+        return acc
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _build_reduced_xai_dataset(
+        self, acc, method, target_var, reduction, region,
+        input_space="normalized", target_space="physical", percent=True,
+    ):
+        """
+        Build the temporal-reduction XAI Dataset (``time_reduction="mean_std"``)
+        from the streamed accumulators.
+
+        Emits (no ``time`` axis):
+          * ``saliency_mean``  — signed E_t[J]            (var_x, *spatial)
+          * ``saliency_std``   — population std_t[J]      (var_x, *spatial)
+          * ``channel_importance_mean`` — E_t[mean_g|J|]  (var_x,)
+          * (percent) ``saliency_percent_mean``           (var_x, *spatial)
+          * (percent) ``channel_contribution_percent_mean`` (var_x,)
+        """
+        if self.transform_to_2D_x:
+            dims = ("var_x", "y_x", "x_x")
+            coords = {
+                "var_x": list(self.vars_x),
+                "y_x": np.arange(self.H_x),
+                "x_x": np.arange(self.W_x),
+            }
+        else:
+            dims = ("var_x", "gridpoint_x")
+            coords = {
+                "var_x": list(self.vars_x),
+                "gridpoint_x": np.arange(self.G_x),
+            }
+
+        n = max(acc["n"], 1)
+        mean = acc["sum_J"] / n
+        # population variance (ddof=0), clamped ≥0 against round-off — matches
+        # xarray's default .std("time") on the per-date layout.
+        var = np.clip(acc["sum_J2"] / n - mean ** 2, 0.0, None)
+
+        ds = xr.Dataset(
+            {
+                "saliency_mean": (dims, mean.astype("float32")),
+                "saliency_std": (dims, np.sqrt(var).astype("float32")),
+                "channel_importance_mean": (
+                    ("var_x",), (acc["sum_CI"] / n).astype("float32")
+                ),
+            },
+            coords=coords,
+        )
+
+        if percent:
+            n_pct = max(acc["n_pct"], 1)
+            ds["saliency_percent_mean"] = (
+                dims, (acc["sum_pct"] / n_pct).astype("float32")
+            )
+            ds["channel_contribution_percent_mean"] = (
+                ("var_x",), (acc["sum_chan_pct"] / n).astype("float32")
+            )
+
+        ds.attrs.update(
+            {
+                "method": method,
+                "target_var": target_var,
+                "reduction": reduction,
+                "target_region": str(region),
+                "input_space": input_space,
+                "target_space": target_space,
+                "time_reduction": "mean_std",
+                "n_dates": int(acc["n"]),
+                "id_dir": str(getattr(self, "id_dir", "")),
+                "output_path": str(getattr(self, "output_path", "")),
+                "description": (
+                    "Temporal mean/std of the gradient attribution. "
+                    "'saliency_mean' = E_t[dS/dx] (signed, raw units); "
+                    "'channel_importance_mean' = E_t[mean_g|dS/dx|] (raw, |.| "
+                    "before both reductions, robust to sign cancellation); "
+                    "'*_percent_mean' = time-mean of the per-date relative "
+                    "attribution, computed in normalized (scale-comparable) space "
+                    "for input_space=raw so the cross-channel % is not dominated "
+                    "by small-magnitude predictors."
+                ),
+            }
+        )
+        return self._attach_predictor_coords(ds)
