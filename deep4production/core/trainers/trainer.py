@@ -974,6 +974,13 @@ class trainer:
             train_loss = train_loss_local.item()  # one sync per epoch
             train_losses.append(train_loss)
 
+            # --- Adaptive per-channel loss-weight update (e.g. DWA) ---------------
+            # Loss functions that adapt their per-channel weights from the epoch's
+            # training losses (e.g. DWAWeightedMseLoss) refresh them here, once per
+            # epoch. No-op for every other loss (guarded by hasattr).
+            if hasattr(loss_function, "on_epoch_end"):
+                loss_function.on_epoch_end(epoch=epoch)
+
             # -----------------------------------------------------------------------------------------
             # --- Validation phase: Loop over batches -------------------------------------------------
             val_loss = None
