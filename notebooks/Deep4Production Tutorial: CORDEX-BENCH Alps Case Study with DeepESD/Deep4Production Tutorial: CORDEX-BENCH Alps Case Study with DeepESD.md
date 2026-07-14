@@ -45,27 +45,24 @@ example/
 ├── source_files/ # Raw downloaded data storing the netcdf files.
 │ └── data_zenodo/
 │
-├── training/
-│ ├── configs/ # Training configuration files. There could be as many YAML configs as models you would like to test.
-│ │ └── deepesd.yaml # Use d4p-train your_yaml.yaml to train the model
-│ └── logs/ # Training logs
-│
-├── inference/
-│ ├── configs/ # Inference configuration files. There could be as many YAML configs as models you would like to test.
-│ │ └── deepesd.yaml # Use d4p-downscale your_yaml.yaml to perform inference
-│ └── logs/ # Inference logs
-│
-├── outputs/ # Automatically generated at training.
-│ └── deepesd/ # Outputs for a given run_ID
-│   ├── models/ # Trained models (.pt files)
+├── deepesd/ # One self-contained run directory (id_dir = output_dir/run_ID).
+│ ├── train.yaml # Recipe for d4p-train ./deepesd/train.yaml
+│ ├── inference.yaml # Recipe for d4p-downscale ./deepesd/inference.yaml
+│ ├── train.sh # Bash launcher for training
+│ ├── inference.sh # Bash launcher for inference
+│ └── outputs/ # Everything this run generates (created at training).
+│   ├── models/ # Trained models (.pt files, metadata embedded)
 │   ├── predictions/ # Model predictions (.nc files)
-    └── aux_files/ # Additional metadata or artifacts
+│   ├── aux_files/ # Caches (residuals, graphs, Gamma params, ...)
+│   └── tracker/ # d4p-tracker figures + CSV
 │
 ├── templates/ # Optional templates for output formatting
 │ └── pr_template.nc
 │
-└── *.sh # Bash scripts calling the deep4production CLI commands.
+└── ... # A second configuration = a second run directory (e.g. deepesd_v2/).
 ```
+
+Each model lives in its own directory named after its `run_ID` (here `deepesd`), with `output_dir` set to the parent (the project root, `.`), so `id_dir = output_dir/run_ID`. The recipe files (`train.yaml`, `inference.yaml`) and launch scripts live in that directory, and everything the run generates is written under its `outputs/` subdirectory. To try another configuration, create a sibling directory with its own `run_ID` and recipes.
 
 The following directories have to be created manually:
 
@@ -73,12 +70,7 @@ The following directories have to be created manually:
 - `/example/AI_ready_datasets/configs/`
 - `/example/AI_ready_datasets/files/`
 - `/example/source_files/`
-- `/example/training/`
-- `/example/training/configs/`
-- `/example/training/logs/`
-- `/example/inference/`
-- `/example/inference/configs/`
-- `/example/inference/logs/`
+- `/example/deepesd/` (the run directory; place `train.yaml` / `inference.yaml` here — `outputs/` is created automatically by `d4p-train`)
 - `/example/templates`
 
 For this tutorial, commands and scripts are run from `./example`, so all paths are relative to that directory.
@@ -316,13 +308,13 @@ When executed, `d4p-train`:
 
 This ensures a **fully reproducible training pipeline** driven by configuration.
 
-Below is an example of a YAML configuration used to train the DeepESD model. Additional training configurations (referred to as *recipes*) are available [here](https://github.com/SantanderMetGroup/deep4production/tree/master/deep4production/recipes/training), showcasing possible different model setups and use cases.
+Below is an example of a YAML configuration used to train the DeepESD model. Additional configurations (referred to as *recipes*) are available [here](https://github.com/SantanderMetGroup/deep4production/tree/master/recipes), one per-model directory, showcasing possible different model setups and use cases.
 
 ```python
 # Show example training config
 ##### GENERAL INFO #####
 run_ID: deepesd
-output_dir: ./outputs
+output_dir: .
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 
@@ -410,7 +402,7 @@ model_info:
 Once the configuration file is defined, we train the model: `d4p-train`.
 
 ```bash
-d4p-train ./training/configs/deepesd.yaml
+d4p-train ./deepesd/train.yaml
 ```
 
 Below is an example of training output:
@@ -562,7 +554,8 @@ This ensures that inference is **fully consistent with the training pipeline**.
 
 ```python
 # Show example prediction config
-id_dir: ./outputs/deepesd # Points to the directory where training outputs are stored. The model file is expected inside id_dir/models/
+run_ID: deepesd
+output_dir: . # id_dir = output_dir/run_ID; the checkpoint is expected inside id_dir/outputs/models/
 
 input_data: # Defines the dataset used for prediction
   paths:
@@ -573,10 +566,10 @@ input_data: # Defines the dataset used for prediction
 graph: null # For graph-based downscaling models only.
 ensemble_size: 2 # Controls how many predictions are generated per input sample.
 
-model_file: DeepESD_BerGamma_best.pt # Model at: id_dir/models/
+model_file: DeepESD_BerGamma_best.pt # Model at: id_dir/outputs/models/
 
 saving_info: # Defines how predictions are written to disk
-  file: 1980.nc # Predictions will be saved at: id_dir/predictions/
+  file: 1980.nc # Predictions will be saved at: id_dir/outputs/predictions/
   template: null
   formatting: null
 
@@ -590,7 +583,7 @@ inference_params: # Forwarded as **kwargs to downscaler.downscale()
 Once the configuration file is defined, we perform inference: `d4p-downscale`.
 
 ```bash
-d4p-downscale ./inference/configs/deepesd.yaml
+d4p-downscale ./deepesd/inference.yaml
 ```
 
 Below is an example of inference output:
@@ -642,7 +635,7 @@ tgt = xr.open_dataset("./source_files/data_zenodo/ALPS_domain/train/ESD_pseudo_r
 tgt = tgt.stack(point=("y", "x")) # From [time, y, x] to [time, point] format
 tgt['time'] = tgt.time.dt.floor('D')
 
-prd = xr.open_dataset("./outputs/deepesd/predictions/1980.nc") # Already in [member, time, point] format
+prd = xr.open_dataset("./deepesd/outputs/predictions/1980.nc") # Already in [member, time, point] format
 prd = prd.isel(member=0) # Select the first member of the ensemble
 prd['time'] = prd.time.dt.floor('D')
 

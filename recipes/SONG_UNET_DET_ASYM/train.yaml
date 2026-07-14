@@ -1,6 +1,10 @@
 ##### GENERAL INFO #####
-run_ID: song_unet_det_asym
-output_dir: path_to_your_output_dir
+# run_ID is this run's directory name and output_dir is its parent, so
+# id_dir = output_dir/run_ID is the directory holding this recipe. d4p-train
+# writes every generated artifact under id_dir/outputs/ (models/, aux_files/,
+# predictions/, tracker/). Both keys are REQUIRED.
+run_ID: SONG_UNET_DET_ASYM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 overwrite: true
 
 
@@ -74,7 +78,7 @@ model_info:
       ref_path: path_to_your_y_file.zarr   # same zarr as predictands
       var: pr
       type: full
-      asym_path: path_to_your_output_dir/song_unet_det_asym/aux_files/
+      asym_path: path/to/your/project/SONG_UNET_DET_ASYM/outputs/aux_files/
       asym_weight: 1.0
       cdf_pow: 2.0
       threshold: 1.0   # mm/day — standard wet-day definition
@@ -141,3 +145,24 @@ model_info:
         factor: 0.5
         patience: 15
         min_lr: 1.0e-6
+
+    # ── OPTIONAL: CorrDiff-style patch-based training (large-domain tiling) ────
+    # Trains the regressor on random P×P patches so it can be tiled at inference
+    # (apply→forward→fuse); this is how the resdiff pydataset/downscaler tile a
+    # patched regressor. When enabled, change the backbone channels to:
+    #     cond_low_channels: 0
+    #     cond_high_channels: 2*C_x + C_f   (= [img_lr_hr | forcing_hr | global_lr])
+    #     spatial_pe_freqs:  >= 1           (global positional embedding per patch)
+    # and note patch_shape_{x,y} must be a multiple of 2^(len(ch_mult)-1).
+    #
+    # IMPORTANT: patched training needs a SPATIALLY-INVARIANT loss (MseLoss /
+    # MaeLoss). The Asym loss above carries per-gridpoint Gamma parameters tied to
+    # the full grid and cannot be cropped to random patches — swap it for MseLoss.
+    #
+    # patching:
+    #   enabled: true
+    #   patch_shape_y: 128
+    #   patch_shape_x: 128
+    #   overlap_pix: 4
+    #   boundary_pix: 2
+    #   patch_num: 8

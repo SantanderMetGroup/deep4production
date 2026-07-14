@@ -4,6 +4,7 @@ import sys
 import yaml
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.log import setup_logging, get_logger
+from deep4production.utils.paths import resolve_id_dir
 
 
 def main():
@@ -30,12 +31,29 @@ def main():
 
     # --- Unpack config to get parameters ------------------------------------------
     log.info("d4p downscale: starting")
-    id_dir = config["id_dir"]
+    # Inference shares the training convention: id_dir = output_dir/run_ID is the
+    # run directory, and model_file / saving_info.file resolve under its outputs/
+    # subtree. Both keys are required — there is no standalone id_dir key anymore.
+    run_ID = config.get("run_ID", None)
+    output_dir = config.get("output_dir", None)
+    if not output_dir or not run_ID:
+        log.error(
+            "Both 'output_dir' and 'run_ID' are required in the recipe "
+            "(id_dir = output_dir/run_ID). Missing: %s",
+            ", ".join(
+                k
+                for k, v in (("output_dir", output_dir), ("run_ID", run_ID))
+                if not v
+            ),
+        )
+        sys.exit(1)
+    id_dir = resolve_id_dir(output_dir, run_ID)
     input_data = config["input_data"]
     graph = config.get("graph", None)
     ensemble_size = config["ensemble_size"]
     model_file = config["model_file"]
     saving_info = config["saving_info"]
+    forcing_data = config.get("forcing_data", None)
 
     # --- Import downscaler module ----------------------------------
     d4p = config.get("d4p_downscaler", None)
@@ -61,6 +79,7 @@ def main():
         ensemble_size=ensemble_size,
         model_file=model_file,
         saving_info=saving_info,
+        forcing_data=forcing_data,
         **kwargs_downscaler,
     )
     downscaler.downscale(**inference_params)

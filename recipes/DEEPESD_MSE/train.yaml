@@ -1,6 +1,8 @@
 ##### GENERAL INFO #####
-run_ID: deepesd_mse # example
-output_dir: path_to_your_output_dir
+# id_dir = output_dir/run_ID is this run's directory (holds this recipe);
+# d4p-train writes every artifact under id_dir/outputs/. Both keys REQUIRED.
+run_ID: DEEPESD_MSE
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 

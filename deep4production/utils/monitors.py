@@ -9,8 +9,8 @@ the interface (they are mutually exclusive, enforced in ``cli/train.py``):
 
   * :class:`MLflowMonitor`  — logs scalars/figures/checkpoints to an MLflow
     server (wraps :mod:`deep4production.utils.mlflow`).
-  * :class:`TrackerMonitor` — writes figures + CSV to ``<id_dir>/tracker/`` on
-    the local filesystem (wraps :mod:`deep4production.utils.tracker`).
+  * :class:`TrackerMonitor` — writes figures + CSV to ``<id_dir>/outputs/tracker/``
+    on the local filesystem (wraps :mod:`deep4production.utils.tracker`).
 
 The base :class:`Monitor` is an all-no-op null object, used on non-main ranks
 and when no backend is configured, so the trainer never needs a None check.
@@ -25,6 +25,7 @@ import os
 
 from deep4production.utils.log import get_logger
 from deep4production.utils.tracker import tracker_write_losses, tracker_epoch_logs
+from deep4production.utils.paths import tracker_dir
 
 # NB: ``mlflow`` and ``deep4production.utils.mlflow`` are imported lazily inside
 # ``MLflowMonitor`` so the dependency-free d4p-tracker backend (and the no-op
@@ -167,12 +168,12 @@ class MLflowMonitor(Monitor, _CadenceMixin):
 
 # =========================================================================
 class TrackerMonitor(Monitor, _CadenceMixin):
-    """Writes figures + CSV to ``<id_dir>/tracker/`` (no external server)."""
+    """Writes figures + CSV to ``<id_dir>/outputs/tracker/`` (no external server)."""
 
     backend = "tracker"
 
     def __init__(self, cfg, id_dir):
-        self.tracker_dir = f"{id_dir}/tracker/"
+        self.tracker_dir = tracker_dir(id_dir)
         os.makedirs(self.tracker_dir, exist_ok=True)
         self.metrics = cfg.get("metrics", None)
         self.maps = cfg.get("maps", None)

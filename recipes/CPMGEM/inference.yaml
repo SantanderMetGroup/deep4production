@@ -1,7 +1,10 @@
 ##### GENERAL INFO #####
-# Directory created by d4p-train for the cpmgem run_ID.
-# Contains:  models/  predictions/  aux_files/  metadata.json
-id_dir: your_id_dir             # e.g., /outputs/cpmgem
+# Same run directory as training: id_dir = output_dir/run_ID. The checkpoint is
+# read from id_dir/outputs/models/ and predictions are written to
+# id_dir/outputs/predictions/. run_ID and output_dir must match the train.yaml
+# used for this run. Both keys are REQUIRED (there is no standalone id_dir key).
+run_ID: CPMGEM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 
 
 ##### INPUT DATA #####
@@ -24,7 +27,7 @@ graph:
 
 
 ##### MODEL CHECKPOINT #####
-model_file: CPMGEM_best.pt      # relative to id_dir/models/
+model_file: CPMGEM_best.pt      # relative to id_dir/outputs/models/
 
 
 ##### DOWNSCALER CLASS #####
@@ -55,7 +58,7 @@ d4p_downscaler:
 
 ##### OUTPUT #####
 saving_info:
-  file: CPMGEM_1981-1983.nc     # saved at id_dir/predictions/
+  file: CPMGEM_1981-1983.nc     # saved at id_dir/outputs/predictions/
   template:                     # optional NetCDF template for coordinates
   # formatting:
   #   name: null                # e.g., cordex_ml

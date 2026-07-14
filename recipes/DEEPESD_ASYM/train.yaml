@@ -1,6 +1,8 @@
 ##### GENERAL INFO #####
-run_ID: deepesd_bg # example
-output_dir: path_to_your_output_dir
+# id_dir = output_dir/run_ID is this run's directory (holds this recipe);
+# d4p-train writes every artifact under id_dir/outputs/. Both keys REQUIRED.
+run_ID: DEEPESD_ASYM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 
@@ -27,8 +29,7 @@ data:
     - path_to_your_y_file_2.zarr
     - '...'
     variables:
-    - pr
-    normalizer:
+    - pr   # example
     transform_to_2D: true
 
 
@@ -42,15 +43,18 @@ dataloader:
 ##### REGRESSOR CONFIGURATION #####
 model_info:
   saving_params:
-    model_save_name: DeepESD_BerGamma
-    # save_every_n_epochs: 2
-    # save_every_n_steps: 300
-    # resume_checkpoint: DeepESD_BerGamma_epoch6.pt
+    model_save_name: DeepESD_asym # example
   loss_params:
-    name: NLLBerGammaLoss
+    name: Asym
     module: deep4production.deep.loss
     kwargs:
-      threshold: 0.999
+      ref_path: path_to_your_y_file_1.zarr
+      var: pr
+      type: full
+      asym_path: path/to/your/project/DEEPESD_ASYM/outputs/aux_files/
+      asym_weight: 1
+      cdf_pow: 2
+      appendix:
       ignore_nans: true
   model_params:
     name: DeepESD
@@ -61,7 +65,11 @@ model_info:
       y_shape: [1, 128, 128] # (C, H, W). Use `d4d-datasets-inspect your_zarr_file` to get this value
       filters: [50, 25, 10]
       kernel_size: 3
-      loss_function_name: NLLBerGammaLoss
+      output_activation:
+        pr:
+          module: torch.nn
+          name: ReLU
+          idx: 0
   training_params:
     num_epochs: 1000
     patience_early_stopping: 30

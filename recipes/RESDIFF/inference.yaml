@@ -1,7 +1,10 @@
 ##### GENERAL INFO #####
-# Directory created by d4p-train for the resdiff run_ID.
-# Contains:  models/  predictions/  aux_files/  metadata.json
-id_dir: your_id_dir             # e.g., /outputs/resdiff
+# Same run directory as training: id_dir = output_dir/run_ID. The checkpoint is
+# read from id_dir/outputs/models/ and predictions are written to
+# id_dir/outputs/predictions/. run_ID and output_dir must match the train.yaml
+# used for this run. Both keys are REQUIRED (there is no standalone id_dir key).
+run_ID: RESDIFF
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 
 
 ##### INPUT DATA #####
@@ -68,7 +71,7 @@ d4p_downscaler:
 
 ##### OUTPUT #####
 saving_info:
-  file: ResDiff_1981-1983.nc     # saved at id_dir/predictions/
+  file: ResDiff_1981-1983.nc     # saved at id_dir/outputs/predictions/
   template:
   # formatting:
   #   name: null
@@ -81,7 +84,15 @@ saving_info:
 # Forwarded as **kwargs to downscaler.downscale().
 #   batch_size : number of dates whose Heun sampling chains run in parallel
 #                on the GPU (each chain shares the same num_steps iterations).
-#                Increase for higher throughput; bound by GPU memory.
+#                Increase for higher throughput; bound by GPU memory. NOTE: for a
+#                patch-trained run each step also runs `patch_num_full` patches
+#                per date (the full-domain grid), so effective GPU work per step
+#                is batch_size × patch_count — lower batch_size accordingly.
+#
+# PATCHING: if the run was trained with a `patching:` block, the diffusion is
+# tiled + fused every sampler step and (if the regressor was also patched) the
+# regressor mean is tiled too. All geometry is read from training metadata —
+# there are NO patching keys to set here.
 #   amp_dtype  : 'bfloat16' (Ampere+ recommended) / 'float16' / null.
 #                Mixed-precision autocast for the score-network forward inside
 #                each Heun step. Leave null to disable.

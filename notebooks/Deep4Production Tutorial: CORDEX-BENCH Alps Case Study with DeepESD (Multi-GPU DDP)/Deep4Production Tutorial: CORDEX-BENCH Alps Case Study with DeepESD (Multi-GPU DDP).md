@@ -38,7 +38,7 @@ The training YAML now accepts an optional `hardware` block. **Omitting it (or le
 ```yaml
 ##### GENERAL INFO #####
 run_ID: deepesd_ddp
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 ##### HARDWARE / DATA-PARALLEL CONFIGURATION (optional) #####
@@ -118,7 +118,7 @@ ______________________________________________________________________
 
 ## 3. Launching on SLURM
 
-The repo ships a ready-to-use sbatch helper at `recipes/training/launch_ddp.sbatch`:
+The repo ships a ready-to-use sbatch helper at `recipes/launch_ddp.sbatch`:
 
 ```bash
 #!/bin/bash
@@ -145,8 +145,8 @@ sbatch \
   --ntasks-per-node=4 \
   --gres=gpu:4 \
   --cpus-per-task=8 \
-  ../recipes/training/launch_ddp.sbatch \
-  ./training/configs/deepesd_ddp.yaml
+  ../recipes/launch_ddp.sbatch \
+  ./deepesd_ddp/train.yaml
 ```
 
 The arguments must match the recipe:
@@ -189,7 +189,7 @@ ______________________________________________________________________
 `save_model` is called only on rank 0 and **always saves the unwrapped (DDP-stripped) module**. That means the resulting `*_best.pt` file is byte-identical in structure to a single-GPU checkpoint, so `d4p-downscale` and `load_model` continue to work without modification.
 
 ```bash
-d4p-downscale ./inference/configs/deepesd.yaml
+d4p-downscale ./deepesd/inference.yaml
 ```
 
 If you trained on DDP and want to resume on a single GPU later, just omit the `hardware` block (or set both to 1) and point `saving_params.resume_checkpoint` at the saved file.
@@ -213,7 +213,7 @@ hardware:
 ```
 
 ```bash
-sbatch --nodes=1 --ntasks-per-node=2 --gres=gpu:2 ../recipes/training/launch_ddp.sbatch ./training/configs/deepesd_ddp.yaml
+sbatch --nodes=1 --ntasks-per-node=2 --gres=gpu:2 ../recipes/launch_ddp.sbatch ./deepesd_ddp/train.yaml
 ```
 
 Once that passes, move to the full configuration.

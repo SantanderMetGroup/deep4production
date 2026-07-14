@@ -1,4 +1,8 @@
-id_dir: ./outputs/gnn4cd_qmse
+# Same run directory as training: id_dir = output_dir/run_ID. Checkpoint read
+# from id_dir/outputs/models/, graph from id_dir/outputs/aux_files/, predictions
+# written to id_dir/outputs/predictions/. Both keys REQUIRED (no id_dir key).
+run_ID: GNN4CD
+output_dir: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example
 
 d4d_downscaler:
   name: d4d_downscaler_custom
@@ -12,7 +16,7 @@ input_data:
   load_in_memory: true
 
 ensemble_size: 2
-model_file: gnn4cd_qmse_best.pt # Model at: id_dir/models/
+model_file: gnn4cd_qmse_best.pt # Model at: id_dir/outputs/models/
 
 graph:
   path: edge_index.pt
@@ -30,5 +34,5 @@ graph:
   #   nearest_neighbours_low_to_high: 9
 
 saving_info:
-  file: 1980.nc # Predictions will be saved at: id_dir/predictions/
+  file: 1980.nc # Predictions will be saved at: id_dir/outputs/predictions/
   template:

@@ -68,12 +68,12 @@ GNN4CD differs from DeepESD in five places:
 1. **`transform_to_2D: false` and `num_lagged: 1`.** The data are served as flat node sequences, with each sample being the current day plus one lag.
 1. **`batch_size: 1`.** The graph topology is static and contains every node, so a single batch per step is the natural choice (matching the original GNN4CD implementation).
 
-`./training/configs/gnn4cd_asym.yaml`:
+`./gnn4cd_asym/train.yaml`:
 
 ```yaml
 ##### GENERAL INFO #####
 run_ID: gnn4cd_asym
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 
@@ -82,7 +82,7 @@ d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_gnn4cd
   kwargs:
-    edge_index_path: ./outputs/gnn4cd_asym/aux_files/edge_index.pt   # built on first run
+    edge_index_path: ./gnn4cd_asym/outputs/aux_files/edge_index.pt   # built on first run
 
 
 ##### TRAINING DATA CONFIGURATION #####
@@ -148,7 +148,7 @@ model_info:
       ref_path: ./AI_ready_datasets/files/RCM_1961-1980.zarr
       var: pr
       type: full               # one Gamma fit per gridpoint over the whole period
-      asym_path: ./outputs/gnn4cd_asym/aux_files/
+      asym_path: ./gnn4cd_asym/outputs/aux_files/
       asym_weight: 1
       cdf_pow: 2
       appendix: null
@@ -178,10 +178,10 @@ model_info:
 Train with:
 
 ```bash
-d4p-train ./training/configs/gnn4cd_asym.yaml
+d4p-train ./gnn4cd_asym/train.yaml
 ```
 
-> 💡 **First-run cost.** On the very first run the trainer builds the graph (kNN search over the predictand and predictor lat-lon coordinates) and writes it to `./outputs/gnn4cd_asym/aux_files/edge_index.pt`. Subsequent runs (resuming training, hyperparameter sweeps) reuse this file — only the kNN search is cached, so changing `nearest_neighbours_*` *will* trigger a rebuild.
+> 💡 **First-run cost.** On the very first run the trainer builds the graph (kNN search over the predictand and predictor lat-lon coordinates) and writes it to `./gnn4cd_asym/outputs/aux_files/edge_index.pt`. Subsequent runs (resuming training, hyperparameter sweeps) reuse this file — only the kNN search is cached, so changing `nearest_neighbours_*` *will* trigger a rebuild.
 
 Below is an example of training output:
 
@@ -201,10 +201,11 @@ ______________________________________________________________________
 
 The inference YAML reuses the cached graph by setting `graph.path` to the file written during training. The model is then evaluated on the requested years.
 
-`./inference/configs/gnn4cd_asym.yaml`:
+`./gnn4cd_asym/inference.yaml`:
 
 ```yaml
-id_dir: ./outputs/gnn4cd_asym
+run_ID: gnn4cd_asym
+output_dir: .
 
 d4p_downscaler:
   name: d4p_downscaler_custom
@@ -217,10 +218,10 @@ input_data:
   load_in_memory: true
 
 ensemble_size: 1
-model_file: gnn4cd_asym_best.pt   # relative to id_dir/models/
+model_file: gnn4cd_asym_best.pt   # relative to id_dir/outputs/models/
 
 graph:
-  path: edge_index.pt              # reuse the cached graph (relative to id_dir/aux_files/)
+  path: edge_index.pt              # reuse the cached graph (relative to id_dir/outputs/aux_files/)
 
   ## Want to apply the model to a different graph (e.g. a different domain)?
   ## Replace the block above with the snippet below — `build_graph` will run
@@ -235,7 +236,7 @@ graph:
   #   nearest_neighbours_low_to_high: 4
 
 saving_info:
-  file: 1980.nc                    # saved at id_dir/predictions/
+  file: 1980.nc                    # saved at id_dir/outputs/predictions/
   template: null
 
 inference_params:                  # Forwarded as **kwargs to downscaler.downscale()
@@ -247,7 +248,7 @@ inference_params:                  # Forwarded as **kwargs to downscaler.downsca
 Run with:
 
 ```bash
-d4p-downscale ./inference/configs/gnn4cd_asym.yaml
+d4p-downscale ./gnn4cd_asym/inference.yaml
 ```
 
 Below is an example of inference output:
@@ -290,7 +291,7 @@ tgt = xr.open_dataset(
 tgt = tgt.stack(point=("y", "x"))
 tgt['time'] = tgt.time.dt.floor('D')
 
-prd = xr.open_dataset("./outputs/gnn4cd_asym/predictions/1980.nc")
+prd = xr.open_dataset("./gnn4cd_asym/outputs/predictions/1980.nc")
 prd = prd.isel(member=0)
 prd['time'] = prd.time.dt.floor('D')
 

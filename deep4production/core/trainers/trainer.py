@@ -18,6 +18,7 @@ from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.monitors import build_monitor
 from deep4production.utils.log import get_logger
+from deep4production.utils.paths import models_dir, aux_dir as aux_dir_for
 from deep4production.utils.distributed import (
     is_distributed,
     is_main_process,
@@ -129,8 +130,8 @@ class trainer:
             )
 
         self.id_dir = id_dir
-        self.model_dir = f"{id_dir}/models/"
-        self.aux_dir = f"{id_dir}/aux_files/"
+        self.model_dir = models_dir(id_dir)
+        self.aux_dir = aux_dir_for(id_dir)
 
         # --- BUILD GRAPH ---------------------------------------
         self.kwargs_training = self.training_params.get("kwargs", {})

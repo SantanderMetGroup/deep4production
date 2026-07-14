@@ -1,0 +1,26 @@
+# Same run directory as training: id_dir = output_dir/run_ID. Both keys REQUIRED
+# (no standalone id_dir key). Must match this variant's train.yaml.
+run_ID: DEEPESD_ASYM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
+
+input_data:
+  paths:
+  - path_to_your_x_file_1.zarr
+  - path_to_your_x_file_2.zarr
+  - '...'
+  years: [1980]
+  load_in_memory: true
+
+graph:
+ensemble_size: 1
+
+model_file: DeepESD_asym_best.pt # Model at: id_dir/outputs/models/
+
+saving_info:
+  file: 1980.nc # Predictions will be saved at: id_dir/outputs/predictions/
+  template: path_to_your_template.nc # Optional, if not returns a xr with dims: time, point
+  # formatting:
+  #   name: null # e.g., cordex_ml
+  #   kwargs:
+  #     attributes_dict:
+  #       project_id: ...

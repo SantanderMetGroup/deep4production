@@ -1,6 +1,10 @@
 ##### GENERAL INFO #####
-run_ID: cpmgem
-output_dir: path_to_your_output_dir
+# run_ID is this run's directory name and output_dir is its parent, so
+# id_dir = output_dir/run_ID is the directory holding this recipe. d4p-train
+# writes every generated artifact under id_dir/outputs/ (models/, aux_files/,
+# predictions/, tracker/). Both keys are REQUIRED.
+run_ID: CPMGEM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 overwrite: true
 
 

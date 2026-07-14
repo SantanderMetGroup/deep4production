@@ -63,12 +63,12 @@ CPMGEM differs from DeepESD in three places:
 
 1. **Architecture and training schedule.** A larger NCSN++/SongUNet replaces the small DeepESD CNN. Diffusion training also benefits from EMA weight averaging, a warm-up scheduler, and gradient clipping — all enabled via the YAML.
 
-Below is the full CPMGEM training YAML (`./training/configs/cpmgem.yaml`):
+Below is the full CPMGEM training YAML (`./cpmgem/train.yaml`):
 
 ```yaml
 ##### GENERAL INFO #####
 run_ID: cpmgem
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 # Continuous-time sub-VP SDE diffusion trainer (direct generation, no residual).
@@ -185,7 +185,7 @@ model_info:
 Train with:
 
 ```bash
-d4p-train ./training/configs/cpmgem.yaml
+d4p-train ./cpmgem/train.yaml
 ```
 
 > 💡 **Tip — first epoch is slow.** The trainer compiles internal schedulers and (optionally) torch-compiles the model on the first forward pass. From epoch 2 onwards throughput is much higher.
@@ -211,7 +211,8 @@ The inference YAML is short — the heavy lifting (model architecture, noise sch
 ```yaml
 ##### GENERAL INFO #####
 # Directory created by d4p-train for the cpmgem run_ID.
-id_dir: ./outputs/cpmgem
+run_ID: cpmgem
+output_dir: .
 
 
 ##### INPUT DATA #####
@@ -230,7 +231,7 @@ ensemble_size: 5
 
 
 ##### MODEL CHECKPOINT #####
-model_file: CPMGEM_best.pt   # relative to id_dir/models/
+model_file: CPMGEM_best.pt   # relative to id_dir/outputs/models/
 
 
 ##### DOWNSCALER CLASS #####
@@ -272,7 +273,7 @@ inference_params:
 Run with:
 
 ```bash
-d4p-downscale ./inference/configs/cpmgem.yaml
+d4p-downscale ./cpmgem/inference.yaml
 ```
 
 Below is an example of inference output:
@@ -317,7 +318,7 @@ tgt = xr.open_dataset(
 tgt = tgt.stack(point=("y", "x"))
 tgt['time'] = tgt.time.dt.floor('D')
 
-prd = xr.open_dataset("./outputs/cpmgem/predictions/1980.nc")
+prd = xr.open_dataset("./cpmgem/outputs/predictions/1980.nc")
 prd = prd.isel(member=0)              # pick a single realisation
 prd['time'] = prd.time.dt.floor('D')
 

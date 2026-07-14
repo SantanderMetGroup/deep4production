@@ -1,10 +1,13 @@
 ##### GENERAL INFO #####
-# Directory created by d4p-train for this run_ID.
-# Expected layout:
+# Same run directory as training: id_dir = output_dir/run_ID. Under
+# id_dir/outputs/ the downscaler reads/writes:
 #   models/      — SongUNet_det_asym_best.pt  (and optional epoch checkpoints)
 #   predictions/ — output NetCDF files written here
 #   aux_files/   — cached Gamma parameters (shape.npy, scale.npy, loc.npy)
-id_dir: path_to_your_output_dir/song_unet_det_asym
+# run_ID and output_dir must match the train.yaml used for this run. Both keys
+# are REQUIRED (there is no standalone id_dir key).
+run_ID: SONG_UNET_DET_ASYM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 
 
 ##### INPUT DATA #####
@@ -27,7 +30,7 @@ graph:
 
 
 ##### MODEL CHECKPOINT #####
-model_file: SongUNet_det_asym_best.pt   # relative to id_dir/models/
+model_file: SongUNet_det_asym_best.pt   # relative to id_dir/outputs/models/
 
 
 ##### DOWNSCALER CLASS #####
@@ -40,7 +43,7 @@ d4p_downscaler:
 
 ##### OUTPUT #####
 saving_info:
-  file: SongUNet_det_asym_1980-1981.nc   # saved at id_dir/predictions/
+  file: SongUNet_det_asym_1980-1981.nc   # saved at id_dir/outputs/predictions/
   template:       # optional NetCDF template for output coordinates;
                   # if null, lats/lons are taken from the checkpoint metadata
   # formatting:

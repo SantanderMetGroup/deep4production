@@ -3,11 +3,15 @@ import os
 import sys
 import yaml
 import json
-import random
-import string
 import mlflow
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.log import setup_logging, get_logger
+from deep4production.utils.paths import (
+    resolve_id_dir,
+    models_dir,
+    aux_dir as aux_dir_for,
+    predictions_dir,
+)
 from deep4production.utils.distributed import (
     init_distributed,
     cleanup_distributed,
@@ -63,8 +67,24 @@ def main():
         data = config["data"]
         dataloader = config["dataloader"]
         model_info = config["model_info"]
-        run_ID = config["run_ID"]
-        output_dir = config.get("output_dir", "./")
+        # output_dir + run_ID are mandatory: together they define the run
+        # directory id_dir = output_dir/run_ID, which IS the model directory
+        # (holds the recipes/scripts) and whose outputs/ subtree receives every
+        # generated artifact. There is no default — opting out of the convention
+        # is not allowed.
+        run_ID = config.get("run_ID", None)
+        output_dir = config.get("output_dir", None)
+        if not output_dir or not run_ID:
+            log.error(
+                "Both 'output_dir' and 'run_ID' are required in the recipe "
+                "(id_dir = output_dir/run_ID). Missing: %s",
+                ", ".join(
+                    k
+                    for k, v in (("output_dir", output_dir), ("run_ID", run_ID))
+                    if not v
+                ),
+            )
+            sys.exit(1)
         overwrite = config.get("overwrite", False)
         graph = config.get("graph", None)
         Mlflow = config.get("Mlflow", None)
@@ -80,22 +100,14 @@ def main():
             )
             sys.exit(1)
 
-        # --- Assign run ID ----------------------------------
-        # Under DDP every rank must agree on the same run_ID (it drives the
-        # output directory and checkpoint paths). Seed the RNG with SLURM_JOB_ID
-        # when available so all ranks generate the same suffix without needing
-        # an extra broadcast; outside SLURM, fall back to a plain random ID
-        # (only one process exists in that path so no agreement is needed).
-        if run_ID is None:
-            seed_source = os.environ.get("SLURM_JOB_ID")
-            rng = random.Random(int(seed_source)) if seed_source else random
-            run_ID = "".join(rng.choices(string.ascii_letters + string.digits, k=5))
-
         # --- Create directories ----------------------------------
-        id_dir = os.path.abspath(f"{output_dir}/{run_ID}")
-        model_dir = f"{id_dir}/models/"
-        aux_dir = f"{id_dir}/aux_files/"
-        pred_dir = f"{id_dir}/predictions/"
+        # id_dir = output_dir/run_ID is the run directory; every generated
+        # artifact lives under its outputs/ subtree (models/, aux_files/,
+        # predictions/, tracker/) — see deep4production.utils.paths.
+        id_dir = resolve_id_dir(output_dir, run_ID)
+        model_dir = models_dir(id_dir)
+        aux_dir = aux_dir_for(id_dir)
+        pred_dir = predictions_dir(id_dir)
         # Only rank 0 creates the directory tree; other ranks wait at a barrier
         # so they see the dirs before reading/writing into them.
         if is_main_process():

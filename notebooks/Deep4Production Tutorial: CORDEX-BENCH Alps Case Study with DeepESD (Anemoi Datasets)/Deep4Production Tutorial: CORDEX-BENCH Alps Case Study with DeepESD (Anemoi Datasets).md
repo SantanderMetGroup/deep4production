@@ -214,11 +214,11 @@ ______________________________________________________________________
 The training configuration is **identical** to the companion DeepESD notebook with two additions: `format: anemoi` is added to each `predictors` and `predictands` block to tell deep4production which zarr adapter to use.
 
 ```yaml
-# File: ./training/configs/deepesd_anemoi.yaml
+# File: ./deepesd/train.yaml
 
 ##### GENERAL INFO #####
 run_ID: deepesd
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 ##### TRAINING DATA CONFIGURATION #####
@@ -294,7 +294,7 @@ model_info:
 Launch training:
 
 ```bash
-d4p-train ./training/configs/deepesd_anemoi.yaml
+d4p-train ./deepesd/train.yaml
 ```
 
 Training output, model saving, early stopping, and optional MLflow integration are identical to the companion notebook. Refer to Section 6 of that notebook for a full description.
@@ -306,9 +306,10 @@ ______________________________________________________________________
 The inference configuration also requires only `format: anemoi` in the `input_data` block:
 
 ```yaml
-# File: ./inference/configs/deepesd_anemoi.yaml
+# File: ./deepesd/inference.yaml
 
-id_dir: ./outputs/deepesd
+run_ID: deepesd
+output_dir: .
 
 input_data:
   paths:
@@ -336,10 +337,10 @@ inference_params:    # Forwarded as **kwargs to downscaler.downscale()
 Run inference:
 
 ```bash
-d4p-downscale ./inference/configs/deepesd_anemoi.yaml
+d4p-downscale ./deepesd/inference.yaml
 ```
 
-The output NetCDF file `./outputs/deepesd/predictions/1980.nc` has the same structure as in the companion notebook and can be opened with `xarray` identically.
+The output NetCDF file `./deepesd/outputs/predictions/1980.nc` has the same structure as in the companion notebook and can be opened with `xarray` identically.
 
 ______________________________________________________________________
 
@@ -369,7 +370,7 @@ tgt = xr.open_dataset("./source_files/data_zenodo/ALPS_domain/train/ESD_pseudo_r
 tgt = tgt.stack(point=("y", "x"))
 tgt["time"] = tgt.time.dt.floor("D")
 
-prd = xr.open_dataset("./outputs/deepesd/predictions/1980.nc")
+prd = xr.open_dataset("./deepesd/outputs/predictions/1980.nc")
 prd = prd.isel(member=0)
 prd["time"] = prd.time.dt.floor("D")
 

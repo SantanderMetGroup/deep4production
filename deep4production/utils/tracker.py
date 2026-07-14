@@ -4,7 +4,7 @@ d4p-tracker: in-house, dependency-free training monitor.
 A lightweight alternative to the MLflow integration (see
 ``deep4production/utils/mlflow.py``). Instead of logging to an MLflow server,
 d4p-tracker writes monitoring artifacts (figures + CSV) straight to
-``<output_dir>/<run_ID>/tracker/`` on the local filesystem.
+``<output_dir>/<run_ID>/outputs/tracker/`` on the local filesystem.
 
 The two backends are mutually exclusive — exactly zero or one may be configured
 in the recipe (enforced in ``cli/train.py``). This module mirrors the

@@ -66,12 +66,12 @@ ______________________________________________________________________
 
 The regressor is a SongUNet trained *deterministically*: the noisy-input slot is filled with zeros, the noise label `t` is fixed at zero, and the network conditions only on the low-res predictor (via `cond_low`). This reuses the same backbone class that the diffusion stage will use, which keeps train/inference machinery in lockstep.
 
-`./training/configs/song_unet_det.yaml`:
+`./song_unet_det/train.yaml`:
 
 ```yaml
 ##### GENERAL INFO #####
 run_ID: song_unet_det
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 
@@ -165,10 +165,10 @@ model_info:
 Train it:
 
 ```bash
-d4p-train ./training/configs/song_unet_det.yaml
+d4p-train ./song_unet_det/train.yaml
 ```
 
-The best checkpoint is written to `./outputs/song_unet_det/models/SongUNet_det_best.pt`. **You will need this path for step 2.**
+The best checkpoint is written to `./song_unet_det/outputs/models/SongUNet_det_best.pt`. **You will need this path for step 2.**
 
 Below is an example of training output:
 
@@ -184,12 +184,12 @@ The residual stage adds three things on top of the regressor recipe:
 
 1. **High-res conditioning (`cond_high_channels: 1`)** — the regressor's output `ŷ` is passed back to the diffusion U-Net as a *high-res* conditioning channel, in addition to the standard low-res predictor stream.
 
-`./training/configs/resdiff.yaml`:
+`./resdiff/train.yaml`:
 
 ```yaml
 ##### GENERAL INFO #####
 run_ID: resdiff
-output_dir: ./outputs
+output_dir: .
 overwrite: true
 
 
@@ -211,11 +211,11 @@ d4p_pydataset:
   module: deep4production.core.pydatasets.pydataset_resdiff
   kwargs:
     # Path to the deterministic regressor checkpoint (trained in step 6.1).
-    path_regressor: ./outputs/song_unet_det/models/SongUNet_det_best.pt
+    path_regressor: ./song_unet_det/outputs/models/SongUNet_det_best.pt
     add_pred_mean: true        # feed ŷ as cond_high
     add_context_lowres: true   # feed raw predictors as cond_low
     residuals:
-      path: ./outputs/resdiff/aux_files/residuals.zarr
+      path: ./resdiff/outputs/aux_files/residuals.zarr
       template: ./templates/pr_template.nc
 
 
@@ -328,7 +328,7 @@ model_info:
 Train it:
 
 ```bash
-d4p-train ./training/configs/resdiff.yaml
+d4p-train ./resdiff/train.yaml
 ```
 
 > 💡 **First-run cost.** On the very first run the trainer will iterate over every training/validation date, run the regressor, and write `residuals_training.zarr` + `residuals_validation.zarr`. This can take several minutes. Subsequent runs (e.g. when changing a hyperparameter or resuming training) reuse those Zarr files, so the cost is paid only once per dataset split.
@@ -355,11 +355,12 @@ The ResDiff downscaler:
 1. For each input date: runs `regressor(x) → ŷ`, then samples a residual `r̂` from the EDM Heun sampler conditioned on `(x, ŷ)`.
 1. Returns `ŷ + r̂` as the final downscaled field (still in normalised space; the base downscaler post-processing denormalises).
 
-`./inference/configs/resdiff.yaml`:
+`./resdiff/inference.yaml`:
 
 ```yaml
 ##### GENERAL INFO #####
-id_dir: ./outputs/resdiff
+run_ID: resdiff
+output_dir: .
 
 
 ##### INPUT DATA #####
@@ -427,7 +428,7 @@ inference_params:
 Run with:
 
 ```bash
-d4p-downscale ./inference/configs/resdiff.yaml
+d4p-downscale ./resdiff/inference.yaml
 ```
 
 Below is an example of inference output:
@@ -470,7 +471,7 @@ tgt = xr.open_dataset(
 tgt = tgt.stack(point=("y", "x"))
 tgt['time'] = tgt.time.dt.floor('D')
 
-prd = xr.open_dataset("./outputs/resdiff/predictions/1980.nc")
+prd = xr.open_dataset("./resdiff/outputs/predictions/1980.nc")
 prd = prd.isel(member=0)
 prd['time'] = prd.time.dt.floor('D')
 

@@ -1,6 +1,10 @@
 ##### GENERAL INFO #####
-run_ID: gnn4cd_asym
-output_dir: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs
+# run_ID is this run's directory name and output_dir is its parent, so
+# id_dir = output_dir/run_ID is the directory holding this recipe. d4p-train
+# writes every generated artifact under id_dir/outputs/ (models/, aux_files/,
+# predictions/, tracker/). Both keys are REQUIRED.
+run_ID: GNN4CD
+output_dir: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 ##### Call subclasses of deep4production.classes with specific ones #####
@@ -8,7 +12,7 @@ d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_gnn4cd
   kwargs:
-    edge_index_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs/gnn4cd_asym/aux_files/edge_index.pt # File is created on the fly when the trainer is first run.
+    edge_index_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/GNN4CD/outputs/aux_files/edge_index.pt # File is created on the fly when the trainer is first run.
 
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:

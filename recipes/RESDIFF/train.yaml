@@ -1,6 +1,10 @@
 ##### GENERAL INFO #####
-run_ID: resdiff
-output_dir: path_to_your_output_dir
+# run_ID is this run's directory name and output_dir is its parent, so
+# id_dir = output_dir/run_ID is the directory holding this recipe. d4p-train
+# writes every generated artifact under id_dir/outputs/ (models/, aux_files/,
+# predictions/, tracker/). Both keys are REQUIRED.
+run_ID: RESDIFF
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/TROPICAL-BENCH
 overwrite: true
 
 
@@ -24,16 +28,19 @@ d4p_pydataset:
     # Path to the deterministic regressor checkpoint (d4p-format .pt file).
     # Used to compute y_hat = regressor(x); the residual r = y - y_hat is the
     # diffusion target, and y_hat itself is fed back as the high-res context.
-    path_regressor: path_to_your_regressor_best.pt
+    # Regressor checkpoint from a separate deterministic run's outputs/models/,
+    # e.g. <output_dir>/SONG_UNET_DET_ASYM/outputs/models/SongUNet_det_asym_best.pt
+    path_regressor: path/to/your/project/REGRESSOR_RUN/outputs/models/regressor_best.pt
     # Pass the regressor's mean prediction to the diffusion UNet as cond_high.
     # Must stay `true` for CorrDiff; setting `false` falls back to
     # low-res-only conditioning (not the published CorrDiff configuration).
     add_pred_mean: true
     # Also feed the raw low-res predictors to the UNet as cond_low.
     add_context_lowres: true
-    # Residuals cache (written once on first run, reused thereafter).
+    # Residuals cache (written once on first run, reused thereafter). Keep it
+    # inside this run's own outputs/aux_files/ so everything lives under id_dir.
     residuals:
-      path: path_to_your_residuals_dir/residuals.zarr
+      path: path/to/your/project/RESDIFF/outputs/aux_files/residuals.zarr
       template: path_to_your_target_template.nc
 
 
@@ -103,7 +110,14 @@ model_info:
         module: deep4production.deep.models.unet.song_unet
         name: SongUNet
         kwargs:
-          in_channels: 1            # C_r  — channels of the residual
+          # ── Whole-domain (default) channel layout ──
+          # For patch-based diffusion (see the `patching:` block under
+          # training_params) the layout MUST change to:
+          #     cond_low_channels: 0                 # all conditioning via cond_high
+          #     cond_high_channels: C_y + 2*C_x      # [mean_hr | img_lr_hr | global_lr]
+          #     spatial_pe_freqs: >= 1               # global positional embedding
+          # e.g. C_y=1, C_x=12 → cond_high_channels: 25, cond_low_channels: 0.
+          in_channels: 1            # C_r  — channels of the residual (= C_y)
           cond_low_channels: 12     # C_x  — coarse ERA5 / predictor channels
           cond_high_channels: 1     # C_yhat — regression mean as high-res context
           nf: 128                   # base width (CorrDiff paper: ~80 M params at nf=128)
@@ -151,3 +165,26 @@ model_info:
         P_std: 1.2                # EDM default
         sigma_min: 0.002          # EDM default
         sigma_max: 80.0           # EDM default
+
+    # ── OPTIONAL: CorrDiff-style patch-based (multi-)diffusion ─────────────────
+    # For domains that do not fit a single GPU. The residual is trained on random
+    # P×P patches (bounded memory); inference (downscaler_resdiff) tiles the full
+    # domain and FUSES every EDM Heun step so patches stay globally coherent. The
+    # geometry below is persisted to the run metadata, so the downscaler needs no
+    # patching keys of its own.
+    #
+    # When enabled, update the backbone channels (see note above):
+    #     cond_low_channels: 0
+    #     cond_high_channels: C_y + 2*C_x   (= [mean_hr | img_lr_hr | global_lr])
+    #     spatial_pe_freqs:  >= 1           (global positional embedding per patch)
+    # and keep add_pred_mean / add_context_lowres = true (both feed the patch).
+    # patch_shape_{x,y} must be a multiple of 2^(len(ch_mult)-1). Choose it from
+    # the residual auto-correlation length (spec §6), not just "fits in memory".
+    #
+    # patching:
+    #   enabled: true
+    #   patch_shape_y: 128
+    #   patch_shape_x: 128
+    #   overlap_pix: 4          # raw-pixel overlap between neighbouring patches
+    #   boundary_pix: 2         # discarded rim at fusion (overlap_pix >= boundary_pix)
+    #   patch_num: 8            # random patches per image per training step

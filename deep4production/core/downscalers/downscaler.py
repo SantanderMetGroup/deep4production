@@ -16,6 +16,7 @@ from deep4production.utils.temporal import (
 )
 from deep4production.utils.zarr import open_zarr_store
 from deep4production.utils.log import get_logger
+from deep4production.utils.paths import models_dir, aux_dir, predictions_dir
 
 log = get_logger("downscaler")
 
@@ -72,7 +73,7 @@ class downscaler:
 
         # --- GET MODEL AND METADATA FROM CHECKPOINT ---
         if model_file is not None:
-            model_path = f"{id_dir}/models/{model_file}"
+            model_path = f"{models_dir(id_dir)}/{model_file}"
             self.model, self.metadata = load_model(
                 path=model_path, map_location=self.device, return_metadata=True
             )
@@ -83,7 +84,7 @@ class downscaler:
         self.saving_info = saving_info
         if self.saving_info is not None:
             file = self.saving_info["file"]
-            self.output_path = f"{id_dir}/predictions/{file}"
+            self.output_path = f"{predictions_dir(id_dir)}/{file}"
             log.info("Predictions will be saved at: %s", self.output_path)
 
         # --- GET INFO FROM METADATA ---
@@ -167,7 +168,7 @@ class downscaler:
         if self.graph is not None:
             if self.graph["path"] is not None:
                 self.edge_index = torch.load(
-                    f"{id_dir}/aux_files/{self.graph['path']}", weights_only=False
+                    f"{aux_dir(id_dir)}/{self.graph['path']}", weights_only=False
                 )
                 log.info("Graph loaded from %s", self.graph["path"])
             else:
@@ -176,7 +177,7 @@ class downscaler:
                     func_string=self.graph["name"],
                     kwargs=self.graph.get("kwargs", None),
                 )
-                torch.save(self.edge_index, f"{self.aux_dir}/aux_files/edge_index_B.pt")
+                torch.save(self.edge_index, f"{aux_dir(id_dir)}/edge_index_B.pt")
                 log.info(
                     "Graph ready: function %s from %s",
                     self.graph["name"],
