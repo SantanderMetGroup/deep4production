@@ -21,24 +21,27 @@ Two knobs control the spaces the gradient lives in:
 
 > **Validity.** Attribution differentiates the model's *direct output channels*, which equal the predictands only for **deterministic** regressors (MSE / asymmetric loss). Distributional-loss checkpoints (BerGamma / Gaussian) emit *distribution parameters*, so the explainer **refuses** them. This tutorial therefore uses a **DeepESD trained with MSE loss**.
 
-`d4p-explain` is driven by a **YAML configuration file**, like every other d4p tool, and writes its output to a per-model `xai/` directory:
+`d4p-explain` is driven by a **YAML configuration file**, like every other d4p tool. Its `explain.yaml` recipe lives in the model's run directory alongside `train.yaml` / `inference.yaml`, and it writes attribution maps to that run's `outputs/xai/`:
 
 ```
-outputs/
-└── deepesd_mse/
-    ├── models/        # trained models (.pt)
-    ├── predictions/   # d4p-downscale output (.nc)
-    └── xai/           # d4p-explain output (.nc)   <-- new
+deepesd_mse/               # run directory (id_dir = output_dir/run_ID)
+├── train.yaml
+├── inference.yaml
+├── explain.yaml           # d4p-explain recipe   <-- new
+└── outputs/
+    ├── models/            # trained models (.pt)
+    ├── predictions/       # d4p-downscale output (.nc)
+    └── xai/               # d4p-explain output (.nc)   <-- new
 ```
 
 ______________________________________________________________________
 
 ## 1. Prerequisites
 
-We assume you have already followed the base tutorial up to training, but with the **MSE** recipe (`recipes/training/deepesd_mse.yaml`) so the predictand `pr` is regressed directly. Concretely, this notebook expects:
+We assume you have already followed the base tutorial up to training, but with the **MSE** recipe (`recipes/DEEPESD_MSE/train.yaml`) so the predictand `pr` is regressed directly. Concretely, this notebook expects:
 
 - AI-ready predictors at `./AI_ready_datasets/files/UPSRCM_1961-1980.zarr` (and, optionally, a GCM-driven file for the imperfect case).
-- A trained checkpoint at `./outputs/deepesd_mse/models/DeepESD_best.pt`.
+- A trained checkpoint at `./deepesd_mse/outputs/models/DeepESD_best.pt`.
 - (Optional) a predictand template `./templates/pr_template.nc` to mask NaN gridpoints.
 
 The 15 predictor channels (CORDEX-BENCH Alps) are, in order:
@@ -57,11 +60,13 @@ import matplotlib.pyplot as plt
 
 # Run everything relative to the tutorial's example/ directory.
 # os.chdir('/path/to/example')   # <-- set if needed
-ID_DIR    = './outputs/deepesd_mse'
-X_PERFECT = './AI_ready_datasets/files/UPSRCM_1961-1980.zarr'
+OUTPUT_DIR = '.'                 # project root; id_dir = output_dir/run_ID
+RUN_ID     = 'deepesd_mse'       # the run directory's name
+ID_DIR     = os.path.join(OUTPUT_DIR, RUN_ID)   # './deepesd_mse'
+X_PERFECT  = './AI_ready_datasets/files/UPSRCM_1961-1980.zarr'
 # X_IMPERFECT = './AI_ready_datasets/files/GCM_1961-1980.zarr'   # for the perfect-vs-imperfect comparison
-TEMPLATE  = './templates/pr_template.nc'   # optional; set to None to skip masking
-os.makedirs('./explain/configs', exist_ok=True)
+TEMPLATE   = './templates/pr_template.nc'   # optional; set to None to skip masking
+os.makedirs(ID_DIR, exist_ok=True)
 ```
 
 ______________________________________________________________________
@@ -72,12 +77,13 @@ As with every d4p tool, the run is fully described by a YAML file. We target `pr
 
 ```python
 explain_cfg = {
-    'id_dir': ID_DIR,
+    'run_ID': RUN_ID,
+    'output_dir': OUTPUT_DIR,                  # id_dir = output_dir/run_ID
     'input_data': {'paths': [X_PERFECT], 'years': [1980], 'load_in_memory': True},
     'graph': None,
     'ensemble_size': 1,
-    'model_file': 'DeepESD_best.pt',          # at id_dir/models/
-    'saving_info': {'file': 'xai_pr_1980_perfect.nc', 'template': TEMPLATE},  # saved at id_dir/xai/
+    'model_file': 'DeepESD_best.pt',          # at id_dir/outputs/models/
+    'saving_info': {'file': 'xai_pr_1980_perfect.nc', 'template': TEMPLATE},  # saved at id_dir/outputs/xai/
     # DeepESD forward is model(x, f) -> base Explainer (no architecture subclass needed).
     'd4p_explainer': {
         'name': 'Explainer',
@@ -98,13 +104,13 @@ explain_cfg = {
         'target_region': {'type': 'box', 'i': [40, 88], 'j': [40, 88]},
     },
 }
-cfg_path = './explain/configs/deepesd_mse_explain.yaml'
+cfg_path = os.path.join(ID_DIR, 'explain.yaml')
 with open(cfg_path, 'w') as f:
     yaml.safe_dump(explain_cfg, f, sort_keys=False)
 print('wrote', cfg_path)
 ```
 
-The same recipe lives, in template form, at `recipes/explain/deepesd_mse.yaml`.
+The same recipe lives, in template form, at `recipes/DEEPESD_MSE/explain.yaml`.
 
 ______________________________________________________________________
 
@@ -113,7 +119,7 @@ ______________________________________________________________________
 Either from the **CLI**…
 
 ```bash
-d4p-explain ./explain/configs/deepesd_mse_explain.yaml
+d4p-explain ./deepesd_mse/explain.yaml
 ```
 
 …or directly through the **Python API** (handy for sweeping regions / dates in-notebook). This is exactly what the CLI does under the hood:
@@ -122,14 +128,14 @@ d4p-explain ./explain/configs/deepesd_mse_explain.yaml
 from deep4production.core.explainers.explainer import Explainer
 
 ex = Explainer(
-    id_dir=explain_cfg['id_dir'],
+    id_dir=ID_DIR,   # the CLI derives this from output_dir/run_ID; pass it directly here
     input_data=explain_cfg['input_data'],
     model_file=explain_cfg['model_file'],
     saving_info=explain_cfg['saving_info'],
     graph=explain_cfg['graph'],
     ensemble_size=explain_cfg['ensemble_size'],
 )
-ds = ex.explain(**explain_cfg['explain_params'])   # also writes id_dir/xai/<file>
+ds = ex.explain(**explain_cfg['explain_params'])   # also writes id_dir/outputs/xai/<file>
 ds
 ```
 
@@ -138,7 +144,7 @@ ______________________________________________________________________
 ## 4. Load and inspect the attribution dataset
 
 ```python
-xai_path = os.path.join(ID_DIR, 'xai', explain_cfg['saving_info']['file'])
+xai_path = os.path.join(ID_DIR, 'outputs', 'xai', explain_cfg['saving_info']['file'])
 ds = xr.open_dataset(xai_path)
 print(ds)
 print('\nattrs:', dict(ds.attrs))
@@ -210,7 +216,7 @@ ______________________________________________________________________
 - It is valid for **deterministic** regressors (MSE/asym DeepESD, SongUNet); distributional-loss checkpoints are refused.
 - The intended use here is **perfect-vs-imperfect** and **uni-vs-multivariate** comparisons of predictor reliance.
 
-Recipes: `recipes/explain/deepesd_mse.yaml`, `recipes/explain/song_unet_det.yaml`.
+Recipes: `recipes/DEEPESD_MSE/explain.yaml`, `recipes/SONG_UNET_DET_ASYM/explain.yaml`.
 
 ______________________________________________________________________
 

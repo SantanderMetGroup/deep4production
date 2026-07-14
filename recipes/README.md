@@ -101,15 +101,21 @@ ______________________________________________________________________
 Gradient input-attribution with `d4p-explain`. These recipes compute the
 gradient of a reduced predictand response (a chosen `target_var`, reduced over a
 predictand box or gridpoint) with respect to the predictor input, and write
-per-date saliency maps plus a per-channel contribution ranking to `id_dir/xai/`.
-Useful to diagnose *which predictor channels a model relies on* — e.g. comparing
-a univariate vs a multivariate emulator, or perfect (UPSRCM) vs imperfect (GCM)
-predictors. Valid for **deterministic regressors** (MSE/asym DeepESD, SongUNet);
-distributional-loss checkpoints (BerGamma/Gaussian) are refused.
+per-date saliency maps plus a per-channel contribution ranking to
+`id_dir/outputs/xai/`. Useful to diagnose *which predictor channels a model
+relies on* — e.g. comparing a univariate vs a multivariate emulator, or perfect
+(UPSRCM) vs imperfect (GCM) predictors. Valid for **deterministic regressors**
+(MSE/asym DeepESD, SongUNet); distributional-loss checkpoints (BerGamma/Gaussian)
+are refused.
+
+An `explain.yaml` (and a matching `explain.sh`) lives alongside `train.yaml` /
+`inference.yaml` inside the model's run directory, reusing the same
+`run_ID` + `output_dir`, so `d4p-explain ./explain.yaml` reads the checkpoint
+from `id_dir/outputs/models/` and writes maps to `id_dir/outputs/xai/`.
 
 ### DeepESD — gradient attribution
 
-**File:** `explain/deepesd_mse.yaml`
+**File:** `DEEPESD_MSE/explain.yaml`
 
 Base `Explainer` (forward `model(x, f)`) for a deterministic DeepESD CNN. [\[1\]](#ref-1)
 
@@ -117,7 +123,7 @@ ______________________________________________________________________
 
 ### SongUNet (deterministic) — gradient attribution
 
-**File:** `explain/song_unet_det.yaml`
+**File:** `SONG_UNET_DET_ASYM/explain.yaml`
 
 `ExplainerSongUNetDet` (forward conditions on `cond_low`) for the deterministic
 SongUNet baselines, including the multivariate variant. [\[2\]](#ref-2)

@@ -12,6 +12,7 @@ that holds the run's recipes and launch scripts (``train.yaml``, ``inference.yam
         aux_files/     # caches (residuals, graphs, ...)
         predictions/   # downscaled NetCDF output
         tracker/       # d4p-tracker figures + CSV
+        xai/           # d4p-explain input-attribution maps
 
 Keeping the convention in one module means a future change to the layout is a
 single edit here rather than a scattered set of string literals.
@@ -43,6 +44,11 @@ def predictions_dir(id_dir):
 def tracker_dir(id_dir):
     """d4p-tracker output directory (``id_dir/outputs/tracker``)."""
     return os.path.join(outputs_dir(id_dir), "tracker")
+
+
+def xai_dir(id_dir):
+    """d4p-explain attribution-map directory (``id_dir/outputs/xai``)."""
+    return os.path.join(outputs_dir(id_dir), "xai")
 
 
 def resolve_id_dir(output_dir, run_ID):

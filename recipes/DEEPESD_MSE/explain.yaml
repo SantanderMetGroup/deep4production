@@ -1,9 +1,14 @@
 # Gradient input-attribution (XAI) for a deterministic DeepESD (MSE) checkpoint.
-# Run with:  d4p-explain recipes/explain/deepesd_mse.yaml
+# Run with:  d4p-explain ./explain.yaml   (from this DEEPESD_MSE run directory)
 # Attribution targets the model's direct output channel for `target_var`, so it
 # is only valid for DETERMINISTIC (MSE / asym) regressors — NOT for BerGamma /
 # Gaussian NLL checkpoints (the explainer will refuse those).
-id_dir: your_id_dir              # e.g., ./outputs/deepesd_mse  (model at id_dir/models/)
+#
+# Same run directory as training: id_dir = output_dir/run_ID. The checkpoint is
+# read from id_dir/outputs/models/ and maps are written to id_dir/outputs/xai/.
+# Both keys are REQUIRED (there is no standalone id_dir key).
+run_ID: DEEPESD_MSE
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
 
 input_data:
   paths:
@@ -14,10 +19,10 @@ input_data:
 graph:
 ensemble_size: 1
 
-model_file: DeepESD_best.pt      # Model at: id_dir/models/
+model_file: DeepESD_Mse_best.pt  # Model at: id_dir/outputs/models/
 
 saving_info:
-  file: xai_1980.nc              # Saved at: id_dir/xai/
+  file: xai_1980.nc              # Saved at: id_dir/outputs/xai/
   template: path_to_your_template.nc   # Optional; lets the explainer mask NaN gridpoints
 
 # DeepESD forward is model(x, f) → the base Explainer handles it (no subclass).

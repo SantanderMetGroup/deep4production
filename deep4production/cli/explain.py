@@ -4,13 +4,14 @@ import sys
 import yaml
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.log import setup_logging, get_logger
+from deep4production.utils.paths import resolve_id_dir
 
 
 def main():
     """
     Main entry point for the D4P explain (input-attribution) console script.
     Purpose: Loads configuration from YAML, initializes an explainer, and runs
-        gradient-based input attribution, writing maps to id_dir/xai/.
+        gradient-based input attribution, writing maps to id_dir/outputs/xai/.
     Parameters:
         None (reads sys.argv for config file path)
     Returns:
@@ -31,7 +32,23 @@ def main():
 
     # --- Unpack config to get parameters ------------------------------------------
     log.info("d4p explain: starting")
-    id_dir = config["id_dir"]
+    # Same run directory as training/inference: id_dir = output_dir/run_ID. The
+    # checkpoint is read from id_dir/outputs/models/ and attribution maps are
+    # written to id_dir/outputs/xai/. Both keys are required (no id_dir key).
+    run_ID = config.get("run_ID", None)
+    output_dir = config.get("output_dir", None)
+    if not output_dir or not run_ID:
+        log.error(
+            "Both 'output_dir' and 'run_ID' are required in the recipe "
+            "(id_dir = output_dir/run_ID). Missing: %s",
+            ", ".join(
+                k
+                for k, v in (("output_dir", output_dir), ("run_ID", run_ID))
+                if not v
+            ),
+        )
+        sys.exit(1)
+    id_dir = resolve_id_dir(output_dir, run_ID)
     input_data = config["input_data"]
     graph = config.get("graph", None)
     ensemble_size = config.get("ensemble_size", 1)

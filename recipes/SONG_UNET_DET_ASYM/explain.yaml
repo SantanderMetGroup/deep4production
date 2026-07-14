@@ -1,7 +1,12 @@
 # Gradient input-attribution (XAI) for a deterministic SongUNet regressor
 # (e.g. the UNet / UNet-MultiVar baselines).
-# Run with:  d4p-explain recipes/explain/song_unet_det.yaml
-id_dir: your_id_dir              # e.g., ./outputs/unet_multivar  (model at id_dir/models/)
+# Run with:  d4p-explain ./explain.yaml   (from this SONG_UNET_DET_ASYM run directory)
+#
+# Same run directory as training: id_dir = output_dir/run_ID. The checkpoint is
+# read from id_dir/outputs/models/ and maps are written to id_dir/outputs/xai/.
+# Both keys are REQUIRED (there is no standalone id_dir key).
+run_ID: SONG_UNET_DET_ASYM
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
 
 input_data:
   paths:
@@ -12,10 +17,10 @@ input_data:
 graph:
 ensemble_size: 1
 
-model_file: UNet_best.pt         # Model at: id_dir/models/
+model_file: SongUNet_det_asym_best.pt   # Model at: id_dir/outputs/models/
 
 saving_info:
-  file: xai_1980.nc              # Saved at: id_dir/xai/
+  file: xai_1980.nc              # Saved at: id_dir/outputs/xai/
   template: path_to_your_template.nc   # Optional; masks NaN gridpoints in the target region
 
 # Deterministic SongUNet forward: model(x=zeros, t=0, cond_low=predictors).

@@ -15,7 +15,7 @@ Design
 ------
 ``Explainer`` subclasses ``downscaler`` so all model / metadata / normalizer /
 date / preprocessing machinery is reused unchanged. Only the output location
-(``{id_dir}/xai/``) and the forward call differ. Architectures with a
+(``{id_dir}/outputs/xai/``) and the forward call differ. Architectures with a
 non-standard forward (e.g. the deterministic SongUNet) override
 ``_attribution_forward`` exactly as the downscaler subclasses override
 ``downscale``.
@@ -32,6 +32,7 @@ import xarray as xr
 
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.utils.log import get_logger
+from deep4production.utils.paths import xai_dir
 
 log = get_logger("explainer")
 
@@ -43,15 +44,15 @@ class Explainer(downscaler):
     Inherits the full ``downscaler`` initialisation (model + metadata +
     normalizers + date pairing + batched preprocessing). Predictions are not
     written; instead ``explain`` writes an attribution Dataset to
-    ``{id_dir}/xai/{saving_info['file']}``.
+    ``{id_dir}/outputs/xai/{saving_info['file']}``.
     """
 
     def __init__(self, id_dir, input_data, **kwargs):
         super().__init__(id_dir=id_dir, input_data=input_data, **kwargs)
         self.id_dir = id_dir
-        # Redirect the output from predictions/ to a per-model xai/ directory.
+        # Redirect the output from predictions/ to the run's outputs/xai/ dir.
         if self.saving_info is not None:
-            self.output_path = f"{id_dir}/xai/{self.saving_info['file']}"
+            self.output_path = f"{xai_dir(id_dir)}/{self.saving_info['file']}"
             log.info("Attribution maps will be saved at: %s", self.output_path)
         log.info("Gradient explainer ready")
 
