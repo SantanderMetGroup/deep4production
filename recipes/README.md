@@ -96,6 +96,34 @@ Training and inference recipes for a direct-generation diffusion model based on 
 
 ______________________________________________________________________
 
+## Explainability (XAI) recipes
+
+Gradient input-attribution with `d4p-explain`. These recipes compute the
+gradient of a reduced predictand response (a chosen `target_var`, reduced over a
+predictand box or gridpoint) with respect to the predictor input, and write
+per-date saliency maps plus a per-channel contribution ranking to `id_dir/xai/`.
+Useful to diagnose *which predictor channels a model relies on* — e.g. comparing
+a univariate vs a multivariate emulator, or perfect (UPSRCM) vs imperfect (GCM)
+predictors. Valid for **deterministic regressors** (MSE/asym DeepESD, SongUNet);
+distributional-loss checkpoints (BerGamma/Gaussian) are refused.
+
+### DeepESD — gradient attribution
+
+**File:** `explain/deepesd_mse.yaml`
+
+Base `Explainer` (forward `model(x, f)`) for a deterministic DeepESD CNN. [\[1\]](#ref-1)
+
+______________________________________________________________________
+
+### SongUNet (deterministic) — gradient attribution
+
+**File:** `explain/song_unet_det.yaml`
+
+`ExplainerSongUNetDet` (forward conditions on `cond_low`) for the deterministic
+SongUNet baselines, including the multivariate variant. [\[2\]](#ref-2)
+
+______________________________________________________________________
+
 ## References
 
 <a id="ref-1"></a>\[1\] Baño-Medina, J., Manzanas, R., Cimadevilla, E., Fernández, J., González-Abad, J., Cofiño, A. S., & Gutiérrez, J. M. (2022). Downscaling multi-model climate projection ensembles with deep learning (DeepESD): contribution to CORDEX EUR-44. *Geoscientific Model Development Discussions*, 2022, 1–14.
