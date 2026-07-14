@@ -39,6 +39,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from deep4production.deep.models.diffusion.patching import build_spatial_pe
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # FIR up/downsampling
@@ -543,25 +545,9 @@ class SongUNet(nn.Module):
 
     # ---------------------------------------------------------------------
     def _build_spatial_pe(self, H: int, W: int, device, dtype) -> torch.Tensor:
-        """
-        Build a (1, 4·K, H, W) NeRF-style spatial positional encoding.
-
-        For k ∈ [0, K-1] the channels are, in order,
-            sin(2^k · 2π · y/H), cos(2^k · 2π · y/H),
-            sin(2^k · 2π · x/W), cos(2^k · 2π · x/W).
-        K = 1 matches the 4-channel spatial PE used in CorrDiff.
-        """
-        K = self.spatial_pe_freqs
-        y = torch.arange(H, device=device, dtype=dtype).view(H, 1) / H  # (H, 1)
-        x = torch.arange(W, device=device, dtype=dtype).view(1, W) / W  # (1, W)
-        freqs = (2.0 ** torch.arange(K, device=device, dtype=dtype)) * (2.0 * math.pi)
-        chans = []
-        for f in freqs:
-            chans.append((f * y).sin().expand(H, W))
-            chans.append((f * y).cos().expand(H, W))
-            chans.append((f * x).sin().expand(H, W))
-            chans.append((f * x).cos().expand(H, W))
-        return torch.stack(chans, dim=0).unsqueeze(0)  # (1, 4K, H, W)
+        """Delegate to the shared `build_spatial_pe` so this local PE and the
+        GLOBAL PE gathered per patch by the patchers are byte-identical."""
+        return build_spatial_pe(H, W, self.spatial_pe_freqs, device, dtype)
 
     # ---------------------------------------------------------------------
     def _get_spatial_pe(self, target_hw: tuple, device, dtype) -> torch.Tensor:
@@ -598,6 +584,7 @@ class SongUNet(nn.Module):
         t: torch.Tensor,
         cond_low: torch.Tensor = None,
         cond_high: torch.Tensor = None,
+        pos_embd: torch.Tensor = None,
     ) -> torch.Tensor:
         # 1. Build the channel-stacked input
         parts = [x]
@@ -612,8 +599,21 @@ class SongUNet(nn.Module):
         else:
             assert cond_high is None, "cond_high passed but cond_high_channels=0"
         if self.spatial_pe_freqs > 0:
-            pe = self._get_spatial_pe(x.shape[-2:], x.device, x.dtype)
-            parts.append(pe.expand(x.shape[0], -1, -1, -1))
+            # Patch-based diffusion supplies a GLOBAL positional embedding gathered
+            # per patch (each patch's slice of the full-domain PE); when given we
+            # use it verbatim instead of the locally-built PE, which would wrongly
+            # make every patch think it spans the whole [0,1] domain.
+            if pos_embd is not None:
+                assert pos_embd.shape[1] == self.spatial_pe_channels, (
+                    f"pos_embd has {pos_embd.shape[1]} channels, expected "
+                    f"spatial_pe_channels={self.spatial_pe_channels}"
+                )
+                parts.append(pos_embd)
+            else:
+                pe = self._get_spatial_pe(x.shape[-2:], x.device, x.dtype)
+                parts.append(pe.expand(x.shape[0], -1, -1, -1))
+        else:
+            assert pos_embd is None, "pos_embd passed but spatial_pe_freqs=0"
         x_cat = torch.cat(parts, dim=1) if len(parts) > 1 else x
 
         # 2. Noise-label embedding (accept (B,) or (B,1,1,1))

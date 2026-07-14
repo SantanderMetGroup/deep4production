@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import torch.nn.functional as F
 import zarr
 import numcodecs
 from torch import from_numpy
@@ -9,6 +10,10 @@ from torch import from_numpy
 from deep4production.core.pydatasets.pydataset import pydataset
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.deep.utils import load_model
+from deep4production.deep.models.diffusion.patching import (
+    build_grid_patcher,
+    run_regressor_patched,
+)
 from deep4production.utils.log import get_logger
 
 log = get_logger("pydataset.resdiff")
@@ -54,18 +59,22 @@ class pydataset_custom(pydataset):
         dataset: str = "training",
         path_regressor: str = None,
         residuals: dict = None,
+        forcings: dict = None,
         load_in_memory: bool = True,
         add_pred_mean: bool = True,
         add_context_lowres: bool = True,
+        standardize_residuals: bool = False,
         normalizer_info_x: dict = None,
         normalizer_info_y: dict = None,
+        normalizer_info_f: dict = None,
         cache_mb: int = None,
         regressor_batch_size: int = 32,
     ):
-        # --- Call parent constructor (loads x/y, builds pipelines, temporal info) ---
+        # --- Call parent constructor (loads x/y/forcings, builds pipelines, temporal info) ---
         super().__init__(
             predictors=predictors,
             predictands=predictands,
+            forcings=forcings if forcings else {},
             temporal_period=temporal_period,
             load_in_memory=load_in_memory,
             cache_mb=cache_mb,
@@ -74,6 +83,7 @@ class pydataset_custom(pydataset):
         self.load_in_memory = load_in_memory
         self.add_pred_mean = add_pred_mean
         self.add_context_lowres = add_context_lowres
+        self.standardize_residuals = standardize_residuals
 
         # --- Local InputNormalizer instances for the residuals precomputation ---
         # The regressor expects normalized x and produces output in normalized
@@ -82,6 +92,7 @@ class pydataset_custom(pydataset):
         # trainer holds its own copies on the GPU for the actual training loop.
         self._norm_x_cpu = None
         self._norm_y_cpu = None
+        self._norm_f_cpu = None
         if normalizer_info_x is not None:
             resolved = pydataset._resolve_normalizer_info(
                 normalizer_info_x, self.vars_x, predictand=False
@@ -92,10 +103,34 @@ class pydataset_custom(pydataset):
                 normalizer_info_y, self.vars_y, predictand=True
             )
             self._norm_y_cpu = InputNormalizer(resolved, self.vars_y, channel_dim=1)
+        # High-res forcing normalizer (e.g. orography as cond_high). Built only
+        # when the regressor was trained WITH forcings; must use the SAME recipe
+        # as the regressor so the re-fed forcing matches its training space.
+        if normalizer_info_f is not None and self.vars_f is not None:
+            resolved = pydataset._resolve_normalizer_info(
+                normalizer_info_f, self.vars_f, predictand=False, forcing=True
+            )
+            self._norm_f_cpu = InputNormalizer(resolved, self.vars_f, channel_dim=1)
 
         # --- Regressor ---
         log.info("Loading regressor model from %s", path_regressor)
-        self.regressor_model = load_model(path=path_regressor)
+        self.regressor_model, reg_meta = load_model(
+            path=path_regressor, return_metadata=True
+        )
+        # If the regressor was trained CorrDiff-patched, replicate its tiled
+        # forward here so the cached residuals match inference exactly. Geometry
+        # comes from the regressor checkpoint's own metadata.
+        self.reg_patcher = None
+        self.reg_K = 0
+        rcfg = reg_meta.get("patching")
+        if rcfg and rcfg.get("enabled", False):
+            self.reg_patcher, self.reg_K = build_grid_patcher(
+                rcfg, (self.H_y, self.W_y)
+            )
+            log.info(
+                "Regressor is patched: tiling residual computation into %d patches.",
+                self.reg_patcher.patch_num,
+            )
 
         # --- Residuals zarr ---
         path_residuals_zarr = f"{residuals['path'][:-5]}_{dataset}.zarr"
@@ -135,6 +170,25 @@ class pydataset_custom(pydataset):
             self.data["r"] = [np.array(r["data"]) for r in r_zarr]
         else:
             self.data["r"] = [r["data"] for r in r_zarr]
+
+        # --- Per-channel residual standardization (CorrDiff / EDM sigma_data=1) ---
+        # The residuals zarr stores per-channel (mean, std) over the residual
+        # channels (first C of 2C). When standardize_residuals is on we serve
+        # (r - mean) / std so the diffused field has ~unit variance and the EDM
+        # preconditioner can use sigma_data=1.0. The stats also go into the run
+        # metadata so the downscaler can invert the standardization at inference.
+        n_y = len(self.vars_y)
+        res_mean = np.asarray(r_zarr[0]["mean"], dtype=np.float32)[:n_y]
+        res_std = np.asarray(r_zarr[0]["std"], dtype=np.float32)[:n_y]
+        # Guard against degenerate (near-zero) channel std.
+        res_std = np.where(res_std < 1e-8, 1.0, res_std).astype(np.float32)
+        self.residual_mean = res_mean
+        self.residual_std = res_std
+        if self.standardize_residuals:
+            # Broadcast shape: (C, 1, 1) for 2D fields, (C, 1) for flattened grids.
+            bshape = (n_y, 1, 1) if self.transform_to_2D_y else (n_y, 1)
+            self._res_mean_t = from_numpy(res_mean.reshape(bshape))
+            self._res_std_t = from_numpy(res_std.reshape(bshape))
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -247,7 +301,7 @@ class pydataset_custom(pydataset):
             B = len(batch_dates)
 
             # --- CPU preprocessing for the batch ---
-            x_list, y_list = [], []
+            x_list, y_list, f_list = [], [], []
             for date in batch_dates:
                 x = self.preprocess(
                     date,
@@ -277,16 +331,49 @@ class pydataset_custom(pydataset):
                     y = self._norm_y_cpu(y)
                 y_list.append(y)
 
+                # High-res forcing (orography) on the predictand grid, fed to the
+                # regressor as cond_high. Read from the predictand zarr (idx_vars_f
+                # / sample_map_y), exactly as the base pydataset __getitem__.
+                if self._norm_f_cpu is not None:
+                    f = self.preprocess(
+                        date,
+                        self.data["y"],
+                        self.idx_vars_f,
+                        self.sample_map_y,
+                        ops=self._ops_f,
+                        transform_to_2D=self.transform_to_2D_y,
+                        H=self.H_y,
+                        W=self.W_y,
+                    ).unsqueeze(0)
+                    f = self._norm_f_cpu(f)
+                    f_list.append(f)
+
             x_batch = torch.cat(x_list, dim=0).to(device)  # (B, C_x, H_x, W_x)
             y_batch = torch.cat(y_list, dim=0)  # (B, C_y, H_y, W_y)
+            # cond_high for the regressor: normalized forcing or None (no forcings).
+            f_batch = (
+                torch.cat(f_list, dim=0).to(device) if f_list else None
+            )  # (B, C_f, H_y, W_y) or None
 
             # --- Batched regressor forward pass ---
             with torch.no_grad():
-                reg_out = self.regressor_model(
-                    x=x_in_buf[:B],
-                    t=t_buf[:B],
-                    cond_low=x_batch,
-                ).cpu()  # (B, C_y, H_y, W_y)
+                if self.reg_patcher is not None:
+                    # Tiled forward: upsample cond_low to HR, then apply→forward→fuse.
+                    x_hr = F.interpolate(
+                        x_batch, size=(self.H_y, self.W_y),
+                        mode="bilinear", align_corners=False,
+                    )
+                    reg_out = run_regressor_patched(
+                        self.regressor_model, x_hr, f_batch,
+                        self.reg_patcher, self.reg_K, num_y,
+                    ).cpu()  # (B, C_y, H_y, W_y)
+                else:
+                    reg_out = self.regressor_model(
+                        x=x_in_buf[:B],
+                        t=t_buf[:B],
+                        cond_low=x_batch,
+                        cond_high=f_batch,
+                    ).cpu()  # (B, C_y, H_y, W_y)
 
             # Flatten spatial dims: (B, C_y, G)
             residuals_np = (y_batch - reg_out).numpy().reshape(B, num_y, G)
@@ -353,6 +440,12 @@ class pydataset_custom(pydataset):
         if self.transform_to_2D_y:
             residual = residual.reshape(num_vars, self.H_y, self.W_y)
 
+        # Per-channel standardization to ~unit variance (EDM sigma_data=1). The
+        # regressor mean (c_high) below is left in raw [-1,1] target space; only
+        # the diffused residual is standardized. Inverted in downscaler_resdiff.
+        if self.standardize_residuals:
+            residual = (residual - self._res_mean_t) / self._res_std_t
+
         c_high = None
         if self.add_pred_mean:
             c_high = r_raw[num_vars:]
@@ -376,3 +469,23 @@ class pydataset_custom(pydataset):
             )
 
         return residual, c_low, c_high
+
+    # -------------------------------------------------------------------------
+    def get_residual_norm(self):
+        """
+        Per-channel residual standardization stats (residual channels only),
+        for the trainer to persist into run metadata so downscaler_resdiff can
+        invert the standardization at inference.
+
+        Returns
+        -------
+        dict with keys:
+            standardize : bool   whether residuals are standardized at training
+            mean        : list   per-channel residual mean (length C)
+            std         : list   per-channel residual std  (length C)
+        """
+        return {
+            "standardize": bool(self.standardize_residuals),
+            "mean": [float(m) for m in self.residual_mean],
+            "std": [float(s) for s in self.residual_std],
+        }

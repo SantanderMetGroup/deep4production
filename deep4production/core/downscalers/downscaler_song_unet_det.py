@@ -16,7 +16,12 @@ Authors:
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from deep4production.core.downscalers.downscaler import downscaler
+from deep4production.deep.models.diffusion.patching import (
+    build_grid_patcher,
+    run_regressor_patched,
+)
 from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.utils.log import get_logger
 
@@ -51,6 +56,24 @@ class downscaler_custom(downscaler):
             graph=graph,
             forcing_data=forcing_data,
         )
+
+        # --- Optional CorrDiff-style patched (tiled) inference ---------------
+        # Active when the checkpoint carries a `patching` block (i.e. the model
+        # was trained patched). Reconstruct the deterministic grid patcher for
+        # the full domain; the regressor is then tiled apply→forward→fuse.
+        self.patcher = None
+        self.K_pe = 0
+        patch_cfg = self.metadata.get("patching")
+        if patch_cfg and patch_cfg.get("enabled", False):
+            if not self.transform_to_2D_y:
+                raise ValueError("patched inference requires transform_to_2D_y (2D fields).")
+            self.patcher, self.K_pe = build_grid_patcher(patch_cfg, (self.H_y, self.W_y))
+            log.info(
+                "Patched inference: %d patches of %dx%d over %dx%d domain",
+                self.patcher.patch_num, self.patcher.Py, self.patcher.Px,
+                self.H_y, self.W_y,
+            )
+
         log.info("Deterministic SongUNet downscaler ready")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -119,11 +142,34 @@ class downscaler_custom(downscaler):
             if self.norm_x is not None:
                 inp = self.norm_x(inp)
 
+            # ── High-res conditioning (cond_high), e.g. orography ─────────
+            # Preprocessed per date batch and normalized with norm_f, mirroring
+            # trainer_song_unet_det. None when the model was trained without
+            # forcings (cond_high_channels=0).
+            f_cond = None
+            if self.forcing_data is not None:
+                f_cond = self._stack_to_device(
+                    [self._preprocess_forcing_date(d) for d in batch_dates]
+                )  # (B, C_f, H_y, W_y)
+                if self.norm_f is not None:
+                    f_cond = self.norm_f(f_cond)
+
             # ── Deterministic forward pass ────────────────────────────────
-            t = torch.zeros(B, device=self.device)
-            x_in = torch.zeros(B, C_y, *spatial, device=self.device)
             with torch.inference_mode(), self._amp_ctx():
-                p_torch = model(x=x_in, t=t, cond_low=inp)
+                if self.patcher is not None:
+                    # Tiled forward: upsample cond_low to HR once, then
+                    # apply→forward→fuse over the deterministic patch grid.
+                    inp_hr = F.interpolate(
+                        inp, size=(self.H_y, self.W_y),
+                        mode="bilinear", align_corners=False,
+                    )
+                    p_torch = run_regressor_patched(
+                        model, inp_hr, f_cond, self.patcher, self.K_pe, C_y
+                    )
+                else:
+                    t = torch.zeros(B, device=self.device)
+                    x_in = torch.zeros(B, C_y, *spatial, device=self.device)
+                    p_torch = model(x=x_in, t=t, cond_low=inp, cond_high=f_cond)
 
             # ── GPU-side denormalization of the prediction ─────────────────
             # Predictand normalization is loss-dependent: MseLoss recipes

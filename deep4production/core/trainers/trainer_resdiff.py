@@ -1,8 +1,14 @@
 ## Load libraries
 import torch
+import torch.nn.functional as F
 
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
+from deep4production.deep.models.diffusion.patching import (
+    build_train_patcher,
+    assemble_cond_patches,
+    validate_patched_cond_high,
+)
 from deep4production.utils.log import get_logger
 
 log = get_logger("trainer.resdiff")
@@ -63,6 +69,29 @@ class trainer_custom(trainer):
         self.add_pred_mean = d4dpy["kwargs"]["add_pred_mean"]
         self.add_context_lowres = d4dpy["kwargs"]["add_context_lowres"]
 
+        # --- Optional CorrDiff-style patch-based diffusion (large domains) -----
+        # Enabled via model_info.training_params.patching.enabled. The diffusion
+        # residual is trained on random P×P patches with a GLOBAL positional
+        # embedding and cond_high = [mean_hr | img_lr_hr | global_lr]; inference
+        # (downscaler_resdiff) tiles the full domain and fuses every sampler step.
+        self.patcher = None
+        self.K_pe = 0
+        self._patch_validated = False
+        self.patch_cfg = None
+        patch_cfg = (model_info.get("training_params") or {}).get("patching")
+        if patch_cfg and patch_cfg.get("enabled", False):
+            backbone_kwargs = model_info["model_params"]["kwargs"]["backbone"]["kwargs"]
+            self.patcher, self.K_pe, self.patch_cfg = build_train_patcher(
+                patch_cfg, backbone_kwargs
+            )
+            if not (self.add_pred_mean and self.add_context_lowres):
+                raise ValueError(
+                    "patched diffusion requires add_pred_mean: true and "
+                    "add_context_lowres: true (mean_hr and img_lr are both part of "
+                    "the per-patch conditioning)."
+                )
+            log.info("Patched diffusion training enabled: %s", self.patch_cfg)
+
         log.debug("ResDiff trainer self-update complete")
 
         # --- UPDATE METADATA ---------------------------------------
@@ -88,6 +117,10 @@ class trainer_custom(trainer):
         self.metadata_dict["add_pred_mean"] = self.add_pred_mean
         self.metadata_dict["add_context_lowres"] = self.add_context_lowres
         self.metadata_dict["path_regressor"] = self.path_regressor
+        # Persist diffusion patching geometry so the downscaler reconstructs the
+        # grid patcher (absent for whole-domain runs).
+        if self.patch_cfg is not None:
+            self.metadata_dict["patching"] = self.patch_cfg
         ### Save metadata with the new information
         # self.save_metadata(self.metadata_path)
 
@@ -105,6 +138,7 @@ class trainer_custom(trainer):
         kwargs_pydataset = {
             "predictors": self.data["predictors"],
             "predictands": self.data["predictands"],
+            "forcings": self.data.get("forcings", {}),
             "load_in_memory": self.data.get("load_in_memory", True),
             "cache_mb": self.data.get("zarr_cache_mb", None),
         }
@@ -112,9 +146,12 @@ class trainer_custom(trainer):
         # The resdiff pydataset needs to normalize x and y on CPU for the
         # one-shot residuals precomputation (the regressor and its training
         # data both live in normalized space). Pass the recipe dicts down so
-        # it can build its own local InputNormalizer instances.
+        # it can build its own local InputNormalizer instances. normalizer_info_f
+        # is forwarded too so a regressor trained WITH high-res forcings (e.g.
+        # orography as cond_high) is re-fed that same normalized forcing here.
         kwargs_pydataset["normalizer_info_x"] = self.normalizer_info_x
         kwargs_pydataset["normalizer_info_y"] = self.normalizer_info_y
+        kwargs_pydataset["normalizer_info_f"] = self.normalizer_info_f
         kwargs_pydataset.update({"dataset": "training"})
         train_dataset = self.pydataset(
             temporal_period=self.data["training_period"], **kwargs_pydataset
@@ -127,6 +164,12 @@ class trainer_custom(trainer):
             )
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset)
+        # Persist residual standardization stats so downscaler_resdiff can invert
+        # the (r - mean) / std transform at inference. Stored only when actually
+        # standardizing, so legacy raw-residual runs keep clean metadata and the
+        # downscaler leaves their sampled residual untouched.
+        if getattr(train_dataset, "standardize_residuals", False):
+            self.metadata_dict["residual_norm"] = train_dataset.get_residual_norm()
         # self.save_metadata(self.metadata_path)
         log.info("Pydatasets ready")
         return train_dataset, valid_dataset
@@ -232,9 +275,16 @@ class trainer_custom(trainer):
         optimizer.zero_grad(set_to_none=True)
 
         # --- Forward through the EDM-preconditioned model + loss under AMP autocast ---
-        with self._amp_ctx():
-            D_theta = model(x=r_t, sigma=sigma_t, cond_low=c_low, cond_high=c_high)
-            loss = loss_function(target=r, output=D_theta, sigma_t=sigma_t)
+        if self.patcher is not None:
+            with self._amp_ctx():
+                D_theta, r_target, sigma_p = self._patchify_diffusion(
+                    r, r_t, c_low, c_high, sigma_t, model
+                )
+                loss = loss_function(target=r_target, output=D_theta, sigma_t=sigma_p)
+        else:
+            with self._amp_ctx():
+                D_theta = model(x=r_t, sigma=sigma_t, cond_low=c_low, cond_high=c_high)
+                loss = loss_function(target=r, output=D_theta, sigma_t=sigma_t)
 
         if is_this_training:
             if self._scaler is not None:
@@ -243,3 +293,42 @@ class trainer_custom(trainer):
                 loss.backward()
 
         return loss.detach()
+
+    # -------------------------------------------------------------------------
+    def _patchify_diffusion(self, r, r_t, c_low, c_high, sigma_t, model):
+        """
+        CorrDiff-style patched forward for training. The clean/noisy residuals and
+        the conditioning are cut into random P×P patches at SHARED origins so they
+        stay aligned; each patch is conditioned on cond_high = [mean_hr | img_lr_hr
+        | global_lr] plus a global positional embedding. Returns
+        (D_theta_patches, r_clean_patches, sigma_patches) so the EDM loss weighting
+        matches the per-sample noise level of every patch.
+        """
+        B, C_y, H, W = r.shape
+        C_x = c_low.shape[1]
+
+        if not self._patch_validated:
+            bb = self.model_params["kwargs"]["backbone"]["kwargs"]
+            validate_patched_cond_high(
+                bb["cond_high_channels"], C_x, C_y, 0, stage="diffusion"
+            )
+            self._patch_validated = True
+
+        # img_lr regridded to the HR grid once (spec §1); mean_hr (c_high) is
+        # already at HR from the regressor.
+        c_low_hr = F.interpolate(c_low, size=(H, W), mode="bilinear", align_corners=False)
+        cond_local = torch.cat([c_high, c_low_hr], dim=1)  # [mean_hr | img_lr_hr]
+
+        self.patcher.new_origins(H, W, r.device)
+        cond_high_p, pos_embd = assemble_cond_patches(
+            self.patcher, cond_local, c_low_hr, self.K_pe
+        )
+        x_patches = self.patcher.extract(r_t)
+        r_target = self.patcher.extract(r)
+        sigma_p = sigma_t.repeat(self.patcher.patch_num, 1, 1, 1)
+
+        D_theta = model(
+            x=x_patches, sigma=sigma_p, cond_low=None,
+            cond_high=cond_high_p, pos_embd=pos_embd,
+        )
+        return D_theta, r_target, sigma_p

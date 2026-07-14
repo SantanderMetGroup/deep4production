@@ -101,6 +101,7 @@ class EDMPrecond(nn.Module):
         sigma: torch.Tensor,
         cond_low: torch.Tensor = None,
         cond_high: torch.Tensor = None,
+        pos_embd: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -111,6 +112,9 @@ class EDMPrecond(nn.Module):
             Per-sample noise level.
         cond_low, cond_high : optional conditioning tensors, as accepted by
             the backbone.
+        pos_embd : optional (B, C_PE, H, W) global positional embedding gathered
+            per patch, forwarded verbatim to the backbone for patch-based
+            diffusion (None for the whole-domain path).
 
         Returns
         -------
@@ -131,5 +135,6 @@ class EDMPrecond(nn.Module):
             t=c_noise,
             cond_low=cond_low,
             cond_high=cond_high,
+            pos_embd=pos_embd,
         )
         return c_skip * x + c_out * F_theta

@@ -39,11 +39,17 @@ Author:
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import xarray as xr
 
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.deep.utils import load_model
+from deep4production.deep.models.diffusion.patching import (
+    build_grid_patcher,
+    assemble_cond_patches,
+    run_regressor_patched,
+)
 from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.utils.log import get_logger
 
@@ -108,9 +114,44 @@ class downscaler_custom(downscaler):
                 "`path_regressor` in the YAML or ensure it was saved in the "
                 "training metadata by trainer_resdiff."
             )
-        self.regressor = load_model(path=reg_path, map_location=self.device)
+        self.regressor, reg_meta = load_model(
+            path=reg_path, map_location=self.device, return_metadata=True
+        )
         self.regressor.to(self.device).eval()
         log.info("Regressor loaded from %s", reg_path)
+
+        # ── Optional patched (tiled) inference ────────────────────────────────
+        # Two independent patchers, each reconstructed from the geometry stored at
+        # training: `diff_patcher` from THIS run's metadata (diffusion stage) and
+        # `reg_patcher` from the REGRESSOR checkpoint's metadata (regression stage).
+        # Either may be absent (whole-domain). Both tile the full (H_y, W_y) grid.
+        self.diff_patcher = self.reg_patcher = None
+        self.diff_K = self.reg_K = 0
+        dcfg = self.metadata.get("patching")
+        if dcfg and dcfg.get("enabled", False):
+            if not self.transform_to_2D_y:
+                raise ValueError("patched diffusion inference requires transform_to_2D_y.")
+            self.diff_patcher, self.diff_K = build_grid_patcher(dcfg, (self.H_y, self.W_y))
+            log.info("Patched diffusion: %d patches per sampler step.", self.diff_patcher.patch_num)
+        rcfg = reg_meta.get("patching")
+        if rcfg and rcfg.get("enabled", False):
+            self.reg_patcher, self.reg_K = build_grid_patcher(rcfg, (self.H_y, self.W_y))
+            log.info("Patched regressor: %d patches (tiled mean).", self.reg_patcher.patch_num)
+
+        # ── Residual standardization (inverse of pydataset_resdiff) ─────────────
+        # When the run was trained with standardize_residuals, the diffusion model
+        # outputs residuals in ~unit-variance space; recover physical (normalized
+        # [-1,1]) residuals via r = r_std * std + mean before adding the regressor
+        # mean. Absent for legacy raw-residual runs -> no transform applied.
+        self._res_mean = self._res_std = None
+        rn = self.metadata.get("residual_norm", None)
+        if rn is not None and rn.get("standardize", False):
+            mean = torch.tensor(rn["mean"], dtype=torch.float32, device=self.device)
+            std = torch.tensor(rn["std"], dtype=torch.float32, device=self.device)
+            # Broadcast over (B, C, H, W).
+            self._res_mean = mean.view(1, -1, 1, 1)
+            self._res_std = std.view(1, -1, 1, 1)
+            log.info("Residual standardization active: de-standardizing samples.")
 
         log.info(
             "ResDiff sampler: steps=%d sigma=[%g, %g] rho=%g S_churn=%g",
@@ -201,7 +242,74 @@ class downscaler_custom(downscaler):
         C_y = len(self.vars_y)
         B = c_low.shape[0]
         shape = (B, C_y, self.H_y, self.W_y)
+        if self.diff_patcher is not None:
+            return self._edm_heun_sample_patched(model, c_low, c_high, shape)
         return self._edm_heun_sample(model, c_low, c_high, shape)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _denoise_patched(self, model, x_full, sigma_scalar, cond_high_p, pos_embd_p, B):
+        """One patched denoiser call: patch the full-domain latent, denoise all
+        patches with the fixed conditioning, and fuse back to the full domain
+        (spec §5). `sigma_scalar` is the single noise level of this sampler step,
+        broadcast to every patch."""
+        x_patches = self.diff_patcher.extract(x_full)  # (P_num*B, C, P, P)
+        sigma_pb = sigma_scalar.expand(self.diff_patcher.patch_num * B)
+        D_patches = model(
+            x_patches, sigma_pb, cond_low=None,
+            cond_high=cond_high_p, pos_embd=pos_embd_p,
+        )
+        return self.diff_patcher.fuse(D_patches)  # (B, C, H, W)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    @torch.inference_mode()
+    def _edm_heun_sample_patched(self, model, cond_low, cond_high, shape):
+        """
+        Patch-based EDM Heun sampler (spec §5). The conditioning patches and the
+        global positional embedding are built ONCE (they do not change across
+        steps); only the latent residual is re-patched → denoised → fused every
+        step, so cross-patch coherence is enforced at each iteration while the
+        churn noise is re-injected at full strength on the whole field.
+        """
+        sigmas = self._sigmas()
+        B = shape[0]
+
+        # Build the fixed per-patch conditioning once (spec §2): local crops of
+        # [mean_hr | img_lr_hr] + global_lr thumbnail, plus the global PE.
+        c_low_hr = F.interpolate(
+            cond_low, size=(self.H_y, self.W_y), mode="bilinear", align_corners=False
+        )
+        cond_local = torch.cat([cond_high, c_low_hr], dim=1)  # [mean_hr | img_lr_hr]
+        self.diff_patcher.new_origins(self.H_y, self.W_y, self.device)  # no-op (grid)
+        cond_high_p, pos_embd_p = assemble_cond_patches(
+            self.diff_patcher, cond_local, c_low_hr, self.diff_K
+        )
+
+        x = torch.randn(shape, device=self.device) * sigmas[0]
+        for i in range(self.num_steps):
+            sigma_cur, sigma_next = sigmas[i], sigmas[i + 1]
+            gamma = (
+                min(self.S_churn / self.num_steps, 2**0.5 - 1)
+                if self.S_min <= sigma_cur <= self.S_max
+                else 0.0
+            )
+            sigma_hat = sigma_cur * (1.0 + gamma)
+            if gamma > 0:
+                x = x + (sigma_hat**2 - sigma_cur**2).sqrt() * self.S_noise * torch.randn_like(x)
+
+            denoised = self._denoise_patched(model, x, sigma_hat, cond_high_p, pos_embd_p, B)
+            d_cur = (x - denoised) / sigma_hat
+            x_next = x + (sigma_next - sigma_hat) * d_cur
+
+            if sigma_next > 0:
+                denoised_next = self._denoise_patched(
+                    model, x_next, sigma_next, cond_high_p, pos_embd_p, B
+                )
+                d_next = (x_next - denoised_next) / sigma_next
+                x_next = x + (sigma_next - sigma_hat) * 0.5 * (d_cur + d_next)
+
+            x = x_next
+
+        return x
 
     # ─────────────────────────────────────────────────────────────────────────
     def downscale(
@@ -268,19 +376,46 @@ class downscaler_custom(downscaler):
             if self.norm_x is not None:
                 c_low = self.norm_x(c_low)
 
+            # ── High-res forcing (orography) fed to the REGRESSOR as cond_high ──
+            # Distinct from `c_high` below, which is the regressor's MEAN output
+            # (the diffusion model's cond_high). Preprocessed per date batch and
+            # normalized with norm_f, mirroring pydataset_resdiff's residual build.
+            # None when the regressor was trained without forcings.
+            reg_cond_high = None
+            if self.forcing_data is not None:
+                reg_cond_high = self._stack_to_device(
+                    [self._preprocess_forcing_date(d) for d in batch_dates]
+                )  # (B, C_f, H_y, W_y)
+                if self.norm_f is not None:
+                    reg_cond_high = self.norm_f(reg_cond_high)
+
             # ── Deterministic mean (shared across members) ───────────────────
             # The regressor is a SongUNet used deterministically: x is always
             # zeros (no noisy input), t is always zeros (no noise level), and
-            # the actual low-res conditioning enters via cond_low.
+            # the actual low-res conditioning enters via cond_low (plus the
+            # optional high-res forcing reg_cond_high, e.g. orography).
             with torch.inference_mode(), self._amp_ctx():
                 B_cur = c_low.shape[0]
-                x_dummy = torch.zeros(
-                    B_cur, len(self.vars_y), self.H_y, self.W_y, device=self.device
-                )
-                t_dummy = torch.zeros(B_cur, device=self.device)
-                c_high = self.regressor(
-                    x=x_dummy, t=t_dummy, cond_low=c_low
-                )  # (B, C_y, H_y, W_y)
+                C_y = len(self.vars_y)
+                if self.reg_patcher is not None:
+                    # Tiled regressor mean: upsample cond_low to HR, then
+                    # apply→forward→fuse over the regressor's own patch grid.
+                    c_low_hr = F.interpolate(
+                        c_low, size=(self.H_y, self.W_y),
+                        mode="bilinear", align_corners=False,
+                    )
+                    c_high = run_regressor_patched(
+                        self.regressor, c_low_hr, reg_cond_high,
+                        self.reg_patcher, self.reg_K, C_y,
+                    )  # (B, C_y, H_y, W_y)
+                else:
+                    x_dummy = torch.zeros(
+                        B_cur, C_y, self.H_y, self.W_y, device=self.device
+                    )
+                    t_dummy = torch.zeros(B_cur, device=self.device)
+                    c_high = self.regressor(
+                        x=x_dummy, t=t_dummy, cond_low=c_low, cond_high=reg_cond_high
+                    )  # (B, C_y, H_y, W_y)
 
             # ── Stochastic residual: one draw per member ─────────────────────
             for member in range(M):
@@ -288,6 +423,12 @@ class downscaler_custom(downscaler):
                     r_hat = self.sample(
                         c_low=c_low, c_high=c_high, model=model
                     )  # (B, C_y, H_y, W_y)
+                # Invert the per-channel residual standardization applied at
+                # training (no-op for legacy raw-residual runs). c_high (regressor
+                # mean) is already in normalized [-1,1] space, so the recovered
+                # residual must be too before they are summed.
+                if self._res_std is not None:
+                    r_hat = r_hat * self._res_std + self._res_mean
                 # Combined prediction in normalised y-space → denormalize on GPU
                 # so it arrives in operator-applied space, which is what
                 # _postprocess_numpy expects (operator inverse runs on CPU).
