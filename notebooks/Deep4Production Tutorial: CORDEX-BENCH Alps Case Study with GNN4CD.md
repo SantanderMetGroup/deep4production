@@ -76,14 +76,12 @@ run_ID: gnn4cd_asym
 output_dir: .
 overwrite: true
 
-
 ##### TRAINER + GRAPH CACHE #####
 d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_gnn4cd
   kwargs:
     edge_index_path: ./gnn4cd_asym/outputs/aux_files/edge_index.pt   # built on first run
-
 
 ##### TRAINING DATA CONFIGURATION #####
 data:
@@ -111,13 +109,11 @@ data:
     operator:
       pr: log1p                # y → log(1 + y); inverse applied at inference
 
-
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 1                # graph is static → one full graph per step
   shuffle: false
   num_workers: 0
-
 
 ##### GRAPH CONSTRUCTION #####
 # Built on first run from the lat/lon coords of the two zarrs and cached at
@@ -133,7 +129,6 @@ graph:
     # node (self excluded), bidirectional edges. 4 here is a faster departure.
     nearest_neighbours_high_to_high: 8
     nearest_neighbours_low_to_high: 4
-
 
 ##### TRAINING CONFIGURATION #####
 model_info:
@@ -184,8 +179,6 @@ d4p-train ./gnn4cd_asym/train.yaml
 > 💡 **First-run cost.** On the very first run the trainer builds the graph (kNN search over the predictand and predictor lat-lon coordinates) and writes it to `./gnn4cd_asym/outputs/aux_files/edge_index.pt`. Subsequent runs (resuming training, hyperparameter sweeps) reuse this file — only the kNN search is cached, so changing `nearest_neighbours_*` *will* trigger a rebuild.
 
 Below is an example of training output:
-
-![d4p-train-1](./images/d4p-train-output.png)
 
 ______________________________________________________________________
 
@@ -253,11 +246,7 @@ d4p-downscale ./gnn4cd_asym/inference.yaml
 
 Below is an example of inference output:
 
-![d4p-downscale-1](./images/d4p-downscale-output.png)
-
 The downscaler automatically applies the inverse `log1p` operator (`expm1`) before saving, so predictions are written in physical units (mm/day):
-
-![d4p-downscale-2](./images/d4p-downscale-pred.png)
 
 > 🔁 **Cross-domain inference.** Because the network only depends on local graph connectivity (not on a fixed `(H, W)` raster), the same trained `gnn4cd_asym_best.pt` can be evaluated on a different domain by pointing `graph.data_high` / `graph.data_low` at a different pair of zarrs. This is the GNN counterpart of the "drop-in retraining" cost that CNN-based downscalers usually pay.
 
@@ -300,8 +289,6 @@ kwargs.update({"data": [tgt[var], prd[var]]})
 
 fig = plot_date_from_1D_spatial_field(**kwargs)
 ```
-
-![figure](./images/gnn4cd_1980-01-01.png)
 
 ______________________________________________________________________
 

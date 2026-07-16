@@ -37,6 +37,11 @@ d4p_pydataset:
     add_pred_mean: true
     # Also feed the raw low-res predictors to the UNet as cond_low.
     add_context_lowres: true
+    # Per-channel standardize the residual target to ~unit variance so the
+    # diffusion sees data with sigma_data = 1 (the CorrDiff / EDM convention).
+    # The standardization stats are persisted to the run metadata and inverted
+    # by the downscaler at inference. Must match sigma_data below (= 1).
+    standardize_residuals: true
     # Residuals cache (written once on first run, reused thereafter). Keep it
     # inside this run's own outputs/aux_files/ so everything lives under id_dir.
     residuals:
@@ -93,7 +98,7 @@ model_info:
     module: deep4production.deep.loss
     kwargs:
       ignore_nans: false
-      sigma_data: 0.5
+      sigma_data: 1             # standardized residuals → unit variance
 
   # ── Architecture ─────────────────────────────────────────────────────────────
   # EDM preconditioner wrapping the shared SongUNet backbone. The factory
@@ -105,7 +110,7 @@ model_info:
     name: build_edm_model
     module: deep4production.deep.models.diffusion.edm_precond
     kwargs:
-      sigma_data: 0.5             # EDM data sigma (must match loss.sigma_data)
+      sigma_data: 1               # EDM data sigma (must match loss.sigma_data)
       backbone:
         module: deep4production.deep.models.unet.song_unet
         name: SongUNet

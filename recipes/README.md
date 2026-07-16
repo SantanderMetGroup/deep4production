@@ -6,15 +6,13 @@ ______________________________________________________________________
 
 ## Run-directory convention
 
-Every run lives in **one self-contained directory** named after its `run_ID`. That directory (`id_dir = output_dir/run_ID`) holds the run's recipes and launch scripts, and everything the run *generates* goes under its `outputs/` subdirectory:
+Every run lives in **one self-contained directory** named after its `run_ID`. That directory (`id_dir = output_dir/run_ID`) holds the run's recipes, and everything the run *generates* goes under its `outputs/` subdirectory:
 
 ```
 <output_dir>/
   <run_ID>/                 # = id_dir — the run directory
     train.yaml              # d4p-train recipe
     inference.yaml          # d4p-downscale recipe
-    train.sh                # launches d4p-train ./train.yaml
-    inference.sh            # launches d4p-downscale ./inference.yaml
     outputs/                # everything the run generates
       models/               #   checkpoints (.pt, metadata embedded)
       aux_files/            #   caches (residuals, graphs, Gamma params, ...)
@@ -26,7 +24,7 @@ Both `run_ID` and `output_dir` are **required** in every `train.yaml` and `infer
 
 **A second configuration = a second directory.** To try a variant, create another sibling directory with its own `run_ID` and its own `train.yaml` / `inference.yaml` (e.g. `RESDIFF_v2/`).
 
-Each model directory below is a ready-to-copy template. Copy `recipes/<MODEL>/` into your project, edit the paths, and run its `train.sh` / `inference.sh`.
+Each model directory below is a ready-to-copy template. Copy `recipes/<MODEL>/` into your project, edit the paths, and run `d4p-train ./train.yaml` / `d4p-downscale ./inference.yaml` from inside it.
 
 ______________________________________________________________________
 
@@ -38,7 +36,7 @@ ______________________________________________________________________
 
 ## Model recipe directories
 
-Each entry below is one model directory containing `train.yaml`, `inference.yaml`, `train.sh`, and `inference.sh`.
+Each entry below is one model directory containing `train.yaml` and `inference.yaml`.
 
 ### DeepESD — MSE loss
 
@@ -108,7 +106,7 @@ relies on* — e.g. comparing a univariate vs a multivariate emulator, or perfec
 (MSE/asym DeepESD, SongUNet); distributional-loss checkpoints (BerGamma/Gaussian)
 are refused.
 
-An `explain.yaml` (and a matching `explain.sh`) lives alongside `train.yaml` /
+An `explain.yaml` lives alongside `train.yaml` /
 `inference.yaml` inside the model's run directory, reusing the same
 `run_ID` + `output_dir`, so `d4p-explain ./explain.yaml` reads the checkpoint
 from `id_dir/outputs/models/` and writes maps to `id_dir/outputs/xai/`.

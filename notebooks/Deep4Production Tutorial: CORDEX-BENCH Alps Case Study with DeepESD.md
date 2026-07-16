@@ -48,8 +48,6 @@ example/
 ├── deepesd/ # One self-contained run directory (id_dir = output_dir/run_ID).
 │ ├── train.yaml # Recipe for d4p-train ./deepesd/train.yaml
 │ ├── inference.yaml # Recipe for d4p-downscale ./deepesd/inference.yaml
-│ ├── train.sh # Bash launcher for training
-│ ├── inference.sh # Bash launcher for inference
 │ └── outputs/ # Everything this run generates (created at training).
 │   ├── models/ # Trained models (.pt files, metadata embedded)
 │   ├── predictions/ # Model predictions (.nc files)
@@ -238,11 +236,7 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
 ```
 
 The output should look like this for the predictors:
-![d4p-inspect](./images/d4p-inspect-predictors.png)
-
 ... and like this for the predictands:
-![d4p-inspect-2](./images/d4p-inspect-predictands.png)
-
 ______________________________________________________________________
 
 ## 6. Train a Model with `d4p-train`
@@ -317,7 +311,6 @@ run_ID: deepesd
 output_dir: .
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
-
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
@@ -356,7 +349,6 @@ data:
   #     path_reference: ./AI_ready_datasets/files/RCM_1961-1980.zarr
   #     orog: max
 
-
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 64
@@ -366,7 +358,6 @@ dataloader:
   # Default 2 (PyTorch built-in). Increase to ~4 for high-throughput training
   # on slow filesystems; ignored when num_workers=0.
   # prefetch_factor: 2
-
 
 ##### MODEL CONFIGURATION #####
 model_info:
@@ -406,9 +397,6 @@ d4p-train ./deepesd/train.yaml
 ```
 
 Below is an example of training output:
-![d4p-train-1](./images/d4p-train-output.png)
-![d4p-train-2](./images/d4p-train-output-v2.png)
-
 ______________________________________________________________________
 
 ### Enabling MLflow in `deep4production`
@@ -587,15 +575,9 @@ d4p-downscale ./deepesd/inference.yaml
 ```
 
 Below is an example of inference output:
-![d4p-downscale-1](./images/d4p-downscale-output.png)
-
 Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
 
-![d4p-downscale-2](./images/d4p-downscale-pred.png)
-
 ... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
-![d4p-downscale-3](./images/d4p-downscale-pred-template.png)
-
 ______________________________________________________________________
 
 ## 8. Visualization
@@ -645,8 +627,6 @@ kwargs.update({"data": [tgt[var], prd[var]]})
 # Call the plotting function with the defined parameters
 fig = plot_date_from_1D_spatial_field(**kwargs)
 ```
-
-![figure](./images/deepesd_1980-01-01.png)
 
 ______________________________________________________________________
 

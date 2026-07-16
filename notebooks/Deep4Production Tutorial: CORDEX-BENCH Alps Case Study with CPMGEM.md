@@ -76,7 +76,6 @@ d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_cpmgem
 
-
 ##### TRAINING DATA CONFIGURATION #####
 data:
   load_in_memory: true
@@ -115,13 +114,11 @@ data:
       default: minmax_neg1_1   # 2*(x-min)/(max-min) - 1
     transform_to_2D: True
 
-
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 16
   shuffle: true
   num_workers: 4
-
 
 ##### MODEL CONFIGURATION #####
 model_info:
@@ -192,8 +189,6 @@ d4p-train ./cpmgem/train.yaml
 
 Below is an example of training output:
 
-![d4p-train-1](./images/d4p-train-output.png)
-
 ______________________________________________________________________
 
 ### Enabling MLflow
@@ -214,7 +209,6 @@ The inference YAML is short — the heavy lifting (model architecture, noise sch
 run_ID: cpmgem
 output_dir: .
 
-
 ##### INPUT DATA #####
 input_data:
   paths:
@@ -222,17 +216,14 @@ input_data:
   years: [1980]
   load_in_memory: true
 
-
 ##### ENSEMBLE SIZE #####
 # Each reverse-diffusion trajectory draws fresh Gaussian noise, so
 # ensemble_size > 1 produces independent realisations — useful for
 # uncertainty estimation.
 ensemble_size: 5
 
-
 ##### MODEL CHECKPOINT #####
 model_file: CPMGEM_best.pt   # relative to id_dir/outputs/models/
-
 
 ##### DOWNSCALER CLASS #####
 # CPMGEM-specific subclass: replaces the deterministic forward pass with a
@@ -254,13 +245,11 @@ d4p_downscaler:
       # beta_max: 20.0
       # t_min: 1.0e-5
 
-
 ##### OUTPUT #####
 saving_info:
   file: 1980.nc
   template: null
   formatting: null
-
 
 ##### INFERENCE RUNTIME #####
 # Forwarded as **kwargs to downscaler.downscale().
@@ -278,13 +267,9 @@ d4p-downscale ./cpmgem/inference.yaml
 
 Below is an example of inference output:
 
-![d4p-downscale-1](./images/d4p-downscale-output.png)
-
 > ⚠️ **Cost note.** Inference cost is approximately `ensemble_size × num_steps × cost(forward UNet)`. With the paper defaults (5 members × 1000 steps) one year takes substantially longer than with DeepESD. For quick smoke tests, set `num_steps: 50` and `ensemble_size: 1`.
 
 The output NetCDF has shape `(member, time, point)` — one extra dimension compared to deterministic models. Aggregating across `member` gives the ensemble mean; the spread captures forecast uncertainty:
-
-![d4p-downscale-2](./images/d4p-downscale-pred.png)
 
 ______________________________________________________________________
 
@@ -327,8 +312,6 @@ kwargs.update({"data": [tgt[var], prd[var]]})
 
 fig = plot_date_from_1D_spatial_field(**kwargs)
 ```
-
-![figure](./images/cpmgem_1980-01-01.png)
 
 ### Going beyond a single member
 

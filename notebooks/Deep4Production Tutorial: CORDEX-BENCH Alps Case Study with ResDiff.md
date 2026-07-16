@@ -74,14 +74,12 @@ run_ID: song_unet_det
 output_dir: .
 overwrite: true
 
-
 ##### TRAINER SELECTION #####
 # Deterministic SongUNet trainer: bypasses diffusion by setting x_in=0, t=0
 # and conditioning the UNet exclusively through cond_low (the low-res predictor).
 d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_song_unet_det
-
 
 ##### TRAINING DATA CONFIGURATION #####
 data:
@@ -114,13 +112,11 @@ data:
       default: std
     transform_to_2D: true
 
-
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 16
   shuffle: true
   num_workers: 1
-
 
 ##### MODEL CONFIGURATION #####
 model_info:
@@ -172,8 +168,6 @@ The best checkpoint is written to `./song_unet_det/outputs/models/SongUNet_det_b
 
 Below is an example of training output:
 
-![d4p-train-regressor](./images/d4p-train-output-regressor.png)
-
 ### 6.2. Step 2 — Train the residual diffusion model
 
 The residual stage adds three things on top of the regressor recipe:
@@ -192,7 +186,6 @@ run_ID: resdiff
 output_dir: .
 overwrite: true
 
-
 ##### TRAINER SELECTION #####
 # EDM residual-diffusion trainer (CorrDiff-style, Mardani et al. 2023).
 # Predicts the residual r = y - mean_pred where mean_pred is the output of a
@@ -200,7 +193,6 @@ overwrite: true
 d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_resdiff
-
 
 ##### CUSTOM PYDATASET #####
 # Residual pydataset: loads predictors + predictands, runs the deterministic
@@ -217,7 +209,6 @@ d4p_pydataset:
     residuals:
       path: ./resdiff/outputs/aux_files/residuals.zarr
       template: ./templates/pr_template.nc
-
 
 ##### TRAINING DATA CONFIGURATION #####
 data:
@@ -250,13 +241,11 @@ data:
       default: std
     transform_to_2D: True
 
-
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 16
   shuffle: true
   num_workers: 4
-
 
 ##### MODEL CONFIGURATION #####
 model_info:
@@ -335,8 +324,6 @@ d4p-train ./resdiff/train.yaml
 
 Below is an example of training output:
 
-![d4p-train-resdiff](./images/d4p-train-output-resdiff.png)
-
 ______________________________________________________________________
 
 ### Enabling MLflow
@@ -362,7 +349,6 @@ The ResDiff downscaler:
 run_ID: resdiff
 output_dir: .
 
-
 ##### INPUT DATA #####
 input_data:
   paths:
@@ -370,14 +356,12 @@ input_data:
   years: [1980]
   load_in_memory: true
 
-
 ##### ENSEMBLE SIZE #####
 # CorrDiff is stochastic — each reverse-diffusion trajectory draws fresh
 # Gaussian noise, so ensemble_size > 1 produces independent realisations.
 ensemble_size: 5
 
 graph: null
-
 
 ##### MODEL CHECKPOINT #####
 # Metadata inside the checkpoint holds:
@@ -387,7 +371,6 @@ graph: null
 # load_model() re-invokes the factory, so the preconditioner + backbone are
 # reconstructed identically at inference without any extra wiring here.
 model_file: ResDiff_best.pt
-
 
 ##### DOWNSCALER CLASS #####
 d4p_downscaler:
@@ -409,13 +392,11 @@ d4p_downscaler:
       S_max: .inf
       S_noise: 1.0
 
-
 ##### OUTPUT #####
 saving_info:
   file: 1980.nc
   template: null
   formatting: null
-
 
 ##### INFERENCE RUNTIME #####
 # Forwarded as **kwargs to downscaler.downscale().
@@ -433,13 +414,9 @@ d4p-downscale ./resdiff/inference.yaml
 
 Below is an example of inference output:
 
-![d4p-downscale-1](./images/d4p-downscale-output.png)
-
 > ⚡ **Why ResDiff is faster than CPMGEM at inference.** CPMGEM uses ~1000 reverse-SDE steps; the EDM Heun sampler typically needs only ~18, because the regressor already provides the smooth large-scale signal and only the small-scale residual structure needs to be sampled. The total cost per ensemble member is roughly `1 × cost(regressor) + 18 × cost(diffusion UNet)`.
 
 The output NetCDF has shape `(member, time, point)` — same layout as CPMGEM:
-
-![d4p-downscale-2](./images/d4p-downscale-pred.png)
 
 ______________________________________________________________________
 
@@ -480,8 +457,6 @@ kwargs.update({"data": [tgt[var], prd[var]]})
 
 fig = plot_date_from_1D_spatial_field(**kwargs)
 ```
-
-![figure](./images/resdiff_1980-01-01.png)
 
 ### Decomposing the prediction
 

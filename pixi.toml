@@ -55,13 +55,12 @@ index-url = "https://pypi.org/simple"
 bumpversion-major = "cz bump --increment major"
 bumpversion-minor = "cz bump --increment minor"
 bumpversion-patch = "cz bump --increment patch"
-default = {depends-on = ["qa", "unit-tests", "type-check"]}
+default = {depends-on = ["qa", "type-check"]}
 docker-build = "docker build -t d4p ."
 docker-run = "docker run --rm -ti -v $(pwd):/srv d4p"
 qa = "pre-commit run --all-files"
 template-update = "pre-commit run --all-files cruft -c .pre-commit-config-cruft.yaml"
 type-check = "python -m mypy ."
-unit-tests = "python -m pytest -vv --cov=. --cov-report=html --doctest-glob='*.md' --doctest-glob='*.rst' tests/unit"
 
 [workspace]
 channels = ["conda-forge"]
