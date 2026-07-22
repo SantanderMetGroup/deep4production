@@ -29,6 +29,17 @@ ensemble_size: 1
 graph:
 
 
+##### PHYSICAL BOUNDS (optional) #####
+# Per-variable clamp applied in physical space at the end of postprocessing
+# (after the deoperator), for variables with hard physical limits the model can
+# overshoot. Each entry is [min, max]; use null on either side for a one-sided
+# clamp. Variable names must match vars_y. A per-file summary of how many cells
+# were clamped (and the raw min/max) is logged. Omit the block to disable.
+# physical_bounds:
+#   hurs: [0, 100]        # relative humidity (%)
+#   sfcWind: [0, null]    # wind speed: non-negative, no upper bound
+
+
 ##### MODEL CHECKPOINT #####
 model_file: SongUNet_det_asym_best.pt   # relative to id_dir/outputs/models/
 

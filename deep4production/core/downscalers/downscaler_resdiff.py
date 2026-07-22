@@ -80,6 +80,8 @@ class downscaler_custom(downscaler):
         forcing_data=None,
         sampling_params=None,
         path_regressor=None,
+        physical_bounds=None,
+        unit_conversion=None,
     ):
         super().__init__(
             id_dir=id_dir,
@@ -89,6 +91,8 @@ class downscaler_custom(downscaler):
             ensemble_size=ensemble_size,
             graph=graph,
             forcing_data=forcing_data,
+            physical_bounds=physical_bounds,
+            unit_conversion=unit_conversion,
         )
 
         # ── Sampler parameters ────────────────────────────────────────────────
@@ -466,5 +470,7 @@ class downscaler_custom(downscaler):
             ds_out = self.formatting_func(ds_out, **self.formatting_kwargs)
         if return_pred:
             return ds_out
+        ds_out = self._stamp_units(ds_out)
         log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds_out)
         ds_out.to_netcdf(self.output_path)
+        self._log_clip_stats()

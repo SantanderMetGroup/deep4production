@@ -46,6 +46,8 @@ class downscaler_custom(downscaler):
         ensemble_size=1,
         graph=None,
         forcing_data=None,
+        physical_bounds=None,
+        unit_conversion=None,
     ):
         super().__init__(
             id_dir=id_dir,
@@ -55,6 +57,8 @@ class downscaler_custom(downscaler):
             ensemble_size=ensemble_size,
             graph=graph,
             forcing_data=forcing_data,
+            physical_bounds=physical_bounds,
+            unit_conversion=unit_conversion,
         )
 
         # --- Optional CorrDiff-style patched (tiled) inference ---------------
@@ -214,5 +218,7 @@ class downscaler_custom(downscaler):
             ds = self.formatting_func(ds, **self.formatting_kwargs)
         if return_pred:
             return ds
+        ds = self._stamp_units(ds)
         log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds)
         ds.to_netcdf(self.output_path)
+        self._log_clip_stats()

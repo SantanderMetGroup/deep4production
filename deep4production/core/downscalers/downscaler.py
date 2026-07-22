@@ -15,6 +15,7 @@ from deep4production.utils.temporal import (
     get_pairs,
 )
 from deep4production.utils.zarr import open_zarr_store
+from deep4production.utils.units import d4dunits
 from deep4production.utils.log import get_logger
 from deep4production.utils.paths import models_dir, aux_dir, predictions_dir
 
@@ -60,9 +61,21 @@ class downscaler:
         ensemble_size=1,
         graph=None,
         forcing_data=None,
+        physical_bounds=None,
+        unit_conversion=None,
     ):
         """
         Initializes the D4P Downscaler.
+
+        physical_bounds (dict, optional): Per-variable physical clamp applied in
+            final physical space (after the deoperator), e.g. ``{"hurs": [0, 100]}``.
+            Either bound may be ``null`` for a one-sided clamp. Absent → no-op.
+        unit_conversion (dict, optional): Per-variable physical unit conversion
+            applied to predictions at write-time, e.g. ``{"pr": {"name":
+            "mm_day_to_flux"}}``. Mirrors the dataset-build ``unit_conversion``
+            block (resolved against :class:`deep4production.utils.units.d4dunits`);
+            the returned units string is written into the output ``units``
+            attribute. Absent → no-op.
         """
         log.info("Starting d4p downscaler")
         # --- SELF PARAMETERS ---
@@ -204,6 +217,24 @@ class downscaler:
         # moved to GPU-side InputNormalizer modules below.
         self._ops_x = self._build_operator_pipeline(self.operator_x, self.vars_x)
         self._ops_y = self._build_operator_pipeline(self.operator_y, self.vars_y)
+
+        # --- Physical bounds (per-variable clamp in physical space) ---------
+        # Applied at the END of _postprocess_numpy, after the deoperator, so the
+        # bounds are interpreted in true physical units. Resolved once here into
+        # {channel: (lo, hi, var)} against vars_y; keys absent from vars_y are
+        # warned and skipped. None when no (usable) bounds are configured.
+        self._bounds_y = self._resolve_physical_bounds(physical_bounds)
+        self._clip_stats = {}
+
+        # --- Unit conversion (per-variable, applied at write-time) -----------
+        # Resolved once into {channel: (conv_name, kwargs, var)} against vars_y.
+        # Applied in _postprocess_numpy AFTER the physical-bounds clamp; the
+        # target-unit string returned by each conversion is recorded in
+        # self._out_units and stamped onto the output variable's `units`
+        # attribute by _stamp_units. None when nothing (usable) is configured.
+        self._units_y = self._resolve_unit_conversion(unit_conversion)
+        self._out_units = {}
+
         if forcing_data is not None:
             self._ops_f = self._build_operator_pipeline(self.operator_f, self.vars_f)
         else:
@@ -587,7 +618,140 @@ class downscaler:
             for c, fn in enumerate(self._ops_y):
                 if fn is not None:
                     data[:, c, :] = fn(data[:, c, :], back=True)
+        # Physical-space clamp (e.g. hurs ∈ [0, 100]) — after the deoperator.
+        if self._bounds_y is not None:
+            self._apply_physical_bounds(data)
+        # Per-variable unit conversion (e.g. pr mm/day -> kg m-2 s-1) — LAST, so
+        # clamping happens in the model's physical units before rescaling.
+        if self._units_y is not None:
+            self._apply_unit_conversion(data)
         return data
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _resolve_physical_bounds(self, physical_bounds):
+        """
+        Resolves a ``{var: [lo, hi]}`` config into ``{channel: (lo, hi, var)}``
+        aligned to ``self.vars_y``. A ``null`` bound becomes ``-inf`` / ``+inf``
+        (one-sided clamp). Keys not present in ``vars_y`` are warned and skipped.
+        Returns ``None`` when nothing usable is configured (clamp becomes a no-op).
+        """
+        if not physical_bounds:
+            return None
+        resolved = {}
+        for var, bounds in physical_bounds.items():
+            if var not in self.vars_y:
+                log.warning(
+                    "physical_bounds: '%s' is not an output variable (vars_y=%s); "
+                    "skipping.",
+                    var,
+                    self.vars_y,
+                )
+                continue
+            lo, hi = bounds
+            lo = -np.inf if lo is None else float(lo)
+            hi = np.inf if hi is None else float(hi)
+            c = self.vars_y.index(var)
+            resolved[c] = (lo, hi, var)
+            log.info("physical_bounds: clamping '%s' to [%s, %s].", var, lo, hi)
+        return resolved or None
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _apply_physical_bounds(self, data: np.ndarray) -> None:
+        """
+        Clamps bounded channels of ``data`` in place and accumulates per-variable
+        violation statistics into ``self._clip_stats`` (flushed by
+        ``_log_clip_stats`` once the output file is written).
+        """
+        for c, (lo, hi, var) in self._bounds_y.items():
+            ch = data[:, c, :]
+            st = self._clip_stats.setdefault(
+                var, {"clipped": 0, "total": 0, "min": np.inf, "max": -np.inf}
+            )
+            st["clipped"] += int(np.count_nonzero((ch < lo) | (ch > hi)))
+            st["total"] += ch.size
+            st["min"] = min(st["min"], float(ch.min()))
+            st["max"] = max(st["max"], float(ch.max()))
+            data[:, c, :] = np.clip(ch, lo, hi)
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _log_clip_stats(self) -> None:
+        """
+        Emits a one-line-per-variable summary of physical-bounds clamping for the
+        current output file, then resets the accumulator. Called after ``to_netcdf``.
+        """
+        for var, st in self._clip_stats.items():
+            pct = 100.0 * st["clipped"] / max(st["total"], 1)
+            if st["clipped"] > 0:
+                log.warning(
+                    "physical_bounds — %s: %.3f%% cells clamped "
+                    "(raw min=%.4g, max=%.4g).",
+                    var,
+                    pct,
+                    st["min"],
+                    st["max"],
+                )
+            else:
+                log.info(
+                    "physical_bounds — %s: no violations (raw min=%.4g, max=%.4g).",
+                    var,
+                    st["min"],
+                    st["max"],
+                )
+        self._clip_stats = {}
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _resolve_unit_conversion(self, unit_conversion):
+        """
+        Resolves a ``{var: {name: ..., **kwargs}}`` config into
+        ``{channel: (conv_name, kwargs, var)}`` aligned to ``self.vars_y``. Keys
+        not present in ``vars_y`` are warned and skipped. Returns ``None`` when
+        nothing usable is configured (conversion becomes a no-op).
+        """
+        if not unit_conversion:
+            return None
+        resolved = {}
+        for var, conv in unit_conversion.items():
+            if var not in self.vars_y:
+                log.warning(
+                    "unit_conversion: '%s' is not an output variable (vars_y=%s); "
+                    "skipping.",
+                    var,
+                    self.vars_y,
+                )
+                continue
+            conv_name = conv["name"]
+            kwargs_conv = {k: v for k, v in conv.items() if k != "name"}
+            c = self.vars_y.index(var)
+            resolved[c] = (conv_name, kwargs_conv, var)
+            log.info("unit_conversion: '%s' via '%s'.", var, conv_name)
+        return resolved or None
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _apply_unit_conversion(self, data: np.ndarray) -> None:
+        """
+        Applies the resolved per-channel unit conversion to ``data`` in place and
+        records each converted variable's target-unit string in
+        ``self._out_units`` (stamped onto the output by ``_stamp_units``).
+        """
+        for c, (conv_name, kwargs_conv, var) in self._units_y.items():
+            converted, target_units = getattr(d4dunits(data[:, c, :]), conv_name)(
+                **kwargs_conv
+            )
+            data[:, c, :] = converted
+            self._out_units[var] = target_units
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _stamp_units(self, ds):
+        """
+        Writes the target ``units`` recorded during unit conversion onto the
+        matching output variables' attributes, so the prediction NetCDF is
+        self-describing (and matches the reference units). No-op when no
+        conversion ran. Returns ``ds`` for call-site convenience.
+        """
+        for var, units in self._out_units.items():
+            if var in ds.data_vars:
+                ds[var].attrs["units"] = units
+        return ds
 
     # ---------------------------------------------------------------------------------------------------------------------<
     def postprocess(
@@ -753,5 +917,7 @@ class downscaler:
             ds = self.formatting_func(ds, **self.formatting_kwargs)
         if return_pred:
             return ds
+        ds = self._stamp_units(ds)
         log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds)
         ds.to_netcdf(self.output_path)
+        self._log_clip_stats()

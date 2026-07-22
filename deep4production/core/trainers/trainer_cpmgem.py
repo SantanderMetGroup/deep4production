@@ -160,7 +160,11 @@ class trainer_custom(trainer):
         # sentinel when no forcings are configured; only a real tensor is routed
         # to the model. This keeps recipes without forcings (cond_high_channels=0)
         # working unchanged, where cond_high stays None.
-        use_cond_high = not isinstance(f, str)
+        # NOTE: test for a tensor rather than for the sentinel -- the DataLoader's
+        # default collate turns the per-sample "N/A" strings into a LIST of B
+        # strings, so ``isinstance(f, str)`` is False for a batch and the code
+        # would fall through to ``f.to(device)`` on a list.
+        use_cond_high = torch.is_tensor(f)
         if use_cond_high:
             f = f.to(device, non_blocking=non_blocking)
 

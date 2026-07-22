@@ -863,12 +863,24 @@ class trainer:
                 )
                 epoch_init = epoch_ref = epoch = checkpoint["epoch"]
                 step_ref = global_step = checkpoint["global_step"]
-                train_losses = checkpoint.get("train_losses", [])
-                valid_losses = checkpoint.get("valid_losses", [])
-                valid_losses_arr = np.array(valid_losses)
-                best_val_loss = np.min(valid_losses_arr)
-                epoch_best_val_loss = np.where(valid_losses_arr == best_val_loss)[0][0]
-                early_stopping_counter = epoch - epoch_best_val_loss
+                # ``save_model`` stores only the last 100 entries, and writes
+                # ``None`` (not []) for the validation losses when there is no
+                # validation set, so normalize both to lists here.
+                train_losses = checkpoint.get("train_losses") or []
+                valid_losses = checkpoint.get("valid_losses") or []
+                if valid_losses:
+                    valid_losses_arr = np.array(valid_losses)
+                    best_val_loss = float(np.min(valid_losses_arr))
+                    # The index of the minimum is a position INSIDE the stored
+                    # window, not an absolute epoch number. The early-stopping
+                    # counter is how many epochs separate the best entry from the
+                    # end of the window; computing it as ``epoch - argmin`` makes
+                    # the counter blow up once training passes 100 epochs (e.g.
+                    # 228 - 99 = 129) and early stopping fires on the very first
+                    # resumed epoch.
+                    early_stopping_counter = (
+                        len(valid_losses_arr) - 1 - int(np.argmin(valid_losses_arr))
+                    )
                 if self._is_main:
                     log.info(
                         "Resume training: checkpoint=%s epoch=%d global_step=%d",

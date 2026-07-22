@@ -54,6 +54,12 @@ def main():
     model_file = config["model_file"]
     saving_info = config["saving_info"]
     forcing_data = config.get("forcing_data", None)
+    # Optional per-variable physical clamp applied in physical space at the end
+    # of postprocessing (e.g. {hurs: [0, 100]}). None → no clamping.
+    physical_bounds = config.get("physical_bounds", None)
+    # Optional per-variable unit conversion applied to predictions at write-time
+    # (e.g. {pr: {name: mm_day_to_flux}}). None → predictions kept as-is.
+    unit_conversion = config.get("unit_conversion", None)
 
     # --- Import downscaler module ----------------------------------
     d4p = config.get("d4p_downscaler", None)
@@ -80,6 +86,8 @@ def main():
         model_file=model_file,
         saving_info=saving_info,
         forcing_data=forcing_data,
+        physical_bounds=physical_bounds,
+        unit_conversion=unit_conversion,
         **kwargs_downscaler,
     )
     downscaler.downscale(**inference_params)

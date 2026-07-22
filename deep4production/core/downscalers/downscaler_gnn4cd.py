@@ -30,6 +30,8 @@ class downscaler_custom(downscaler):
         ensemble_size=1,
         graph=None,
         forcing_data=None,
+        physical_bounds=None,
+        unit_conversion=None,
     ):
         """
         Initializes D4P GNN4CD's downscaler.
@@ -43,6 +45,8 @@ class downscaler_custom(downscaler):
             ensemble_size=ensemble_size,
             graph=graph,
             forcing_data=forcing_data,
+            physical_bounds=physical_bounds,
+            unit_conversion=unit_conversion,
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
