@@ -125,8 +125,8 @@ class pydataset(Dataset):
         # --- Temporal information (intersect X and Y and get indexing info)---
         freq = self.x[0].attrs.get("frequency")
         dates_yaml = get_dates_from_yaml(temporal_period, freq=freq)
-        self.sample_map_x, dates_x = get_sample_map(dates_yaml, self.x)
-        self.sample_map_y, dates_y = get_sample_map(dates_yaml, self.y)
+        self.sample_map_x, dates_x, _ = get_sample_map(dates_yaml, self.x)
+        self.sample_map_y, dates_y, _ = get_sample_map(dates_yaml, self.y)
         dates = sorted(set(dates_x) & set(dates_y))
         self.pairs = get_pairs(dates=dates, freq=freq, num_lagged_x=self.num_lagged_x)
         self.target_dates = list(self.pairs.keys())
@@ -185,7 +185,8 @@ class pydataset(Dataset):
     # -------------------------------------------------------------------------
     @staticmethod
     def _resolve_normalizer_info(
-        normalizer_info_recipe, vars, predictand=False, forcing=False
+        normalizer_info_recipe, vars, predictand=False, forcing=False,
+        operator_info=None,
     ):
         """
         Turn the recipe's ``normalizer:`` block into a fully-resolved dict
@@ -194,6 +195,21 @@ class pydataset(Dataset):
         ``stats_transform`` if an operator was configured, and resolves the
         per-variable method name via ``default`` + per-variable overrides.
 
+        ``operator_info`` is the dict built by ``get_data_info`` /
+        ``get_operator_info`` (``{"operator_func_per_variable": {var: name
+        or None}}``) for the SAME block (predictors/predictands/forcings)
+        this normalizer belongs to. When a variable has an operator
+        configured, its name is copied into
+        ``kwargs_per_var[var]["stats_transform"]`` so that
+        ``InputNormalizer``'s ``minmax_neg1_1`` branch maps the operator-space
+        min/max (not the raw-space min/max) to [-1, 1]. Without this, a
+        monotone operator (e.g. sqrt on pr/hurs) is applied to the data but
+        NOT to the stats used to build the affine normalization — the
+        channel is normalized as if it were still raw, badly ill-conditioning
+        it. This is a bug fix: prior to it, ``stats_transform`` was read by
+        ``InputNormalizer`` but never populated by this function despite the
+        docstring's claim.
+
         This is a static helper used by the trainer; pydataset itself no
         longer applies normalization.
         """
@@ -201,6 +217,11 @@ class pydataset(Dataset):
             return None
         path_reference = normalizer_info_recipe["path_reference"]
         method_default = normalizer_info_recipe.get("default", None)
+        operator_func_per_variable = (
+            operator_info.get("operator_func_per_variable", {})
+            if operator_info is not None
+            else {}
+        )
 
         zarr_file = open_zarr_store(path_reference, fmt="auto")
         kwargs_per_var = {}
@@ -211,6 +232,7 @@ class pydataset(Dataset):
                 "std": float(zarr_file["std"][var_idx]),
                 "min": float(zarr_file["min"][var_idx]),
                 "max": float(zarr_file["max"][var_idx]),
+                "stats_transform": operator_func_per_variable.get(var),
             }
 
         normalizer_func_per_variable = {

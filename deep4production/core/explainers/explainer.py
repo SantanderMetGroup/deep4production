@@ -521,7 +521,7 @@ class Explainer(downscaler):
             attribution carried by each predictor variable (spatial sum of
             ``saliency_percent``); sums to 100% across variables per date.
         """
-        times = np.array([np.datetime64(d) for d in self.target_dates])
+        times = self.target_stamps
         if self.transform_to_2D_x:
             dims = ("time", "var_x", "y_x", "x_x")
             coords = {

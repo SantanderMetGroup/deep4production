@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import xarray as xr
@@ -13,6 +14,9 @@ from deep4production.utils.temporal import (
     get_dates_from_yaml,
     get_sample_map,
     get_pairs,
+    cordex_year_chunks,
+    chunk_time_label,
+    freq_token,
 )
 from deep4production.utils.zarr import open_zarr_store
 from deep4production.utils.units import d4dunits
@@ -94,11 +98,29 @@ class downscaler:
             log.info("Model and metadata loaded from %s", model_path)
 
         # --- OUTPUT PATH ---
+        # Two mutually exclusive layouts:
+        #   legacy — `file`: the whole run in a single .nc (default, unchanged).
+        #   split  — `prefix` + `split`: CORDEX-style, one file per variable per
+        #            aligned time chunk, streamed to disk as each chunk is
+        #            produced so peak memory is one chunk instead of the run.
         self.saving_info = saving_info
+        self.predictions_dir = predictions_dir(id_dir)
+        self.output_path = None
+        self._split = None
         if self.saving_info is not None:
-            file = self.saving_info["file"]
-            self.output_path = f"{predictions_dir(id_dir)}/{file}"
-            log.info("Predictions will be saved at: %s", self.output_path)
+            self._split = self._resolve_split(self.saving_info)
+            if self._split is None:
+                file = self.saving_info["file"]
+                self.output_path = f"{self.predictions_dir}/{file}"
+                log.info("Predictions will be saved at: %s", self.output_path)
+            else:
+                log.info(
+                    "Predictions will be split into chunks of <=%d year(s)%s, "
+                    "under: %s",
+                    self._split["years_per_file"],
+                    ", one file per variable" if self._split["by_variable"] else "",
+                    self.predictions_dir,
+                )
 
         # --- GET INFO FROM METADATA ---
         self.update_self(
@@ -108,11 +130,18 @@ class downscaler:
         )
 
         # --- GET DOWNSCALING DATES ---
-        freq = self.x[0].attrs["frequency"]
+        freq = self.freq = self.x[0].attrs["frequency"]
         dates_yaml = get_dates_from_yaml(input_data["years"], freq=freq)
-        self.sample_map, dates = get_sample_map(dates_yaml, self.x)
+        self.sample_map, dates, stamps = get_sample_map(dates_yaml, self.x)
         self.pairs = get_pairs(dates=dates, freq=freq, num_lagged_x=self.num_lagged_x)
         self.target_dates = list(self.pairs.keys())
+        # Time axis of the predictions: the predictors' own timestamps, so a
+        # store that dates its daily means at 12:00 is not written back at
+        # 00:00 (which would leave predictions unalignable with their targets).
+        # Days with no stamp behind them fall back to midnight, as before.
+        self.target_stamps = np.array(
+            [stamps.get(d, np.datetime64(d)) for d in self.target_dates]
+        )
         num_samples = len(self.pairs)
         log.info("Number of initialization dates: %d", num_samples)
 
@@ -135,7 +164,7 @@ class downscaler:
             )
             freq = self.f[0].attrs["frequency"]
             dates_yaml = get_dates_from_yaml(forcing_data["years"], freq=freq)
-            self.sample_map_f, _ = get_sample_map(dates_yaml, self.x)
+            self.sample_map_f, _, _ = get_sample_map(dates_yaml, self.x)
             load_in_memory = input_data.get("load_in_memory", True)
             if load_in_memory:  # If dataset fits in memory, load input data to speed up
                 f_data = [np.array(f["data"]) for f in self.f]
@@ -754,6 +783,148 @@ class downscaler:
         return ds
 
     # ---------------------------------------------------------------------------------------------------------------------<
+    @staticmethod
+    def _resolve_split(saving_info):
+        """
+        Resolves the optional ``split`` block into
+        ``{"prefix", "by_variable", "years_per_file"}``, or ``None`` when the
+        recipe asks for the legacy single-file output. Absent ``split``, every
+        downstream code path behaves exactly as it did before.
+
+        Presence of the key is what opts in, so a bare ``split:`` (YAML ``None``)
+        or an empty ``split: {}`` enables splitting with defaults rather than
+        silently falling back to a single file.
+        """
+        if "split" not in saving_info:
+            return None
+        split = saving_info["split"] or {}
+        prefix = saving_info.get("prefix", None)
+        if not prefix:
+            raise ValueError(
+                "❌ saving_info.split requires saving_info.prefix — the stem used "
+                "to build '<var>_<prefix>_<freq>_<start>-<end>.nc'."
+            )
+        if saving_info.get("file", None) is not None:
+            log.warning(
+                "saving_info: 'file' (%s) and 'split' are both set; 'split' wins "
+                "and 'file' is ignored.",
+                saving_info["file"],
+            )
+        return {
+            "prefix": prefix,
+            "by_variable": split.get("by_variable", True),
+            "years_per_file": int(split.get("years_per_file", 5)),
+        }
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _prepare_model(self, model, amp_dtype, compile):
+        """
+        Shared per-run model setup: resolve the AMP dtype, optionally compile,
+        and switch to eval mode. Returns the model to run inference with.
+        """
+        if model is None:
+            model = self.model
+        self._amp_dtype = self._parse_amp_dtype(amp_dtype)
+        model = self._maybe_compile(model, compile)
+        model.eval()
+        return model
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _output_chunks(self, return_pred):
+        """
+        Index slices of ``self.target_dates`` that each become one output file
+        set. Splitting disabled — or an in-memory Dataset requested — collapses
+        to a single chunk covering the whole run, i.e. the original behaviour.
+        """
+        if self._split is None or return_pred:
+            return [(0, len(self.target_dates))]
+        return cordex_year_chunks(self.target_dates, self._split["years_per_file"])
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _build_dataset(self, preds, stamps):
+        """
+        Builds the output Dataset for one chunk from ``preds`` of shape
+        ``(M, T, C, G)``.
+
+        Stochastic subclasses pass one entry per ensemble member. Deterministic
+        models pass ``M == 1`` and are broadcast across ``ensemble_size``, since
+        rerunning the model would only reproduce the same field.
+        """
+        members = [
+            from_pred_to_xarray(
+                preds[m],
+                stamps,
+                self.vars_y,
+                self.lats,
+                self.lons,
+                self.template,
+                self.H_y,
+                self.W_y,
+                precomputed_mask=self._template_mask,
+            )
+            for m in range(preds.shape[0])
+        ]
+        if len(members) == 1:
+            # Deterministic: replicate the single field across the member axis.
+            n = self.ensemble_size if self.ensemble_size > 1 else 1
+            ds = members[0].expand_dims(member=np.arange(n))
+        else:
+            ds = xr.concat(
+                [d.assign_coords({"member": m}) for m, d in enumerate(members)],
+                dim="member",
+            )
+        return ds
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _chunk_paths(self, ds, label):
+        """
+        Output paths for one chunk, as ``[(path, Dataset), ...]``.
+
+        Legacy mode yields the single configured ``output_path``. Split mode
+        yields one CORDEX-style name per variable — variable first, so that a
+        ``pr_*.nc`` glob selects a whole time series:
+
+            ``<var>_<prefix>_<freq>_<StartTime>-<EndTime>.nc``
+        """
+        if self._split is None:
+            return [(self.output_path, ds)]
+        stem = f"{self._split['prefix']}_{freq_token(self.freq)}_{label}"
+        if not self._split["by_variable"]:
+            return [(f"{self.predictions_dir}/{stem}.nc", ds)]
+        return [
+            (f"{self.predictions_dir}/{var}_{stem}.nc", ds[[var]])
+            for var in self.vars_y
+            if var in ds.data_vars
+        ]
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _write_chunk(self, ds, label=None):
+        """
+        Applies output formatting and unit stamping, then writes one chunk to
+        disk — as a single file in legacy mode, or one file per variable in
+        split mode, where fields are deflated float32 per CORDEX §2.
+
+        The legacy path deliberately keeps xarray's default encoding so that
+        recipes without a ``split`` block produce the same file as before.
+        """
+        if self.format_output:
+            ds = self.formatting_func(ds, **self.formatting_kwargs)
+        ds = self._stamp_units(ds)
+        os.makedirs(self.predictions_dir, exist_ok=True)
+        for path, ds_out in self._chunk_paths(ds, label):
+            encoding = (
+                None
+                if self._split is None
+                else {
+                    v: {"zlib": True, "complevel": 4, "dtype": "float32"}
+                    for v in ds_out.data_vars
+                }
+            )
+            log.info("Writing %s", path)
+            log.debug("Prediction xarray\n%s", ds_out)
+            ds_out.to_netcdf(path, encoding=encoding)
+
+    # ---------------------------------------------------------------------------------------------------------------------<
     def postprocess(
         self,
         date,
@@ -794,12 +965,12 @@ class downscaler:
         """
         Runs the downscaling process: preprocesses input, predicts, postprocesses, and saves or returns output.
 
-        Loop structure: outer over date BATCHES, no inner member loop. The base
-        class is for DETERMINISTIC models (DeepESD, GNN, ...), so calling the
-        model `ensemble_size` times would give identical results — we instead
-        compute once and broadcast across the `member` coordinate at the end.
-        Stochastic subclasses (CPMGEM, ResDiff) override `downscale` and add
-        an inner member loop where it actually matters.
+        Loop structure: outer over output CHUNKS, inner over date batches
+        (``_predict_block``, which subclasses override). With a ``split`` block
+        in ``saving_info`` each chunk is written and freed before the next one
+        is predicted, so peak memory is one chunk rather than the whole run;
+        without it there is a single chunk covering everything, exactly as
+        before.
 
         Parameters
         ----------
@@ -816,16 +987,58 @@ class downscaler:
         """
         if verbose:
             log.info("Starting downscaling process")
-        if model is None:
-            model = self.model
+        if len(self.target_dates) == 0:
+            raise ValueError(
+                "❌ No dates to downscale: none of the requested years were found "
+                "in the input store(s). Check input_data.years against the data."
+            )
+        model = self._prepare_model(model, amp_dtype, compile)
 
-        # -- Inference flags --
-        self._amp_dtype = self._parse_amp_dtype(amp_dtype)
-        model = self._maybe_compile(model, compile)
-        model.eval()
+        chunks = self._output_chunks(return_pred)
+        if len(chunks) > 1:
+            log.info("Output will be written as %d time chunks.", len(chunks))
 
-        all_dates_np = [np.datetime64(d) for d in self.target_dates]
-        T = len(self.target_dates)
+        ds_pred = None
+        for n, (i0, i1) in enumerate(chunks):
+            dates = self.target_dates[i0:i1]
+            stamps = self.target_stamps[i0:i1]
+            label = chunk_time_label(stamps)
+            if len(chunks) > 1:
+                log.info(
+                    "Chunk %d/%d: %s (%d dates)", n + 1, len(chunks), label, len(dates)
+                )
+
+            preds = self._predict_block(dates, model, batch_size, verbose)
+            ds = self._build_dataset(preds, stamps)
+
+            if return_pred:
+                # The returned Dataset has always been formatted but NOT
+                # unit-stamped; keep that contract for notebook callers.
+                if self.format_output:
+                    ds = self.formatting_func(ds, **self.formatting_kwargs)
+                ds_pred = ds
+            else:
+                self._write_chunk(ds, label)
+            # Release the chunk before the next one is predicted — this is what
+            # keeps peak memory at one chunk instead of the whole run.
+            del preds, ds
+
+        self._log_clip_stats()
+        return ds_pred
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _predict_block(self, dates, model, batch_size=1, verbose=True):
+        """
+        Runs the model over ``dates`` and returns ``(M, T, C, G)`` in final
+        physical space, ready for :meth:`_build_dataset`.
+
+        This base implementation is for DETERMINISTIC models (DeepESD, GNN, ...):
+        calling the model ``ensemble_size`` times would give identical results,
+        so it predicts once and returns ``M == 1``, leaving the broadcast across
+        the ``member`` coordinate to ``_build_dataset``. Stochastic subclasses
+        (CPMGEM, ResDiff) override this and return one entry per member.
+        """
+        T = len(dates)
         n_batches = (T + batch_size - 1) // batch_size
 
         # -- Pipelined date loop with async D2H overlap ----------------------
@@ -837,7 +1050,7 @@ class downscaler:
 
         for b_idx in range(n_batches):
             i = b_idx * batch_size
-            batch_dates = self.target_dates[i : i + batch_size]
+            batch_dates = dates[i : i + batch_size]
             if verbose:
                 log.info(
                     "Batch %d/%d: %s → %s (%d dates)",
@@ -894,30 +1107,4 @@ class downscaler:
                 torch.cuda.synchronize()
             all_preds.append(self._postprocess_numpy(pending_cpu.numpy()))
 
-        # -- Build xarray ONCE; broadcast across ensemble dim --
-        all_preds_np = np.concatenate(all_preds, axis=0)  # (T, C, G)
-        ds = from_pred_to_xarray(
-            all_preds_np,
-            all_dates_np,
-            self.vars_y,
-            self.lats,
-            self.lons,
-            self.template,
-            self.H_y,
-            self.W_y,
-            precomputed_mask=self._template_mask,
-        )
-        if self.ensemble_size > 1:
-            # Deterministic model + ensemble_size>1: replicate across members.
-            ds = ds.expand_dims(member=np.arange(self.ensemble_size))
-        else:
-            ds = ds.expand_dims(member=[0])
-
-        if self.format_output:
-            ds = self.formatting_func(ds, **self.formatting_kwargs)
-        if return_pred:
-            return ds
-        ds = self._stamp_units(ds)
-        log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds)
-        ds.to_netcdf(self.output_path)
-        self._log_clip_stats()
+        return np.concatenate(all_preds, axis=0)[None]  # (1, T, C, G)

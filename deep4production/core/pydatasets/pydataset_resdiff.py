@@ -93,14 +93,24 @@ class pydataset_custom(pydataset):
         self._norm_x_cpu = None
         self._norm_y_cpu = None
         self._norm_f_cpu = None
+        # NOTE: operator_info MUST be forwarded here, exactly as trainer.py does
+        # for the non-residual runs. Without it `stats_transform` is never set,
+        # so for any channel carrying an operator (sqrt on pr/hurs) the affine is
+        # built from RAW-space min/max while the data is in operator space. The
+        # regressor is normalized by the trainer (which does pass it), so the two
+        # end up in DIFFERENT spaces and the residual r = norm_y(y) - yhat picks
+        # up a large constant offset on exactly those channels — silently, since
+        # every operator-free channel is unaffected.
         if normalizer_info_x is not None:
             resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_x, self.vars_x, predictand=False
+                normalizer_info_x, self.vars_x, predictand=False,
+                operator_info=self.operator_x,
             )
             self._norm_x_cpu = InputNormalizer(resolved, self.vars_x, channel_dim=1)
         if normalizer_info_y is not None:
             resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_y, self.vars_y, predictand=True
+                normalizer_info_y, self.vars_y, predictand=True,
+                operator_info=self.operator_y,
             )
             self._norm_y_cpu = InputNormalizer(resolved, self.vars_y, channel_dim=1)
         # High-res forcing normalizer (e.g. orography as cond_high). Built only
@@ -108,7 +118,8 @@ class pydataset_custom(pydataset):
         # as the regressor so the re-fed forcing matches its training space.
         if normalizer_info_f is not None and self.vars_f is not None:
             resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_f, self.vars_f, predictand=False, forcing=True
+                normalizer_info_f, self.vars_f, predictand=False, forcing=True,
+                operator_info=self.operator_f,
             )
             self._norm_f_cpu = InputNormalizer(resolved, self.vars_f, channel_dim=1)
 

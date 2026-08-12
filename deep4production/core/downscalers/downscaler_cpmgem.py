@@ -32,11 +32,9 @@ Authors:
 
 import numpy as np
 import torch
-import xarray as xr
 
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
-from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.utils.log import get_logger
 
 log = get_logger("downscaler.cpmgem")
@@ -244,47 +242,26 @@ class downscaler_custom(downscaler):
         return y_t
 
     # ─────────────────────────────────────────────────────────────────────────
-    def downscale(
-        self,
-        model=None,
-        return_pred=False,
-        verbose=True,
-        batch_size=1,
-        amp_dtype=None,
-        compile=False,
-    ):
+    def _predict_block(self, dates, model, batch_size=1, verbose=True):
         """
-        Override base ``downscale``: runs reverse-diffusion sampling.
+        CPMGEM inference over ``dates``: runs reverse-diffusion sampling.
 
         Loop structure: date-outer, member-inner.
           - For each date batch: preprocess the low-res conditioning ONCE.
           - Then for each ensemble member: run a fresh reverse-SDE chain
             with independent Gaussian noise.
 
+        Returns ``(M, T, C, G)`` — one entry per ensemble member, since each
+        chain draws independent noise. Chunking, dataset construction and
+        writing are handled by the base class ``downscale``.
+
         Parameters
         ----------
         batch_size : int
             Number of dates whose reverse-diffusion chains run in parallel on
             the GPU. All B chains share the same num_steps SDE iterations.
-        amp_dtype  : 'bfloat16' / 'float16' / None
-            Mixed-precision autocast for the score-network forward inside each
-            SDE step. bf16 is the recommended default for diffusion sampling.
-        compile    : bool
-            If True, wraps the score network with torch.compile(dynamic=True,
-            mode="reduce-overhead"). The 500 inner SDE steps amortise the
-            one-shot compile cost very quickly.
         """
-        if verbose:
-            log.info("Starting CPMGEM downscaling process")
-
-        if model is None:
-            model = self.model
-        self._amp_dtype = self._parse_amp_dtype(amp_dtype)
-        model = self._maybe_compile(model, compile)
-        model.eval()
-
-        all_dates_np = [np.datetime64(d) for d in self.target_dates]
-        T = len(self.target_dates)
+        T = len(dates)
         M = self.ensemble_size
         n_batches = (T + batch_size - 1) // batch_size
 
@@ -293,7 +270,7 @@ class downscaler_custom(downscaler):
 
         for b_idx in range(n_batches):
             i = b_idx * batch_size
-            batch_dates = self.target_dates[i : i + batch_size]
+            batch_dates = dates[i : i + batch_size]
             if verbose:
                 log.info(
                     "Batch %d/%d: %s → %s (%d dates) x %d member(s)",
@@ -349,30 +326,5 @@ class downscaler_custom(downscaler):
 
             del inp, f_cond
 
-        # ── Build xarray per member, concat along member ─────────────────────
-        ds_out = []
-        for m, buf in enumerate(member_buffers):
-            all_preds_np = np.concatenate(buf, axis=0)  # (T, C, G)
-            ds_member = from_pred_to_xarray(
-                all_preds_np,
-                all_dates_np,
-                self.vars_y,
-                self.lats,
-                self.lons,
-                self.template,
-                self.H_y,
-                self.W_y,
-                precomputed_mask=self._template_mask,
-            )
-            ds_member = ds_member.assign_coords({"member": m})
-            ds_out.append(ds_member)
-        ds_out = xr.concat(ds_out, dim="member")
-
-        if self.format_output:
-            ds_out = self.formatting_func(ds_out, **self.formatting_kwargs)
-        if return_pred:
-            return ds_out
-        ds_out = self._stamp_units(ds_out)
-        log.debug("Writing prediction xarray\n%s", ds_out)
-        ds_out.to_netcdf(self.output_path)
-        self._log_clip_stats()
+        # (M, T, C, G) — one stochastic realization per member.
+        return np.stack([np.concatenate(buf, axis=0) for buf in member_buffers])

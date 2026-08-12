@@ -22,7 +22,6 @@ from deep4production.deep.models.diffusion.patching import (
     build_grid_patcher,
     run_regressor_patched,
 )
-from deep4production.utils.trans import from_pred_to_xarray
 from deep4production.utils.log import get_logger
 
 log = get_logger("downscaler.songunet")
@@ -81,39 +80,19 @@ class downscaler_custom(downscaler):
         log.info("Deterministic SongUNet downscaler ready")
 
     # ─────────────────────────────────────────────────────────────────────────
-    def downscale(
-        self,
-        model=None,
-        return_pred=False,
-        verbose=True,
-        batch_size=1,
-        amp_dtype=None,
-        compile=False,
-    ):
+    def _predict_block(self, dates, model, batch_size=1, verbose=True):
         """
-        Deterministic SongUNet inference loop. Date-outer; no member loop
-        (model is deterministic, ensemble_size > 1 is broadcast at the end).
+        Deterministic SongUNet inference loop over ``dates``. Date-outer; no
+        member loop (the model is deterministic, so ``ensemble_size > 1`` is
+        broadcast by ``_build_dataset``). Returns ``(1, T, C, G)``.
 
-        Parameters
-        ----------
-        batch_size : int
-        amp_dtype  : 'bfloat16' / 'float16' / None
-        compile    : bool — wrap model with torch.compile(dynamic=True)
+        Chunking, dataset construction and writing are handled by the base
+        class ``downscale``.
         """
-        if verbose:
-            log.info("Starting deterministic SongUNet downscaling process")
-
-        if model is None:
-            model = self.model
-        self._amp_dtype = self._parse_amp_dtype(amp_dtype)
-        model = self._maybe_compile(model, compile)
-        model.eval()
-
         C_y = len(self.vars_y)
         spatial = [self.H_y, self.W_y] if self.transform_to_2D_y else [self.G_y]
 
-        all_dates_np = [np.datetime64(d) for d in self.target_dates]
-        T = len(self.target_dates)
+        T = len(dates)
         n_batches = (T + batch_size - 1) // batch_size
 
         # -- Pipelined date loop (async D2H overlap) --
@@ -121,7 +100,7 @@ class downscaler_custom(downscaler):
         pending_cpu = None
         for b_idx in range(n_batches):
             i = b_idx * batch_size
-            batch_dates = self.target_dates[i : i + batch_size]
+            batch_dates = dates[i : i + batch_size]
             B = len(batch_dates)
             if verbose:
                 log.info(
@@ -196,29 +175,4 @@ class downscaler_custom(downscaler):
                 torch.cuda.synchronize()
             all_preds.append(self._postprocess_numpy(pending_cpu.numpy()))
 
-        # ── Build xarray ONCE; broadcast across ensemble dim ─────────────
-        all_preds_np = np.concatenate(all_preds, axis=0)  # (T, C, G)
-        ds = from_pred_to_xarray(
-            all_preds_np,
-            all_dates_np,
-            self.vars_y,
-            self.lats,
-            self.lons,
-            self.template,
-            self.H_y,
-            self.W_y,
-            precomputed_mask=self._template_mask,
-        )
-        if self.ensemble_size > 1:
-            ds = ds.expand_dims(member=np.arange(self.ensemble_size))
-        else:
-            ds = ds.expand_dims(member=[0])
-
-        if self.format_output:
-            ds = self.formatting_func(ds, **self.formatting_kwargs)
-        if return_pred:
-            return ds
-        ds = self._stamp_units(ds)
-        log.debug("Writing prediction xarray to %s\n%s", self.output_path, ds)
-        ds.to_netcdf(self.output_path)
-        self._log_clip_stats()
+        return np.concatenate(all_preds, axis=0)[None]  # (1, T, C, G)

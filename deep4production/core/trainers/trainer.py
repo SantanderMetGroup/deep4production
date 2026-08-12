@@ -421,7 +421,8 @@ class trainer:
         ### a normalized normalizer_info dict via ``_resolve_normalizer_info``.
         if self.normalizer_info_x is not None:
             resolved_x = pydataset._resolve_normalizer_info(
-                self.normalizer_info_x, self.metadata_dict["vars_x"], predictand=False
+                self.normalizer_info_x, self.metadata_dict["vars_x"], predictand=False,
+                operator_info=self.metadata_dict.get("operator_x"),
             )
             self.metadata_dict["normalizer_x"] = resolved_x
             self.norm_x = InputNormalizer(
@@ -433,7 +434,8 @@ class trainer:
             )
         if self.normalizer_info_y is not None:
             resolved_y = pydataset._resolve_normalizer_info(
-                self.normalizer_info_y, self.metadata_dict["vars_y"], predictand=True
+                self.normalizer_info_y, self.metadata_dict["vars_y"], predictand=True,
+                operator_info=self.metadata_dict.get("operator_y"),
             )
             self.metadata_dict["normalizer_y"] = resolved_y
             self.norm_y = InputNormalizer(
@@ -445,7 +447,8 @@ class trainer:
             )
         if self.normalizer_info_f is not None and vars_f is not None:
             resolved_f = pydataset._resolve_normalizer_info(
-                self.normalizer_info_f, vars_f, predictand=False, forcing=True
+                self.normalizer_info_f, vars_f, predictand=False, forcing=True,
+                operator_info=operator_f,
             )
             self.metadata_dict["normalizer_f"] = resolved_f
             self.norm_f = InputNormalizer(resolved_f, vars_f, channel_dim=1)
