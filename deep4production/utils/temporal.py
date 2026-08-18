@@ -55,12 +55,24 @@ def get_sample_map(dates_yaml, data_zarrs):
     for z in data_zarrs:
         raw = z["dates"][:]
         days = raw.astype("datetime64[D]").astype(str)
-        lut = {d: (t, raw[t]) for t, d in enumerate(days)}
-        if len(lut) != len(days):
+        # Dates the store declares missing occupy a slot on the fixed-frequency
+        # axis but hold no data (anemoi writes them all-NaN), so they must never
+        # become samples.
+        missing = set(z.attrs.get("missing_dates", ()))
+        kept = [(t, d) for t, d in enumerate(days) if d not in missing]
+        lut = {d: (t, raw[t]) for t, d in kept}
+        if missing:
             log.warning(
-                "Store has %d time steps but only %d distinct days; the last "
-                "sample of each day is used.",
-                len(days),
+                "Store declares %d missing date(s) (%s%s); excluded from sampling.",
+                len(missing),
+                ", ".join(sorted(missing)[:3]),
+                ", ..." if len(missing) > 3 else "",
+            )
+        if len(lut) != len(kept):
+            log.warning(
+                "Store has %d usable time steps but only %d distinct days; the "
+                "last sample of each day is used.",
+                len(kept),
                 len(lut),
             )
         luts.append(lut)

@@ -18,6 +18,7 @@ Authors:
 import torch
 import torch.nn.functional as F
 from deep4production.core.trainers.trainer import trainer
+from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_train_patcher,
     assemble_cond_patches,
@@ -85,6 +86,19 @@ class trainer_custom(trainer):
             )
             self.metadata_dict["patching"] = resolved_cfg
             log.info("Patched regressor training enabled: %s", resolved_cfg)
+
+        # --- Optional reflection padding (non-divisible domains) --------------
+        # Enabled via model_info.training_params.pad_to_multiple. Built lazily on
+        # the first batch, when (H_y, W_y) are known, and persisted to metadata.
+        self.pad_multiple = (model_info.get("training_params") or {}).get(
+            "pad_to_multiple"
+        )
+        self.padder = None
+        if self.pad_multiple and self.patcher is not None:
+            raise ValueError(
+                "pad_to_multiple and patching are mutually exclusive: the patcher "
+                "already reflection-pads the domain to a full patch cover."
+            )
 
         log.info("Deterministic SongUNet trainer ready")
 
@@ -156,16 +170,34 @@ class trainer_custom(trainer):
                 model, x, y, f if use_cond_high else None, loss_function
             )
         else:
-            # ── Whole-domain branch (unchanged) ──────────────────────────────
+            # ── Whole-domain branch ──────────────────────────────────────────
+            if self.pad_multiple and self.padder is None:
+                self.padder = build_padder(self.pad_multiple, y.shape[-2:])
+                if self.padder is not None:
+                    self.metadata_dict["padding"] = self.padder.as_config()
+                    log.info("Reflection padding: %dx%d -> %dx%d (pad %s)",
+                             self.padder.H, self.padder.W, self.padder.padded_H,
+                             self.padder.padded_W, self.padder.amounts)
             t = torch.zeros(B, device=device)
-            x_in = torch.zeros_like(y)  # model conditions entirely via cond_low/high
+            # When padding, the model runs on the padded grid and the prediction is
+            # cropped back before the loss, so the rim contributes no gradient.
+            if self.padder is not None:
+                x_in = torch.zeros(
+                    self.padder.padded_shape(B, y.shape[1]),
+                    device=device, dtype=y.dtype,
+                )
+                cond_low = self.padder.apply_cond_low(x)
+                cond_high = self.padder.apply(f) if use_cond_high else None
+            else:
+                x_in = torch.zeros_like(y)  # model conditions via cond_low/high
+                cond_low, cond_high = x, (f if use_cond_high else None)
             # Forward + loss under AMP autocast when enabled (bf16/fp16). cond_high
             # carries any high-res forcing already at predictand resolution (None
             # when no forcings are configured); cond_low is the low-res stream.
             with self._amp_ctx():
-                prediction = model(
-                    x=x_in, t=t, cond_low=x, cond_high=f if use_cond_high else None
-                )
+                prediction = model(x=x_in, t=t, cond_low=cond_low, cond_high=cond_high)
+                if self.padder is not None:
+                    prediction = self.padder.crop(prediction)
                 loss = loss_function(target=y, output=prediction)
 
         if is_this_training:

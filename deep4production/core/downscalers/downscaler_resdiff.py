@@ -44,6 +44,7 @@ import torch.nn.functional as F
 ## Deep4production
 from deep4production.core.downscalers.downscaler import downscaler
 from deep4production.deep.utils import load_model
+from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_grid_patcher,
     assemble_cond_patches,
@@ -139,6 +140,21 @@ class downscaler_custom(downscaler):
         if rcfg and rcfg.get("enabled", False):
             self.reg_patcher, self.reg_K = build_grid_patcher(rcfg, (self.H_y, self.W_y))
             log.info("Patched regressor: %d patches (tiled mean).", self.reg_patcher.patch_num)
+
+        # ── Optional reflection padding (independent per stage, as above) ─────
+        # `diff_padder` from THIS run's metadata, `reg_padder` from the regressor
+        # checkpoint's. Each stage runs on its own padded grid and is cropped back
+        # to (H_y, W_y), so the two stages are summed on the native grid.
+        self.diff_padder = build_padder(
+            self.metadata.get("padding"), (self.H_y, self.W_y)
+        )
+        self.reg_padder = build_padder(reg_meta.get("padding"), (self.H_y, self.W_y))
+        if self.diff_padder is not None:
+            log.info("Padded diffusion: %dx%d grid.", self.diff_padder.padded_H,
+                     self.diff_padder.padded_W)
+        if self.reg_padder is not None:
+            log.info("Padded regressor: %dx%d grid.", self.reg_padder.padded_H,
+                     self.reg_padder.padded_W)
 
         # ── Residual standardization (inverse of pydataset_resdiff) ─────────────
         # When the run was trained with standardize_residuals, the diffusion model
@@ -246,6 +262,15 @@ class downscaler_custom(downscaler):
         shape = (B, C_y, self.H_y, self.W_y)
         if self.diff_patcher is not None:
             return self._edm_heun_sample_patched(model, c_low, c_high, shape)
+        if self.diff_padder is not None:
+            # Sample on the padded grid the model was trained on, then crop back.
+            r_hat = self._edm_heun_sample(
+                model,
+                self.diff_padder.apply_cond_low(c_low),
+                self.diff_padder.apply(c_high),
+                self.diff_padder.padded_shape(B, C_y),
+            )
+            return self.diff_padder.crop(r_hat)
         return self._edm_heun_sample(model, c_low, c_high, shape)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -393,6 +418,19 @@ class downscaler_custom(downscaler):
                     c_high = run_regressor_patched(
                         self.regressor, c_low_hr, reg_cond_high,
                         self.reg_patcher, self.reg_K, C_y,
+                    )  # (B, C_y, H_y, W_y)
+                elif self.reg_padder is not None:
+                    # Padded regressor mean: forward on the padded grid, crop back.
+                    x_dummy = torch.zeros(
+                        self.reg_padder.padded_shape(B_cur, C_y), device=self.device
+                    )
+                    t_dummy = torch.zeros(B_cur, device=self.device)
+                    c_high = self.reg_padder.crop(
+                        self.regressor(
+                            x=x_dummy, t=t_dummy,
+                            cond_low=self.reg_padder.apply_cond_low(c_low),
+                            cond_high=self.reg_padder.apply(reg_cond_high),
+                        )
                     )  # (B, C_y, H_y, W_y)
                 else:
                     x_dummy = torch.zeros(

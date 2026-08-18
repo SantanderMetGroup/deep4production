@@ -166,3 +166,16 @@ model_info:
     #   overlap_pix: 4
     #   boundary_pix: 2
     #   patch_num: 8
+
+    # ── OPTIONAL: reflection padding for non-divisible domains ────────────────
+    # H_y and W_y must both be multiples of 2^(len(ch_mult)-1), or the decoder
+    # skip-concat fails (e.g. EUR-12i 341x352: 341 is odd). When set, the model
+    # runs on a reflection-padded grid and the prediction is cropped back BEFORE
+    # the loss, so the padded rim never contributes a gradient and no loss needs
+    # a mask. Predictors are upsampled to the native grid first, then padded, so
+    # they stay geographically aligned. The geometry is persisted to metadata —
+    # inference needs no padding keys. Mutually exclusive with `patching` (the
+    # patcher already pads internally). Prefer cropping the domain when the rows
+    # you would pad are relaxation zone.
+    #
+    # pad_to_multiple: 16   # 341x352 -> 352x352 (pad 5 top / 6 bottom)

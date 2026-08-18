@@ -569,6 +569,12 @@ class SongUNet(nn.Module):
     def _upsample_cond_low(
         self, cond_low: torch.Tensor, target_hw: tuple
     ) -> torch.Tensor:
+        # Already on the target grid (e.g. the reflection-padding path pre-upsamples
+        # to keep the predictors geographically aligned): nothing to resample. Without
+        # this, `fir` would upsample x2 and bilinearly downsample back, smoothing the
+        # field for no reason.
+        if tuple(cond_low.shape[-2:]) == tuple(target_hw):
+            return cond_low
         if self.cond_upsample == "fir":
             up = fir_upsample(cond_low, self.fir_kernel)
         else:

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
+from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_train_patcher,
     assemble_cond_patches,
@@ -91,6 +92,19 @@ class trainer_custom(trainer):
                     "the per-patch conditioning)."
                 )
             log.info("Patched diffusion training enabled: %s", self.patch_cfg)
+
+        # --- Optional reflection padding (non-divisible domains) --------------
+        # Enabled via model_info.training_params.pad_to_multiple. Built lazily on
+        # the first batch, when (H_y, W_y) are known, and persisted to metadata.
+        self.pad_multiple = (model_info.get("training_params") or {}).get(
+            "pad_to_multiple"
+        )
+        self.padder = None
+        if self.pad_multiple and self.patcher is not None:
+            raise ValueError(
+                "pad_to_multiple and patching are mutually exclusive: the patcher "
+                "already reflection-pads the domain to a full patch cover."
+            )
 
         log.debug("ResDiff trainer self-update complete")
 
@@ -269,8 +283,18 @@ class trainer_custom(trainer):
             sigma_max=sigma_max,
             batch_size=batch_size,
         ).to(device)
-        z = torch.randn_like(r)
-        r_t = r + sigma_t * z
+        # The latent lives on the (optionally padded) model grid so the noise is
+        # iid there, exactly as at inference; the loss target stays native.
+        if self.pad_multiple and self.padder is None:
+            self.padder = build_padder(self.pad_multiple, r.shape[-2:])
+            if self.padder is not None:
+                self.metadata_dict["padding"] = self.padder.as_config()
+                log.info("Reflection padding: %dx%d -> %dx%d (pad %s)",
+                         self.padder.H, self.padder.W, self.padder.padded_H,
+                         self.padder.padded_W, self.padder.amounts)
+        r_model = self.padder.apply(r) if self.padder is not None else r
+        z = torch.randn_like(r_model)
+        r_t = r_model + sigma_t * z
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -283,7 +307,17 @@ class trainer_custom(trainer):
                 loss = loss_function(target=r_target, output=D_theta, sigma_t=sigma_p)
         else:
             with self._amp_ctx():
-                D_theta = model(x=r_t, sigma=sigma_t, cond_low=c_low, cond_high=c_high)
+                if self.padder is not None:
+                    D_theta = model(
+                        x=r_t, sigma=sigma_t,
+                        cond_low=self.padder.apply_cond_low(c_low),
+                        cond_high=self.padder.apply(c_high),
+                    )
+                    D_theta = self.padder.crop(D_theta)
+                else:
+                    D_theta = model(
+                        x=r_t, sigma=sigma_t, cond_low=c_low, cond_high=c_high
+                    )
                 loss = loss_function(target=r, output=D_theta, sigma_t=sigma_t)
 
         if is_this_training:

@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from deep4production.core.downscalers.downscaler import downscaler
+from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_grid_patcher,
     run_regressor_patched,
@@ -75,6 +76,17 @@ class downscaler_custom(downscaler):
                 "Patched inference: %d patches of %dx%d over %dx%d domain",
                 self.patcher.patch_num, self.patcher.Py, self.patcher.Px,
                 self.H_y, self.W_y,
+            )
+
+        # --- Optional reflection padding -------------------------------------
+        # Active when the checkpoint carries a `padding` block: the forward runs
+        # on the padded grid and the prediction is cropped back to (H_y, W_y).
+        self.padder = build_padder(self.metadata.get("padding"), (self.H_y, self.W_y))
+        if self.padder is not None:
+            log.info(
+                "Padded inference: %dx%d -> %dx%d (pad %s)",
+                self.padder.H, self.padder.W, self.padder.padded_H,
+                self.padder.padded_W, self.padder.amounts,
             )
 
         log.info("Deterministic SongUNet downscaler ready")
@@ -149,6 +161,19 @@ class downscaler_custom(downscaler):
                     p_torch = run_regressor_patched(
                         model, inp_hr, f_cond, self.patcher, self.K_pe, C_y
                     )
+                elif self.padder is not None:
+                    # Padded forward: model on the padded grid, crop back after.
+                    t = torch.zeros(B, device=self.device)
+                    x_in = torch.zeros(
+                        self.padder.padded_shape(B, C_y), device=self.device
+                    )
+                    p_torch = self.padder.crop(
+                        model(
+                            x=x_in, t=t,
+                            cond_low=self.padder.apply_cond_low(inp),
+                            cond_high=self.padder.apply(f_cond),
+                        )
+                    )
                 else:
                     t = torch.zeros(B, device=self.device)
                     x_in = torch.zeros(B, C_y, *spatial, device=self.device)
@@ -167,7 +192,7 @@ class downscaler_custom(downscaler):
                     torch.cuda.synchronize()
                 all_preds.append(self._postprocess_numpy(pending_cpu.numpy()))
             pending_cpu = self._async_d2h(p_torch.float())
-            del inp, x_in, p_torch
+            del inp, p_torch
 
         # Final flush
         if pending_cpu is not None:

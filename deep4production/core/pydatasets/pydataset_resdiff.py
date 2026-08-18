@@ -10,6 +10,7 @@ from torch import from_numpy
 from deep4production.core.pydatasets.pydataset import pydataset
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.deep.utils import load_model
+from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_grid_patcher,
     run_regressor_patched,
@@ -141,6 +142,14 @@ class pydataset_custom(pydataset):
             log.info(
                 "Regressor is patched: tiling residual computation into %d patches.",
                 self.reg_patcher.patch_num,
+            )
+        # Likewise, replicate the regressor's reflection padding so the cached
+        # residuals are built from the same forward the downscaler will run.
+        self.reg_padder = build_padder(reg_meta.get("padding"), (self.H_y, self.W_y))
+        if self.reg_padder is not None:
+            log.info(
+                "Regressor is padded: computing residuals on a %dx%d grid.",
+                self.reg_padder.padded_H, self.reg_padder.padded_W,
             )
 
         # --- Residuals zarr ---
@@ -303,7 +312,12 @@ class pydataset_custom(pydataset):
 
         # Pre-allocate fixed-size zero tensors for the regressor's noisy-input
         # slot and time embedding (always zero for the deterministic regressor).
-        x_in_buf = torch.zeros(batch_size, num_y, self.H_y, self.W_y, device=device)
+        x_in_shape = (
+            self.reg_padder.padded_shape(batch_size, num_y)
+            if self.reg_padder is not None
+            else (batch_size, num_y, self.H_y, self.W_y)
+        )
+        x_in_buf = torch.zeros(x_in_shape, device=device)
         t_buf = torch.zeros(batch_size, device=device)
 
         self.regressor_model.eval()
@@ -377,6 +391,16 @@ class pydataset_custom(pydataset):
                     reg_out = run_regressor_patched(
                         self.regressor_model, x_hr, f_batch,
                         self.reg_patcher, self.reg_K, num_y,
+                    ).cpu()  # (B, C_y, H_y, W_y)
+                elif self.reg_padder is not None:
+                    # Padded forward, cropped back to the native predictand grid.
+                    reg_out = self.reg_padder.crop(
+                        self.regressor_model(
+                            x=x_in_buf[:B],
+                            t=t_buf[:B],
+                            cond_low=self.reg_padder.apply_cond_low(x_batch),
+                            cond_high=self.reg_padder.apply(f_batch),
+                        )
                     ).cpu()  # (B, C_y, H_y, W_y)
                 else:
                     reg_out = self.regressor_model(

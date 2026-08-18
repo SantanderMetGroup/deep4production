@@ -155,6 +155,13 @@ class AnemoiZarrStore:
         out["date_init_yaml"] = str(dates[0].astype("datetime64[D]"))
         out["date_end_yaml"] = str(dates[-1].astype("datetime64[D]"))
 
+        # Dates anemoi could not fill (a gap in the fixed-frequency axis, e.g.
+        # 29 February for noleap source data). They are physically present in
+        # `data` and entirely NaN, so consumers must skip them.
+        out["missing_dates"] = sorted(
+            str(np.datetime64(d, "D")) for d in z_attrs.get("missing_dates", [])
+        )
+
         # Anemoi has no per-variable NaN inventory; expose empties for
         # zarr_inspect.
 
@@ -319,6 +326,10 @@ def zarr_inspect(zarr_path: str, fmt: str = "auto"):
     print(f"{'Date Init (requested at creation):':<40} {date_init_yaml}")
     print(f"{'Date End  (requested at creation):':<40} {date_end_yaml}")
     print(f"Number of samples available: {num_samples}/{num_samples_yaml}")
+    missing = store.attrs.get("missing_dates", [])
+    if missing:
+        shown = ", ".join(missing[:5]) + (", ..." if len(missing) > 5 else "")
+        print(f"Missing dates (present but all-NaN, skipped when sampling): {len(missing)} — {shown}")
 
     print()
     print(f"Latitude  range: {np.min(lats):.4f} → {np.max(lats):.4f} degrees")

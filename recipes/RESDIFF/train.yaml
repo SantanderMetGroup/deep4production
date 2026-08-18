@@ -193,3 +193,14 @@ model_info:
     #   overlap_pix: 4          # raw-pixel overlap between neighbouring patches
     #   boundary_pix: 2         # discarded rim at fusion (overlap_pix >= boundary_pix)
     #   patch_num: 8            # random patches per image per training step
+
+    # ── OPTIONAL: reflection padding for non-divisible domains ────────────────
+    # H_y and W_y must both be multiples of 2^(len(ch_mult)-1) (e.g. EUR-12i
+    # 341x352: 341 is odd). When set, the noisy residual is drawn on the padded
+    # grid and D_theta is cropped back BEFORE the EDM loss, so the padded rim
+    # contributes no gradient. The diffusion and the regressor pad independently:
+    # this key covers the diffusion, and the regressor's own `padding` metadata is
+    # replayed when building the residuals and at inference. Persisted to metadata
+    # (inference needs no padding keys). Mutually exclusive with `patching`.
+    #
+    # pad_to_multiple: 16   # 341x352 -> 352x352 (pad 5 top / 6 bottom)
