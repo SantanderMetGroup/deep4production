@@ -80,6 +80,11 @@ def get_sample_map(dates_yaml, data_zarrs):
     sample_map = {}
     found_dates = []
     stamps = {}
+    # Misses are summarized, not logged one by one: a store that legitimately
+    # covers less than the requested period (e.g. an ERA5-driven run inside a
+    # multi-source recipe whose training_period spans the full GCM range) would
+    # otherwise emit tens of thousands of lines per pydataset, per rank.
+    missing_dates = []
     for date_yaml in dates_yaml:
         for i, lut in enumerate(luts):
             if date_yaml in lut:
@@ -89,7 +94,16 @@ def get_sample_map(dates_yaml, data_zarrs):
                 found_dates.append(date_yaml)
                 break
         else:
-            log.warning("Date %s not found in any input data; skipping.", date_yaml)
+            missing_dates.append(date_yaml)
+    if missing_dates:
+        log.warning(
+            "%d of %d requested date(s) not found in any input data (%s ... %s); "
+            "skipped.",
+            len(missing_dates),
+            len(dates_yaml),
+            missing_dates[0],
+            missing_dates[-1],
+        )
     return sample_map, found_dates, stamps
 
 

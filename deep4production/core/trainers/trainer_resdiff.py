@@ -148,6 +148,17 @@ class trainer_custom(trainer):
         Returns:
             tuple: (train_dataset, valid_dataset)
         """
+        # This trainer builds its pydatasets itself and does not go through the
+        # base class's multi-source branch, so `data.sources` would be ignored —
+        # silently training on the first source alone. Refuse instead.
+        if self.sources:
+            raise NotImplementedError(
+                "❌ `data.sources` (multi-source pooling) is not supported by "
+                "trainer_resdiff: the residuals are precomputed per dataset "
+                "against a single regressor, in that regressor's normalized "
+                "space. Train the regressor multi-source, then run RESDIFF on "
+                "one source at a time."
+            )
         ## Create pydatasets
         kwargs_pydataset = {
             "predictors": self.data["predictors"],

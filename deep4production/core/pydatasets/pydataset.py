@@ -13,6 +13,7 @@ from deep4production.utils.temporal import (
     get_pairs,
 )
 from deep4production.utils.zarr import open_zarr_store
+from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.utils.log import get_logger
 
 log = get_logger("pydataset")
@@ -40,13 +41,22 @@ class pydataset(Dataset):
         load_in_memory: bool = True,
         forcings={},
         cache_mb: int = None,
+        normalizer_info_x: dict = None,
+        normalizer_info_y: dict = None,
+        normalizer_info_f: dict = None,
+        normalize_on_cpu: bool = False,
     ):
         # --- Parameters (X, Y) ---
-        # Note: ``normalizer`` is no longer consumed by pydataset. The trainer
+        # Note: by default ``normalizer`` is not applied by pydataset. The trainer
         # owns GPU-side InputNormalizer modules and applies them per-batch on
         # device — see deep4production.deep.preprocessing.normalizer. The recipe
         # schema is unchanged; ``cli/train.py`` extracts the normalizer dicts
         # and forwards them to the trainer directly.
+        #
+        # The exception is ``normalize_on_cpu``, set by the trainer for
+        # multi-source (``data.sources``) runs: there each source carries its own
+        # statistics, which a single shared GPU normalizer cannot express, so the
+        # affine has to be applied per sample here instead. See __getitem__.
         path_predictors, path_predictands = predictors["paths"], predictands["paths"]
         variables_predictors, variables_predictands, variables_forcings = (
             predictors.get("variables", None),
@@ -133,7 +143,12 @@ class pydataset(Dataset):
         self.num_samples = len(self.pairs)
         log.info("Number of samples: %d", self.num_samples)
         if self.num_samples == 0:
-            assert "❌ There are no common dates between the predictor (X) and predictand (Y) datasets."
+            raise ValueError(
+                "❌ There are no common dates between the predictor (X) and "
+                "predictand (Y) datasets over the requested period "
+                f"({temporal_period[0]}-{temporal_period[-1]}). Check the store "
+                "paths and that both cover these years."
+            )
 
         # --- Load in memory? ---
         if load_in_memory:  # If dataset fits in memory, load all predictors to speed up
@@ -158,6 +173,51 @@ class pydataset(Dataset):
             self._ops_f = self._build_operator_pipeline(self.operator_f, self.vars_f)
         else:
             self._ops_f = None
+
+        # --- CPU-side InputNormalizer instances ---
+        # Built whenever the recipe dicts are supplied; whether they are APPLIED
+        # to the samples returned by __getitem__ is a separate decision, taken by
+        # ``normalize_on_cpu``. Subclasses (pydataset_resdiff) need the instances
+        # for their own purposes without changing what __getitem__ returns.
+        #
+        # operator_info MUST be forwarded, exactly as trainer.py does: without it
+        # ``stats_transform`` is never set, so a channel carrying an operator
+        # (sqrt on pr/hurs) gets an affine built from RAW-space stats while the
+        # data is in operator space.
+        self.normalize_on_cpu = normalize_on_cpu
+        self._norm_x_cpu = self._build_cpu_normalizer(
+            normalizer_info_x, self.vars_x, self.operator_x, predictand=False
+        )
+        self._norm_y_cpu = self._build_cpu_normalizer(
+            normalizer_info_y, self.vars_y, self.operator_y, predictand=True
+        )
+        self._norm_f_cpu = (
+            self._build_cpu_normalizer(
+                normalizer_info_f, self.vars_f, self.operator_f,
+                predictand=False, forcing=True,
+            )
+            if self.vars_f is not None
+            else None
+        )
+
+    # -------------------------------------------------------------------------
+    @classmethod
+    def _build_cpu_normalizer(
+        cls, normalizer_info_recipe, vars, operator_info, predictand=False,
+        forcing=False,
+    ):
+        """
+        Resolve a recipe ``normalizer:`` block into a CPU ``InputNormalizer``.
+
+        Returns None when no normalizer is configured for the block.
+        """
+        if normalizer_info_recipe is None:
+            return None
+        resolved = cls._resolve_normalizer_info(
+            normalizer_info_recipe, vars, predictand=predictand, forcing=forcing,
+            operator_info=operator_info,
+        )
+        return InputNormalizer(resolved, vars, channel_dim=1)
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -504,6 +564,13 @@ class pydataset(Dataset):
     def __getitem__(self, idx):
         """
         Returns a tuple (x, y, f) for a given sample index.
+
+        When ``normalize_on_cpu`` is set (multi-source runs), the per-source
+        affine is applied here, before collation, so that sources carrying
+        different statistics all reach the model in a common standardized space.
+        Otherwise the tensors come back unnormalized and the trainer's GPU-side
+        InputNormalizer handles it per batch.
+
         Parameters:
             idx (int): Sample index.
         Returns:
@@ -565,5 +632,15 @@ class pydataset(Dataset):
             )
         else:
             f = "N/A"
+        # --- Per-source normalization (CPU, pre-collation) ---
+        # Samples are unbatched here, so the channel axis is 0 — except for a
+        # lagged x, which preprocess stacked into (L, C, H, W).
+        if self.normalize_on_cpu:
+            if self._norm_x_cpu is not None:
+                x = self._norm_x_cpu(x, channel_dim=1 if len(dates) > 1 else 0)
+            if self._norm_y_cpu is not None:
+                y = self._norm_y_cpu(y, channel_dim=0)
+            if self.forcings and self._norm_f_cpu is not None:
+                f = self._norm_f_cpu(f, channel_dim=0)
         # --- Return ---
         return x, y, f

@@ -8,7 +8,6 @@ from torch import from_numpy
 
 ## Deep4production
 from deep4production.core.pydatasets.pydataset import pydataset
-from deep4production.deep.preprocessing.normalizer import InputNormalizer
 from deep4production.deep.utils import load_model
 from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
@@ -72,6 +71,22 @@ class pydataset_custom(pydataset):
         regressor_batch_size: int = 32,
     ):
         # --- Call parent constructor (loads x/y/forcings, builds pipelines, temporal info) ---
+        # The parent builds the CPU-side InputNormalizer instances this class
+        # needs for the residuals precomputation: the regressor expects
+        # normalized x and produces output in normalized space, and the residual
+        # is computed against normalized y. ``normalize_on_cpu`` stays False —
+        # the instances are used explicitly below, NOT applied to what
+        # __getitem__ returns; the trainer still normalizes the batch on GPU.
+        #
+        # NOTE: the parent forwards operator_info when resolving these, exactly
+        # as trainer.py does for the non-residual runs. Without it
+        # `stats_transform` is never set, so for any channel carrying an operator
+        # (sqrt on pr/hurs) the affine is built from RAW-space min/max while the
+        # data is in operator space. The regressor is normalized by the trainer
+        # (which does pass it), so the two would end up in DIFFERENT spaces and
+        # the residual r = norm_y(y) - yhat would pick up a large constant offset
+        # on exactly those channels — silently, since every operator-free channel
+        # is unaffected.
         super().__init__(
             predictors=predictors,
             predictands=predictands,
@@ -79,50 +94,15 @@ class pydataset_custom(pydataset):
             temporal_period=temporal_period,
             load_in_memory=load_in_memory,
             cache_mb=cache_mb,
+            normalizer_info_x=normalizer_info_x,
+            normalizer_info_y=normalizer_info_y,
+            normalizer_info_f=normalizer_info_f,
         )
 
         self.load_in_memory = load_in_memory
         self.add_pred_mean = add_pred_mean
         self.add_context_lowres = add_context_lowres
         self.standardize_residuals = standardize_residuals
-
-        # --- Local InputNormalizer instances for the residuals precomputation ---
-        # The regressor expects normalized x and produces output in normalized
-        # space; the residual is computed against normalized y. We build local
-        # CPU-side InputNormalizer instances here from the recipe dicts. The
-        # trainer holds its own copies on the GPU for the actual training loop.
-        self._norm_x_cpu = None
-        self._norm_y_cpu = None
-        self._norm_f_cpu = None
-        # NOTE: operator_info MUST be forwarded here, exactly as trainer.py does
-        # for the non-residual runs. Without it `stats_transform` is never set,
-        # so for any channel carrying an operator (sqrt on pr/hurs) the affine is
-        # built from RAW-space min/max while the data is in operator space. The
-        # regressor is normalized by the trainer (which does pass it), so the two
-        # end up in DIFFERENT spaces and the residual r = norm_y(y) - yhat picks
-        # up a large constant offset on exactly those channels — silently, since
-        # every operator-free channel is unaffected.
-        if normalizer_info_x is not None:
-            resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_x, self.vars_x, predictand=False,
-                operator_info=self.operator_x,
-            )
-            self._norm_x_cpu = InputNormalizer(resolved, self.vars_x, channel_dim=1)
-        if normalizer_info_y is not None:
-            resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_y, self.vars_y, predictand=True,
-                operator_info=self.operator_y,
-            )
-            self._norm_y_cpu = InputNormalizer(resolved, self.vars_y, channel_dim=1)
-        # High-res forcing normalizer (e.g. orography as cond_high). Built only
-        # when the regressor was trained WITH forcings; must use the SAME recipe
-        # as the regressor so the re-fed forcing matches its training space.
-        if normalizer_info_f is not None and self.vars_f is not None:
-            resolved = pydataset._resolve_normalizer_info(
-                normalizer_info_f, self.vars_f, predictand=False, forcing=True,
-                operator_info=self.operator_f,
-            )
-            self._norm_f_cpu = InputNormalizer(resolved, self.vars_f, channel_dim=1)
 
         # --- Regressor ---
         log.info("Loading regressor model from %s", path_regressor)

@@ -2,6 +2,7 @@
 import os
 import math
 import time
+import inspect
 import torch
 import contextlib
 import numpy as np
@@ -15,6 +16,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from deep4production.deep.utils import EMA
 from deep4production.deep.utils import save_model, resume_model
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
+from deep4production.core.pydatasets.pydataset_multi import (
+    MultiSourceDataset,
+    merge_source_block,
+)
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.monitors import build_monitor
 from deep4production.utils.log import get_logger
@@ -184,6 +189,39 @@ class trainer:
         self.norm_x = None
         self.norm_y = None
         self.norm_f = None
+        # Multi-source (``data.sources``) runs normalize per source on the CPU,
+        # because each source carries its own statistics. The GPU modules are
+        # still built — the checkpoint needs them as the inference default — but
+        # never applied to a training batch. See _normalize_inputs.
+        self.sources = data.get("sources", None)
+        self._norm_on_cpu = self.sources is not None
+        if self._norm_on_cpu:
+            # The shared blocks carry `default:` and the per-variable methods but
+            # no `path_reference` — that is per source. Resolve the checkpoint's
+            # default normalizers against the FIRST source so the metadata (and
+            # hence inference) has a usable, complete recipe. Any other source is
+            # equally valid as a default; inference is expected to override
+            # `normalizer_x`/`_y`/`_f` with the stats of the case being run.
+            ref = self.sources[0]
+            self.normalizer_info_x = merge_source_block(
+                data.get("predictors", {}), ref.get("predictors", {})
+            ).get("normalizer", None)
+            self.normalizer_info_y = merge_source_block(
+                data.get("predictands", {}), ref.get("predictands", {})
+            ).get("normalizer", None)
+            self.normalizer_info_f = (
+                merge_source_block(
+                    data.get("forcings", {}), ref.get("forcings", {})
+                ).get("normalizer", None)
+                if data.get("forcings")
+                else None
+            )
+            log.info(
+                "Multi-source run: %d sources, normalization applied per source "
+                "on CPU. Checkpoint default normalizers taken from '%s'.",
+                len(self.sources),
+                ref.get("name", "source_0"),
+            )
 
         # --- CREATE AND SAVE METADATA ---------------------------------------
         self.metadata_dict = self.build_metadata()
@@ -219,14 +257,18 @@ class trainer:
         self.d4p_func = get_func_from_string(
             module_string=d4p_module, func_string=d4p_name
         )
+        # Under `data.sources` the shared predictor/predictand blocks carry no
+        # `paths` — those are per source. Monitoring predicts a single store, so
+        # it uses the reference (first) source.
+        ref = self.sources[0] if self.sources else data
         self.input_data = {
-            "paths": data["predictors"]["paths"],
+            "paths": ref["predictors"]["paths"],
             "years": data["validation_period"],
             "load_in_memory": data["load_in_memory"],
         }
         if data.get("forcings", None) is not None:
             self.forcing_data = {
-                "paths": data["predictands"]["paths"],
+                "paths": ref["predictands"]["paths"],
                 "years": data["validation_period"],
                 "load_in_memory": data["load_in_memory"],
             }
@@ -460,6 +502,66 @@ class trainer:
         return self.metadata_dict
 
     # -------------------------------------------------------------------------
+    def _build_multi_source(self, kwargs_pydataset, period_key):
+        """
+        Build one pydataset per entry in ``data.sources`` and pool them.
+
+        Each source merges its own ``paths`` and ``normalizer.path_reference``
+        into the shared predictor/predictand/forcing blocks, and normalizes on
+        the CPU with its own statistics so that sources with different mean
+        states reach the model in a common standardized space.
+
+        A source may override ``training_period`` / ``validation_period``; this
+        is only needed to make a shorter coverage explicit in the recipe, since
+        dates a store does not hold are dropped anyway.
+
+        Parameters
+        ----------
+        kwargs_pydataset : dict
+            The shared kwargs assembled by ``get_pydatasets``.
+        period_key : str
+            ``"training_period"`` or ``"validation_period"``.
+        """
+        # A custom `d4p_pydataset:` that predates this feature would quietly
+        # ignore normalize_on_cpu and return unnormalized samples, which the
+        # trainer no longer normalizes either — every source would then reach the
+        # model in its own raw units. Check up front rather than train on it.
+        if "normalize_on_cpu" not in inspect.signature(self.pydataset).parameters:
+            raise TypeError(
+                f"❌ pydataset class '{self.pydataset.__name__}' does not accept "
+                "`normalize_on_cpu`, so it cannot apply the per-source statistics "
+                "that `data.sources` requires."
+            )
+        datasets, names = [], []
+        for i, source in enumerate(self.sources):
+            name = source.get("name", f"source_{i}")
+            period = source.get(period_key, self.data[period_key])
+            kwargs = {
+                **kwargs_pydataset,
+                "predictors": merge_source_block(
+                    self.data.get("predictors", {}), source.get("predictors", {})
+                ),
+                "predictands": merge_source_block(
+                    self.data.get("predictands", {}), source.get("predictands", {})
+                ),
+                "forcings": (
+                    merge_source_block(
+                        self.data.get("forcings", {}), source.get("forcings", {})
+                    )
+                    if self.data.get("forcings")
+                    else {}
+                ),
+                "normalize_on_cpu": True,
+            }
+            kwargs["normalizer_info_x"] = kwargs["predictors"].get("normalizer")
+            kwargs["normalizer_info_y"] = kwargs["predictands"].get("normalizer")
+            kwargs["normalizer_info_f"] = kwargs["forcings"].get("normalizer")
+            log.info("Building source '%s' (%s)", name, period_key)
+            datasets.append(self.pydataset(temporal_period=period, **kwargs))
+            names.append(name)
+        return MultiSourceDataset(datasets, names=names)
+
+    # -------------------------------------------------------------------------
     def get_pydatasets(self):
         """
         Creates training and validation pydataset objects, updates metadata, and prepares for MLflow diagnostics.
@@ -481,14 +583,24 @@ class trainer:
             "cache_mb": self.data.get("zarr_cache_mb", None),
         }
         kwargs_pydataset.update(**self.d4dpy)
-        train_dataset = self.pydataset(
-            temporal_period=self.data["training_period"], **kwargs_pydataset
-        )
+        if self.sources:
+            train_dataset = self._build_multi_source(
+                kwargs_pydataset, "training_period"
+            )
+        else:
+            train_dataset = self.pydataset(
+                temporal_period=self.data["training_period"], **kwargs_pydataset
+            )
         valid_dataset = None
         if self.data.get("validation_period", None) is not None:
-            valid_dataset = self.pydataset(
-                temporal_period=self.data["validation_period"], **kwargs_pydataset
-            )
+            if self.sources:
+                valid_dataset = self._build_multi_source(
+                    kwargs_pydataset, "validation_period"
+                )
+            else:
+                valid_dataset = self.pydataset(
+                    temporal_period=self.data["validation_period"], **kwargs_pydataset
+                )
             # Validation-period ground truth for monitoring diagnostics, needed
             # only when the active monitoring backend logs diagnostics.
             if self.monitor.needs_predictions:
@@ -613,7 +725,14 @@ class trainer:
         ``self.device``. Returns the (possibly normalized) tensors in the same
         order. If a given normalizer is None, the corresponding tensor is
         returned unchanged.
+
+        No-op for multi-source runs: each source normalized its own samples on
+        the CPU with its own statistics (see MultiSourceDataset), so applying the
+        GPU modules — which carry the reference source's affine — would
+        transform a second time.
         """
+        if self._norm_on_cpu:
+            return x, y, f
         if x is not None and self.norm_x is not None:
             x = self.norm_x(x, channel_dim=channel_dim_x)
         if y is not None and self.norm_y is not None:

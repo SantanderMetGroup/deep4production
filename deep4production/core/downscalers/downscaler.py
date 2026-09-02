@@ -8,6 +8,7 @@ from torch import from_numpy
 ## Deep4production
 from deep4production.deep.utils import load_model
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
+from deep4production.core.pydatasets.pydataset import pydataset
 from deep4production.utils.trans import from_pred_to_xarray, compute_valid_mask
 from deep4production.utils.general import get_func_from_string
 from deep4production.utils.temporal import (
@@ -67,9 +68,28 @@ class downscaler:
         forcing_data=None,
         physical_bounds=None,
         unit_conversion=None,
+        normalizer_x=None,
+        normalizer_y=None,
+        normalizer_f=None,
     ):
         """
         Initializes the D4P Downscaler.
+
+        normalizer_x / normalizer_y / normalizer_f (dict, optional): Recipe
+            ``normalizer:`` blocks (``path_reference`` + ``default`` + per-variable
+            overrides) that REPLACE the ones baked into the checkpoint metadata.
+            Absent → the checkpoint's own normalizers are used, as before.
+
+            Needed whenever the statistics that should be used at inference are
+            not the ones the run was trained with. The motivating case is a
+            multi-source (``data.sources``) run: the model works in standardized
+            anomalies, each source having been standardized by its own
+            statistics, so the checkpoint's default — the reference source's —
+            is only correct for that one simulation. Downscaling another driver
+            means standardizing the input with THAT driver's statistics, and the
+            two directions need not agree: de-standardizing the output with a
+            fixed reference instead re-expresses every prediction in that
+            reference's climate.
 
         physical_bounds (dict, optional): Per-variable physical clamp applied in
             final physical space (after the deoperator), e.g. ``{"hurs": [0, 100]}``.
@@ -269,6 +289,12 @@ class downscaler:
         else:
             self._ops_f = None
 
+        # --- Recipe-level normalizer overrides ------------------------
+        # Applied before the modules are built, so an override is indistinguishable
+        # downstream from a checkpoint normalizer. Resolved here rather than in the
+        # CLI because it needs vars_* and operator_*, which update_self set above.
+        self._apply_normalizer_overrides(normalizer_x, normalizer_y, normalizer_f)
+
         # --- Build InputNormalizer modules from saved metadata --------
         # The metadata's normalizer dicts were resolved at training time by
         # pydataset._resolve_normalizer_info — kwargs / methods / stats_transform
@@ -324,6 +350,48 @@ class downscaler:
             else:
                 ops.append(get_func_from_string(operator_info["module"], name))
         return ops
+
+    # ---------------------------------------------------------------------------------------------------------------------<
+    def _apply_normalizer_overrides(self, normalizer_x, normalizer_y, normalizer_f):
+        """
+        Replace the checkpoint's resolved normalizer dicts with ones built from
+        recipe blocks supplied at inference time.
+
+        Each override is resolved exactly as at training time — via
+        ``pydataset._resolve_normalizer_info``, with this run's variable order
+        and operator info — so ``stats_transform`` is set for operator-carrying
+        channels and the resulting affine matches what the trainer would have
+        built from the same block.
+        """
+        overrides = (
+            ("normalizer_x", normalizer_x, "vars_x", "operator_x", False, False),
+            ("normalizer_y", normalizer_y, "vars_y", "operator_y", True, False),
+            ("normalizer_f", normalizer_f, "vars_f", "operator_f", False, True),
+        )
+        for attr, block, vars_attr, op_attr, predictand, forcing in overrides:
+            if block is None:
+                continue
+            vars = getattr(self, vars_attr, None)
+            if vars is None:
+                log.warning(
+                    "%s override given but this run has no %s; ignoring.",
+                    attr,
+                    vars_attr,
+                )
+                continue
+            resolved = pydataset._resolve_normalizer_info(
+                block,
+                vars,
+                predictand=predictand,
+                forcing=forcing,
+                operator_info=getattr(self, op_attr, None),
+            )
+            setattr(self, attr, resolved)
+            log.info(
+                "%s overridden by recipe: stats from %s",
+                attr,
+                block.get("path_reference"),
+            )
 
     # ---------------------------------------------------------------------------------------------------------------------<
     @staticmethod

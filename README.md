@@ -125,7 +125,7 @@ pixi install
 If you prefer a traditional environment, create and activate a clean environment:
 
 ```bash
-conda create -n deep4production python=3.13
+conda create -n deep4production python=3.12
 conda activate deep4production
 ```
 

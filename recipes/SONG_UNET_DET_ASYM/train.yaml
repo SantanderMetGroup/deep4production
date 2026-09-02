@@ -22,11 +22,15 @@ data:
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
+  # `paths` concatenates along TIME, not across simulations: every sample is
+  # keyed by its calendar date and the FIRST store holding that date wins. Use it
+  # to span one run split over several files (historical + scenario, one file per
+  # decade). Listing two simulations that cover the SAME dates does NOT pool them
+  # — the second contributes no samples at all. To pool, see `sources:` below.
   predictors:
     paths:
     - path_to_your_x_file_1.zarr
     - path_to_your_x_file_2.zarr
-      # Add more zarr files if predictors come from multiple sources
     variables:       # null → use all variables present in the zarrs
     normalizer:
       path_reference: path_to_your_x_file_1.zarr  # zarr used to compute stats
@@ -42,6 +46,49 @@ data:
     # on the raw precipitation values and evaluates the CDF in physical space.
     # Adding a transform here would invalidate those Gamma parameters.
     transform_to_2D: true  # reshape → (1, H_y, W_y); required by SongUNet
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL: pooling several simulations (multi GCM-RCM training)
+  # ---------------------------------------------------------------------------
+  # Uncomment to train on several independent simulations at once. d4p then
+  # builds one dataset per source and CONCATENATES the samples, so N simulations
+  # covering the same years give N times the samples.
+  #
+  # Each source is standardized with its OWN statistics (on the CPU, per sample),
+  # which is what makes pooling valid: simulations with different mean states
+  # arrive at the model in a common standardized space. There is no separate
+  # switch for this — the presence of `sources:` enables it.
+  #
+  # Only what is necessarily per-source goes in a source entry: `paths` and the
+  # normalizer's `path_reference`. Everything that must be identical for the
+  # samples to be collatable — `variables` (and their ORDER), `operator`,
+  # `transform_to_2D`, `num_lagged`, and the normalizer's `default` plus its
+  # per-variable methods — stays in the shared blocks above, and d4p raises if
+  # two sources end up disagreeing on grid, channels or lags.
+  #
+  # A source may also override `training_period` / `validation_period`. That is
+  # only to make a shorter coverage explicit: dates a store does not hold are
+  # dropped either way.
+  #
+  # At inference the checkpoint's normalizers are the FIRST source's, which is
+  # correct for that simulation alone. Set `normalizer_x` / `normalizer_y` /
+  # `normalizer_f` in the inference recipe to the stats of the case being run.
+  #
+  # sources:
+  #   - name: GCM_A
+  #     predictors:
+  #       paths: [path_to_gcmA_x_historical.zarr, path_to_gcmA_x_scenario.zarr]
+  #       normalizer: {path_reference: path_to_gcmA_x_historical.zarr}
+  #     predictands:
+  #       paths: [path_to_gcmA_y_historical.zarr, path_to_gcmA_y_scenario.zarr]
+  #       normalizer: {path_reference: path_to_gcmA_y_stats.zarr}
+  #   - name: GCM_B
+  #     predictors:
+  #       paths: [path_to_gcmB_x_historical.zarr, path_to_gcmB_x_scenario.zarr]
+  #       normalizer: {path_reference: path_to_gcmB_x_historical.zarr}
+  #     predictands:
+  #       paths: [path_to_gcmB_y_historical.zarr, path_to_gcmB_y_scenario.zarr]
+  #       normalizer: {path_reference: path_to_gcmB_y_stats.zarr}
 
 
 ##### DATA LOADER CONFIGURATION #####

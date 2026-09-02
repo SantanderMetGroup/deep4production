@@ -81,6 +81,9 @@ class downscaler_custom(downscaler):
         path_regressor=None,
         physical_bounds=None,
         unit_conversion=None,
+        normalizer_x=None,
+        normalizer_y=None,
+        normalizer_f=None,
     ):
         super().__init__(
             id_dir=id_dir,
@@ -92,6 +95,9 @@ class downscaler_custom(downscaler):
             forcing_data=forcing_data,
             physical_bounds=physical_bounds,
             unit_conversion=unit_conversion,
+            normalizer_x=normalizer_x,
+            normalizer_y=normalizer_y,
+            normalizer_f=normalizer_f,
         )
 
         # ── Sampler parameters ────────────────────────────────────────────────

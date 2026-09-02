@@ -60,6 +60,14 @@ def main():
     # Optional per-variable unit conversion applied to predictions at write-time
     # (e.g. {pr: {name: mm_day_to_flux}}). None → predictions kept as-is.
     unit_conversion = config.get("unit_conversion", None)
+    # Optional normalizer overrides. Same block shape as the training recipe
+    # (path_reference + default + per-variable methods); when absent the
+    # checkpoint's own normalizers are used. Needed for models trained on pooled
+    # sources, where the statistics to use depend on which simulation is being
+    # downscaled rather than on the checkpoint.
+    normalizer_x = config.get("normalizer_x", None)
+    normalizer_y = config.get("normalizer_y", None)
+    normalizer_f = config.get("normalizer_f", None)
 
     # --- Import downscaler module ----------------------------------
     d4p = config.get("d4p_downscaler", None)
@@ -88,6 +96,9 @@ def main():
         forcing_data=forcing_data,
         physical_bounds=physical_bounds,
         unit_conversion=unit_conversion,
+        normalizer_x=normalizer_x,
+        normalizer_y=normalizer_y,
+        normalizer_f=normalizer_f,
         **kwargs_downscaler,
     )
     downscaler.downscale(**inference_params)

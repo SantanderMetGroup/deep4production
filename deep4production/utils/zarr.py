@@ -65,7 +65,15 @@ class _AnemoiDataView:
         # Hot path: data[j] → (V, G)
         if isinstance(key, (int, np.integer)):
             return self._z[key, :, self._member, :]
-        # Generic fallback (rare in the d4p loop)
+        # Slabs and basic tuples index zarr directly; going through __array__
+        # would read the whole store (108 GiB for a 55-year 12 km one)
+        basic = (int, np.integer, slice)
+        if isinstance(key, slice):
+            key = (key,)
+        if isinstance(key, tuple) and len(key) <= 3 and all(isinstance(k, basic) for k in key):
+            t, v, g = (*key, *([slice(None)] * (3 - len(key))))
+            return self._z[t, v, self._member, g]
+        # Generic fallback: fancy indexing, Ellipsis, boolean masks
         return np.asarray(self.__array__())[key]
 
     def __len__(self):
