@@ -22,6 +22,7 @@ def main():
 
     # --- Unpack config to get parameters ------------------------------------------
     print("👋 WELCOME TO D4D DOWNSCALE!")
+    print("DOWNSCALER NoT IN BUILD")
     id_dir = config["id_dir"]
     input_data = config["input_data"]
     graph = config.get("graph", None)

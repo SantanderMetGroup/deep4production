@@ -266,3 +266,15 @@ def latlon_to_xyz(lat, lon):
     y = np.cos(lat)*np.sin(lon)
     z = np.sin(lat)
     return np.stack([x, y, z], axis=-1)
+
+
+def add_metadata_to_ds(ds: xr.Dataset, metadata: dict) -> xr.Dataset:
+    """Add metadata from a dictionary to an xarray Dataset."""
+    # Add global attributes
+    ds.attrs.update(metadata)
+    # Add variable-specific attributes
+    for var_name, var_attrs in metadata["variables"].items():
+        if var_name in ds:
+            ds[var_name].attrs.update(var_attrs)
+
+    return ds

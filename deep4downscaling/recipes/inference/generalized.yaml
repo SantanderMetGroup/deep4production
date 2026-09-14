@@ -1,0 +1,20 @@
+id_dir: /lustre/gmeteo/WORK/PROYECTOS/2022_IMPETUS4CHANGE/WP3/Emulators/models/deepesd_{loss}_{var}_v{version} # e.g., /outputs/deepesd_asym
+
+input_data: 
+  paths: 
+    - /lustre/gmeteo/WORK/reyess/I4C/data/datasets/zarrs/{gcm_name}_{gcm_run}_1.5_{scenario}.zarr
+  years: {years}
+  load_in_memory: False
+
+graph: null
+ensemble_size: 1
+
+model_file: DeepESD_{loss}_{var}_v{version}_best.pt # Model at: id_dir/models/
+
+saving_info:
+  file: {var}_ALPX-3_{gcm_name}_{scenario}_{gcm_run}_CSIC_WRF451R-CI4C-emul-DeepESD-T{version}_v1-r1_day_{start}0101-{end}1231.nc # Predictions will be saved at: id_dir/predictions/
+  template: null #/lustre/gmeteo/WORK/reyess/I4C/data/datasets/templates/WRF-3km-{var}-europe.nc #path_to_your_template.nc # Optional, if not returns a xr with dims: time, point
+
+
+
+

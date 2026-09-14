@@ -17,6 +17,7 @@ class d4d_downscaler:
         Initializes the D4D Downscaler.
         """
         print("🚀 STARTING D4D DOWNSCALER")
+        print("Downscaler NO de build")
         # --- SELF PARAMETERS ---
         self.ensemble_size = ensemble_size
         self.graph = graph
@@ -36,6 +37,9 @@ class d4d_downscaler:
             file = self.saving_info["file"]
             self.output_path = f"{id_dir}/predictions/{file}"
             print(f"📦 PREDICTIONS WILL BE SAVED HERE: {self.output_path}")
+        
+        # --- NORMILIZER PARAMS ---
+        self.normalizer_kwargs_x = input_data.get("normalizer_x", None)
 
         # --- GET INFO FROM METADATA ---
         self.update_self(input_data["paths"])
@@ -134,6 +138,8 @@ class d4d_downscaler:
         self.vars_y = self.metadata["vars_y"]
         self.vars_x = self.metadata["vars_x"]
         self.idx_vars_x = [self.x[0].attrs["variables"][var] for var in self.vars_x]
+        print("update_self")
+        print([(self.x[0].attrs["variables"][var], var) for var in self.vars_x])
         self.num_lagged_x = self.metadata["num_lagged_x"]
         # --- Normalizer ---
         self.normalizer_x = self.metadata.get("normalizer_x", None)
@@ -174,6 +180,8 @@ class d4d_downscaler:
         self.f = [zarr.open(p, mode='r') for p in fpaths]
         self.vars_f = self.metadata["vars_f"]
         self.idx_vars_f = [self.f[0].attrs["variables"][var] for var in self.vars_f]
+        print("update_self_with_forcings")
+        print([(self.f[0].attrs["variables"][var], var) for var in self.vars_f])
         self.normalizer_f = self.metadata.get("normalizer_f", None)
         if self.normalizer_f is not None:
             print("--- Normalizer (F) ---")
@@ -193,11 +201,15 @@ class d4d_downscaler:
         )
 
     # ---------------------------------------------------------------------------------------------------------------------<
-    def preprocess(self, date, data, vars, idx_vars, sample_map, operator=None, normalizer=None, transform_to_2D=False, H=None, W=None):
+    def preprocess(self, date, data, vars, idx_vars, sample_map, operator=None, normalizer=None, transform_to_2D=False, H=None, W=None, normalizer_kwargs=None):
         # -- Get sample --
         i, j = sample_map[date]
         source = data[i][j]
         x = source[idx_vars] # Shape (C, G)
+        print(f"Preprocess - date: {date}, sample indices: {i},{j}, sample_map len: {len(sample_map)}")
+        print(f"Data: {data}")
+        print(f"Source shape: {source.shape}")
+        print(f"x shape: {x.shape} - idx_vars: {idx_vars} - vars: {vars}")
         # --- Operator ---  
         if operator is not None:
             for c, variable in enumerate(vars):
@@ -205,12 +217,23 @@ class d4d_downscaler:
                     operator_func = get_func_from_string(operator["module"], operator["operator_func_per_variable"][variable])
                     x[c,:] = operator_func(x[c,:])
         # --- Normalize ---  
-        if normalizer is not None:
+        force = False
+        if normalizer_kwargs is not None:
+            force =normalizer_kwargs["force"]
+        if normalizer is not None and force == False:
+            print("Normal normalizer")
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
                     normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
                     x[c,:] = normalizer_method(x[c,:])
+        elif force == True:
+            print("Force normalizer")
+            for c, variable in enumerate(vars):
+                print(f"c: {c} - variable: {variable}")
+                normalizer_class = d4dnormalizers(mean=None, std=None, min=None, max=None, ref1=normalizer_kwargs["ref1"], ref2=normalizer_kwargs["ref2"])
+                normalizer_method = getattr(normalizer_class, normalizer_kwargs["type"])
+                x[c,:] = normalizer_method(x[c,:], date = date, variable = variable, denormalize=False)
         # --- Transform to 2D ---
         if transform_to_2D:
             C, G = x.shape
@@ -234,10 +257,16 @@ class d4d_downscaler:
             # print(f"AFTER: {data.shape}")
         # -- Denormalize --
         if normalizer is not None:
+            print("Date y data total")
+            print(date)
+            print(data)
             for c, variable in enumerate(vars):
                 if normalizer["normalizer_func_per_variable"][variable] is not None:
                     normalizer_class = d4dnormalizers(**normalizer["kwargs"][variable])
                     normalizer_method = getattr(normalizer_class, normalizer["normalizer_func_per_variable"][variable])
+                    
+                    print(f"DATA: {c} - var:{variable}")
+                    print(data[:,c,:])
                     data[:,c,:] = normalizer_method(data[:,c,:], denormalize=True)
         # --- Deoperator ---  
         if operator is not None:
@@ -272,15 +301,15 @@ class d4d_downscaler:
                 if len(dates) > 1:
                     inp = []
                     for date in dates:
-                        inp.append(self.preprocess(date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x))
+                        inp.append(self.preprocess(date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x, normalizer_kwargs=self.normalizer_kwargs_x))
                     inp = torch.stack(inp).unsqueeze(0)
                 else:
-                    inp = self.preprocess(target_date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x).unsqueeze(0)
+                    inp = self.preprocess(target_date, self.data["x"], self.vars_x, self.idx_vars_x, self.sample_map, operator=self.operator_x, normalizer=self.normalizer_x, transform_to_2D=self.transform_to_2D_x, H=self.H_x, W=self.W_x, normalizer_kwargs=self.normalizer_kwargs_x).unsqueeze(0)
                 # print(f"Inp shape: {inp.shape}")
 
                 # -- High-res forcings (indexing, normalizing,..) --
                 if self.forcing_data is not None:
-                    f = self.preprocess(target_date, self.data["f"], self.vars_f, self.idx_vars_f, self.sample_map_f, operator=self.operator_f, normalizer=self.normalizer_f, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y).unsqueeze(0)
+                    f = self.preprocess(target_date, self.data["f"], self.vars_f, self.idx_vars_f, self.sample_map_f, operator=self.operator_f, normalizer=self.normalizer_f, transform_to_2D=self.transform_to_2D_y, H=self.H_y, W=self.W_y, normalizer_kwargs=self.normalizer_kwargs_y).unsqueeze(0)
                 else:
                     Cy = len(self.vars_y)
                     spatial = [self.H_y, self.W_y] if self.transform_to_2D_y else [self.G_y]

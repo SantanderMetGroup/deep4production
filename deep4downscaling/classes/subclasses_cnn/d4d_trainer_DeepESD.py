@@ -68,6 +68,6 @@ class d4d_trainer_custom(d4d_trainer):
         # --- Backpropagation ---
         if is_this_training:
             loss.backward()
-            optimizer.step()
+            #optimizer.step()
 
         return loss.item()

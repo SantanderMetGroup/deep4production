@@ -191,12 +191,16 @@ class d4d_dataset(Dataset):
         kwargs_imputer   = {k: v for k, v in imputer_selected.items() if k != "name"}
         # Dynamic NaN list for this variable
         dyn_list = zarr_attrs.get(var, [])
+        print(f"🔍 [{var}] Detected {len(dyn_list)} dynamic NaNs for imputation.")
         if dyn_list and len(dyn_list) > 0:
             print(f"🔧 [{var}] Starting dynamic NaN imputation using '{imputer_name}'")
             # Loop directly over the list of [t, gp] pairs
             for (t, gp) in dyn_list:
-                print(lats[gp].dtype)
-                print(lons[gp].dtype)
+                # print(t)
+                # print("---")
+                # print(gp)
+                # print(lats[gp].dtype)
+                # print(lons[gp].dtype)
                 print(f"   → Imputing at timestep {t} ({self.dates[t]}) gridpoint {gp}")
                 # Build imputer instance for the specific timestep t
                 imp = d4dimputers(
