@@ -69,6 +69,13 @@ d4p_downscaler:
       S_noise: 1.0
 
 
+##### PHYSICAL BOUNDS (optional) #####
+# Per-variable clamp in physical space after denormalization; null = one-sided.
+physical_bounds:
+  pr: [0, null]
+  # hurs: [0, 100]
+
+
 ##### OUTPUT #####
 saving_info:
   file: ResDiff_1981-1983.nc     # saved at id_dir/outputs/predictions/

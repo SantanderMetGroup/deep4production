@@ -55,7 +55,7 @@ hardware:
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:

@@ -28,8 +28,10 @@ d4p_pydataset:
     # Path to the deterministic regressor checkpoint (d4p-format .pt file).
     # Used to compute y_hat = regressor(x); the residual r = y - y_hat is the
     # diffusion target, and y_hat itself is fed back as the high-res context.
-    # Regressor checkpoint from a separate deterministic run's outputs/models/,
-    # e.g. <output_dir>/SONG_UNET_DET_ASYM/outputs/models/SongUNet_det_asym_best.pt
+    # Regressor checkpoint from a separate deterministic run's outputs/models/
+    # (an MSE SongUNet, trainer_song_unet_det). Its `predictands` block (variables,
+    # operator, normalizer) MUST equal the one below: the residual is
+    # norm_y(y) - y_hat, with y_hat in the regressor's normalized space.
     path_regressor: path/to/your/project/REGRESSOR_RUN/outputs/models/regressor_best.pt
     # Pass the regressor's mean prediction to the diffusion UNet as cond_high.
     # Must stay `true` for CorrDiff; setting `false` falls back to
@@ -73,6 +75,12 @@ data:
     - '...'
     variables:
     - pr
+    # Same block as the regressor's. mean_std for temperature-like targets,
+    # std (no mean removal) for pr.
+    normalizer:
+      path_reference: path_to_your_y_file_1.zarr
+      default: mean_std
+      pr: std
     transform_to_2D: true
 
 
@@ -125,6 +133,7 @@ model_info:
           in_channels: 1            # C_r  — channels of the residual (= C_y)
           cond_low_channels: 12     # C_x  — coarse ERA5 / predictor channels
           cond_high_channels: 1     # C_yhat — regression mean as high-res context
+          widen_in_downsample: false
           nf: 128                   # base width (CorrDiff paper: ~80 M params at nf=128)
           ch_mult: [1, 2, 2, 2, 2]  # 5 encoder levels (CorrDiff paper)
           num_res_blocks: 4

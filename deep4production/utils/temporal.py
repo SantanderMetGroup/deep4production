@@ -108,6 +108,40 @@ def get_sample_map(dates_yaml, data_zarrs):
 
 
 # -------------------------------------------------------------------------
+def load_dates(stores, sample_map, dates):
+    """
+    Read only ``dates`` of each store into RAM, one slab per contiguous run of
+    time indices, instead of the whole store.
+
+    Returns
+    -------
+    arrays : list of np.ndarray
+        One (n_i, C, G) array per store (all channels).
+    sample_map : dict
+        {YYYY-MM-DD: [zarr_file_idx, position in arrays[zarr_file_idx]]},
+        restricted to ``dates``.
+    """
+    wanted = [[] for _ in stores]
+    for d in dates:
+        i, j = sample_map[d]
+        wanted[i].append(j)
+    arrays, pos = [], []
+    for store, idx in zip(stores, wanted):
+        idx = np.unique(np.asarray(idx, dtype=np.int64))
+        data = store["data"]
+        if idx.size == 0:
+            arrays.append(np.empty((0, *data.shape[1:]), dtype=data.dtype))
+        else:
+            breaks = np.flatnonzero(np.diff(idx) != 1) + 1
+            runs = [(r[0], r[-1] + 1) for r in np.split(idx, breaks)]
+            arrays.append(np.concatenate([np.asarray(data[a:b]) for a, b in runs]))
+        pos.append({j: k for k, j in enumerate(idx.tolist())})
+        log.info("Loaded %d of %d time steps into memory.", idx.size, data.shape[0])
+    new_map = {d: [sample_map[d][0], pos[sample_map[d][0]][sample_map[d][1]]] for d in dates}
+    return arrays, new_map
+
+
+# -------------------------------------------------------------------------
 # CORDEX temporal chunking
 # -------------------------------------------------------------------------
 # The CORDEX archive splits a run's time series over several files on a fixed,

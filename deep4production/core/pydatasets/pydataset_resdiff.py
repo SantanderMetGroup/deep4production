@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,6 +16,7 @@ from deep4production.deep.models.diffusion.patching import (
     run_regressor_patched,
 )
 from deep4production.utils.log import get_logger
+from deep4production.utils.distributed import barrier, is_main_process
 
 log = get_logger("pydataset.resdiff")
 
@@ -49,6 +51,12 @@ class pydataset_custom(pydataset):
     regressor_batch_size : int
         Number of dates processed per regressor forward pass. Larger values
         increase GPU utilisation during residuals precomputation.
+    normalize_on_cpu : bool
+        Set by the trainer for multi-source runs: c_low is then normalized here
+        with this source's own predictor stats instead of on the GPU.
+    source_name : str
+        Multi-source runs only: suffixes the residuals zarr so each source gets
+        its own cache (RESIDUALS_<source>_<dataset>.zarr).
     """
 
     def __init__(
@@ -69,14 +77,16 @@ class pydataset_custom(pydataset):
         normalizer_info_f: dict = None,
         cache_mb: int = None,
         regressor_batch_size: int = 32,
+        normalize_on_cpu: bool = False,
+        source_name: str = None,
     ):
         # --- Call parent constructor (loads x/y/forcings, builds pipelines, temporal info) ---
         # The parent builds the CPU-side InputNormalizer instances this class
         # needs for the residuals precomputation: the regressor expects
         # normalized x and produces output in normalized space, and the residual
-        # is computed against normalized y. ``normalize_on_cpu`` stays False —
-        # the instances are used explicitly below, NOT applied to what
-        # __getitem__ returns; the trainer still normalizes the batch on GPU.
+        # is computed against normalized y. For single-source runs
+        # ``normalize_on_cpu`` is False and the trainer normalizes c_low on the
+        # GPU; multi-source runs set it so c_low gets this source's own stats.
         #
         # NOTE: the parent forwards operator_info when resolving these, exactly
         # as trainer.py does for the non-residual runs. Without it
@@ -97,6 +107,7 @@ class pydataset_custom(pydataset):
             normalizer_info_x=normalizer_info_x,
             normalizer_info_y=normalizer_info_y,
             normalizer_info_f=normalizer_info_f,
+            normalize_on_cpu=normalize_on_cpu,
         )
 
         self.load_in_memory = load_in_memory
@@ -109,6 +120,9 @@ class pydataset_custom(pydataset):
         self.regressor_model, reg_meta = load_model(
             path=path_regressor, return_metadata=True
         )
+        # load_model builds on CPU; run the cache forward on this rank's GPU.
+        if torch.cuda.is_available():
+            self.regressor_model.to(torch.device("cuda", torch.cuda.current_device()))
         # If the regressor was trained CorrDiff-patched, replicate its tiled
         # forward here so the cached residuals match inference exactly. Geometry
         # comes from the regressor checkpoint's own metadata.
@@ -132,29 +146,45 @@ class pydataset_custom(pydataset):
                 self.reg_padder.padded_H, self.reg_padder.padded_W,
             )
 
-        # --- Residuals zarr ---
-        path_residuals_zarr = f"{residuals['path'][:-5]}_{dataset}.zarr"
+        # --- Residuals zarr (one per source in multi-source runs) ---
+        base = residuals["path"][:-5]
+        if source_name:
+            base = f"{base}_{source_name}"
+        path_residuals_zarr = f"{base}_{dataset}.zarr"
         variables_residuals = [f"{v}_residual" for v in self.vars_y] + [
             f"{v}_normalized" for v in self.vars_y
         ]
 
-        if not self._residuals_zarr_valid(path_residuals_zarr):
-            if os.path.exists(path_residuals_zarr):
-                log.warning(
-                    "Residuals zarr at %s is invalid or incomplete (stale from a "
-                    "previous failed run). Recomputing.",
+        # Under DDP only rank 0 writes the cache; the other ranks wait and read it.
+        if is_main_process():
+            if not self._residuals_zarr_valid(path_residuals_zarr):
+                if os.path.exists(path_residuals_zarr):
+                    log.warning(
+                        "Residuals zarr at %s is invalid or incomplete (stale from a "
+                        "previous failed run). Recomputing.",
+                        path_residuals_zarr,
+                    )
+                self._write_residuals_zarr(
+                    path_residuals_zarr,
+                    variables_residuals,
+                    batch_size=regressor_batch_size,
+                )
+            else:
+                log.info(
+                    "Residuals zarr already available at %s, skipping computation.",
                     path_residuals_zarr,
                 )
-            self._write_residuals_zarr(
-                path_residuals_zarr,
-                variables_residuals,
-                batch_size=regressor_batch_size,
-            )
         else:
-            log.info(
-                "Residuals zarr already available at %s, skipping computation.",
-                path_residuals_zarr,
-            )
+            # Poll instead of barrier(): the write outlasts NCCL's collective timeout.
+            while not self._residuals_zarr_valid(path_residuals_zarr):
+                time.sleep(30)
+        barrier()
+        # The regressor is only needed to build the cache. Dropping it frees GPU
+        # memory (one copy per source and split otherwise) and keeps it out of
+        # the DataLoader workers.
+        self.regressor_model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # --- Sample map for residuals: date -> [zarr_file_idx, time_idx] ---
         # Residuals zarr is written in target_dates order, so the time index is
@@ -177,9 +207,24 @@ class pydataset_custom(pydataset):
         # (r - mean) / std so the diffused field has ~unit variance and the EDM
         # preconditioner can use sigma_data=1.0. The stats also go into the run
         # metadata so the downscaler can invert the standardization at inference.
+        #
+        # These are THIS store's stats. The trainer overrides them with the
+        # training split's (pooled over sources, if any) via set_residual_norm,
+        # so every split and source is standardized with the stats the
+        # downscaler will invert.
         n_y = len(self.vars_y)
-        res_mean = np.asarray(r_zarr[0]["mean"], dtype=np.float32)[:n_y]
-        res_std = np.asarray(r_zarr[0]["std"], dtype=np.float32)[:n_y]
+        # Unguarded store stats and their sample count, kept for pooling.
+        self.residual_mean_raw = np.asarray(r_zarr[0]["mean"], dtype=np.float64)[:n_y]
+        self.residual_std_raw = np.asarray(r_zarr[0]["std"], dtype=np.float64)[:n_y]
+        self.residual_count = len(self.target_dates) * self.G_y
+        self.set_residual_norm(self.residual_mean_raw, self.residual_std_raw)
+
+    # -------------------------------------------------------------------------
+    def set_residual_norm(self, mean, std):
+        """Set the per-channel (mean, std) used to standardize the served residual."""
+        n_y = len(self.vars_y)
+        res_mean = np.asarray(mean, dtype=np.float32).reshape(n_y)
+        res_std = np.asarray(std, dtype=np.float32).reshape(n_y)
         # Guard against degenerate (near-zero) channel std.
         res_std = np.where(res_std < 1e-8, 1.0, res_std).astype(np.float32)
         self.residual_mean = res_mean
@@ -469,7 +514,7 @@ class pydataset_custom(pydataset):
 
         # --- Low-res predictor context ---
         # preprocess() applies operator → reshape → tensor; normalization is
-        # applied later by the trainer on the GPU.
+        # applied here for multi-source runs, otherwise by the trainer on the GPU.
         c_low = None
         if self.add_context_lowres:
             c_low = self.preprocess(
@@ -482,6 +527,8 @@ class pydataset_custom(pydataset):
                 H=self.H_x,
                 W=self.W_x,
             )
+            if self.normalize_on_cpu and self._norm_x_cpu is not None:
+                c_low = self._norm_x_cpu(c_low, channel_dim=0)
 
         return residual, c_low, c_high
 
@@ -504,3 +551,28 @@ class pydataset_custom(pydataset):
             "mean": [float(m) for m in self.residual_mean],
             "std": [float(s) for s in self.residual_std],
         }
+
+
+# -------------------------------------------------------------------------
+def pool_residual_norm(datasets):
+    """
+    Pool per-channel residual (mean, std) over several residual pydatasets.
+
+    Exact for the population moments each store holds: every store's (mean, std)
+    is weighted by its sample count (dates x gridpoints), so the result equals
+    the stats of all residuals concatenated. Used for multi-source runs, where
+    one diffusion model (and one inverse transform at inference) serves every
+    source.
+
+    Returns
+    -------
+    (mean, std) : two float64 arrays of length C
+    """
+    counts = np.array([d.residual_count for d in datasets], dtype=np.float64)
+    means = np.stack([d.residual_mean_raw for d in datasets])  # (S, C)
+    stds = np.stack([d.residual_std_raw for d in datasets])
+    w = (counts / counts.sum())[:, None]
+    mean = (w * means).sum(axis=0)
+    second = (w * (stds**2 + means**2)).sum(axis=0)
+    std = np.sqrt(np.maximum(second - mean**2, 0.0))
+    return mean, std

@@ -173,6 +173,18 @@ def save_model(
 
 
 # --------------------------------------------------------------------------------------------------------------
+def strip_wrapper_prefixes(state_dict):
+    """Drop the ``_orig_mod.`` (torch.compile) and ``module.`` (DDP) key prefixes of checkpoints saved from a wrapped model."""
+    prefixes = ("_orig_mod.", "module.")
+    clean = {}
+    for key, value in state_dict.items():
+        while key.startswith(prefixes):
+            key = key.split(".", 1)[1]
+        clean[key] = value
+    return clean
+
+
+# --------------------------------------------------------------------------------------------------------------
 def resume_model(model, path, optimizer=None, scheduler=None):
     """
     Loads model checkpoint and resumes training state.
@@ -190,7 +202,7 @@ def resume_model(model, path, optimizer=None, scheduler=None):
     # GPU/CPU at once and then double the Adam state during deep-copy into the
     # optimizer — enough to OOM at resume even when training from scratch fit.
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(strip_wrapper_prefixes(checkpoint["model_state_dict"]))
     del checkpoint["model_state_dict"]
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -203,6 +215,26 @@ def resume_model(model, path, optimizer=None, scheduler=None):
         checkpoint["global_step"],
     )
     return checkpoint
+
+
+# --------------------------------------------------------------------------------------------------------------
+def resolve_songunet_downsample(model_params, state_dict):
+    """Set ``widen_in_downsample`` on every SongUNet spec that lacks it, inferring it from the weights.
+
+    Checkpoints that predate the flag were built with the legacy widening downsample block,
+    whose first conv changes width; with equal widths both layouts are identical.
+    """
+    if isinstance(model_params, dict):
+        if model_params.get("name") == "SongUNet":
+            kwargs = model_params.setdefault("kwargs", {})
+            if "widen_in_downsample" not in kwargs:
+                w = next(
+                    (v for k, v in state_dict.items() if k.endswith("enc_downs.0.conv1.weight")),
+                    None,
+                )
+                kwargs["widen_in_downsample"] = bool(w is not None and w.shape[0] != w.shape[1])
+        for v in model_params.values():
+            resolve_songunet_downsample(v, state_dict)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -219,6 +251,8 @@ def load_model(path, map_location=None, return_metadata=False):
     """
     # Load checkpoint
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+    state_dict = strip_wrapper_prefixes(checkpoint["model_state_dict"])
+    resolve_songunet_downsample(checkpoint["metadata"]["model_params"], state_dict)
     # Use metadata to rebuild model
     model_name, model_module, model_kwargs = (
         checkpoint["metadata"]["model_params"]["name"],
@@ -227,7 +261,7 @@ def load_model(path, map_location=None, return_metadata=False):
     )
     model = get_func_from_string(model_module, model_name, model_kwargs)
     # Load weights
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(state_dict)
     # Evaluation mode
     model.eval()
     if return_metadata:

@@ -38,10 +38,10 @@ ______________________________________________________________________
 
 ## 1. Prerequisites
 
-We assume you have already followed the base tutorial up to training, but with the **MSE** recipe (`recipes/DEEPESD_MSE/train.yaml`) so the predictand `pr` is regressed directly. Concretely, this notebook expects:
+We assume you have already followed the base tutorial up to training, but with the **MSE** recipe (`recipes/DEEPESD_MSE/train.yaml`) adapted to precipitation (`variables: [pr]`, predictand normalizer `default: std`) so `pr` is regressed directly. Concretely, this notebook expects:
 
 - AI-ready predictors at `./AI_ready_datasets/files/UPSRCM_1961-1980.zarr` (and, optionally, a GCM-driven file for the imperfect case).
-- A trained checkpoint at `./deepesd_mse/outputs/models/DeepESD_best.pt`.
+- A trained checkpoint at `./deepesd_mse/outputs/models/DeepESD_Mse_best.pt`.
 - (Optional) a predictand template `./templates/pr_template.nc` to mask NaN gridpoints.
 
 The 15 predictor channels (CORDEX-BENCH Alps) are, in order:
@@ -82,7 +82,7 @@ explain_cfg = {
     'input_data': {'paths': [X_PERFECT], 'years': [1980], 'load_in_memory': True},
     'graph': None,
     'ensemble_size': 1,
-    'model_file': 'DeepESD_best.pt',          # at id_dir/outputs/models/
+    'model_file': 'DeepESD_Mse_best.pt',          # at id_dir/outputs/models/
     'saving_info': {'file': 'xai_pr_1980_perfect.nc', 'template': TEMPLATE},  # saved at id_dir/outputs/xai/
     # DeepESD forward is model(x, f) -> base Explainer (no architecture subclass needed).
     'd4p_explainer': {

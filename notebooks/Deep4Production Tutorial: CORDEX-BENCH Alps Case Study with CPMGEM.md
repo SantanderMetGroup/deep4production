@@ -58,8 +58,8 @@ CPMGEM differs from DeepESD in three places:
 
 1. **Predictand transform (`operator` + `normalizer`).** Precipitation is heavy-tailed and zero-inflated; CPMGEM trains on a transformed target so the diffusion process operates in a roughly Gaussian space:
 
-   - `operator: sqrt` — applied first, compresses the upper tail.
-   - `normalizer: minmax_neg1_1` — rescales to `[-1, 1]` (the natural range of the noise the SDE adds). Statistics are derived from the raw zarr stats; no recomputation needed.
+   - `operator: {pr: sqrt}` — applied first, compresses the upper tail.
+   - `normalizer: minmax_neg1_1` — rescales every target to `[-1, 1]` (the natural range of the noise the SDE adds). For `pr` the post-sqrt min/max are derived from the raw zarr stats; no recomputation needed.
 
 1. **Architecture and training schedule.** A larger NCSN++/SongUNet replaces the small DeepESD CNN. Diffusion training also benefits from EMA weight averaging, a warm-up scheduler, and gradient clipping — all enabled via the YAML.
 
@@ -80,7 +80,7 @@ d4p_trainer:
 data:
   load_in_memory: true
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
@@ -102,13 +102,9 @@ data:
       - ./AI_ready_datasets/files/RCM_1961-1980.zarr
     variables:
       - pr
-    # Paper transform: pr → sqrt(pr) → linearly rescale to [-1, 1].
-    # The operator is applied first, then the normalizer. Because sqrt is
-    # monotone on pr ≥ 0, the post-operator min/max are derived automatically
-    # from the raw zarr stats (sqrt(min_raw), sqrt(max_raw)); no need to
-    # recompute the zarr.
+    # Paper transform: pr → sqrt(pr) → [-1, 1]; other targets → [-1, 1].
     operator:
-      default: sqrt
+      pr: sqrt
     normalizer:
       path_reference: ./AI_ready_datasets/files/RCM_1961-1980.zarr
       default: minmax_neg1_1   # 2*(x-min)/(max-min) - 1
@@ -141,6 +137,7 @@ model_info:
       in_channels: 1              # C_y — single precipitation field
       cond_low_channels: 15       # C_x — predictor channels (d4p-inspect)
       cond_high_channels: 0       # CPMGEM does not use high-res conditioning
+      widen_in_downsample: false
       nf: 128                     # base channel width
       ch_mult: [1, 2, 2, 2]       # 4 encoder levels
       num_res_blocks: 4
@@ -186,8 +183,6 @@ d4p-train ./cpmgem/train.yaml
 ```
 
 > 💡 **Tip — first epoch is slow.** The trainer compiles internal schedulers and (optionally) torch-compiles the model on the first forward pass. From epoch 2 onwards throughput is much higher.
-
-Below is an example of training output:
 
 ______________________________________________________________________
 
@@ -264,8 +259,6 @@ Run with:
 ```bash
 d4p-downscale ./cpmgem/inference.yaml
 ```
-
-Below is an example of inference output:
 
 > ⚠️ **Cost note.** Inference cost is approximately `ensemble_size × num_steps × cost(forward UNet)`. With the paper defaults (5 members × 1000 steps) one year takes substantially longer than with DeepESD. For quick smoke tests, set `num_steps: 50` and `ensemble_size: 1`.
 

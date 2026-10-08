@@ -30,8 +30,8 @@ Same simplified CORDEX-BENCH Alps configuration as the other tutorials, with two
 - **AI-model backbone:** **GNN4CD** (graph neural network with bipartite low-res ↔ high-res message passing)
 - **Loss function:** `Asym` — MAE + a CDF-weighted term that penalises under-prediction of extreme precipitation
 - **Predictors:** UPSRCM (16 × 16 = 256 nodes), 15 variables, with **1 lagged** day
-- **Predictands:** RCM (128 × 128 = 16 384 nodes) precipitation `pr`, transformed by `log1p`
-- **Training:** 1961-1978 · **Validation:** 1979, 1980 (note: this is a different split from DeepESD/CPMGEM/ResDiff — keep it in mind when comparing diagnostics across recipes)
+- **Predictands:** RCM (128 × 128 = 16 384 nodes) precipitation `pr` (raw mm/day)
+- **Training:** 1961-1979 (excl. 1967, 1975) · **Validation:** 1967, 1975 · **Test:** 1980 (same split as the other tutorials)
 
 ______________________________________________________________________
 
@@ -60,11 +60,10 @@ ______________________________________________________________________
 
 ## 6. Train GNN4CD with `d4p-train`
 
-GNN4CD differs from DeepESD in five places:
+GNN4CD differs from DeepESD in four places:
 
 1. **Custom trainer (`d4p_trainer`).** `trainer_gnn4cd` reuses the cached graph each epoch and feeds the network with lagged sequences.
 1. **`graph` block.** Builds the bipartite graph from the lat-lon coordinates of the predictor and predictand zarr files. The first run computes and caches the `edge_index.pt`; subsequent runs reuse it.
-1. **Predictand operator (`log1p`).** Precipitation is transformed by `y → log(1 + y)` before being fed to the loss; this stabilises training on the heavy-tailed distribution. The inverse `expm1` is applied automatically at inference.
 1. **`transform_to_2D: false` and `num_lagged: 1`.** The data are served as flat node sequences, with each sample being the current day plus one lag.
 1. **`batch_size: 1`.** The graph topology is static and contains every node, so a single batch per step is the natural choice (matching the original GNN4CD implementation).
 
@@ -86,9 +85,9 @@ d4p_trainer:
 ##### TRAINING DATA CONFIGURATION #####
 data:
   load_in_memory: true
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1967, 1968, 1969,
-                    1970, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978]
-  validation_period: [1979, 1980]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970,
+                    1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  validation_period: [1967, 1975]
 
   predictors:
     paths:
@@ -106,13 +105,12 @@ data:
     variables:
       - pr
     transform_to_2D: false
-    operator:
-      pr: log1p                # y → log(1 + y); inverse applied at inference
+    # No operator/normalizer: the Asym loss fits Gamma CDFs on raw precipitation.
 
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 1                # graph is static → one full graph per step
-  shuffle: false
+  shuffle: true
   num_workers: 0
 
 ##### GRAPH CONSTRUCTION #####
@@ -178,8 +176,6 @@ d4p-train ./gnn4cd_asym/train.yaml
 
 > 💡 **First-run cost.** On the very first run the trainer builds the graph (kNN search over the predictand and predictor lat-lon coordinates) and writes it to `./gnn4cd_asym/outputs/aux_files/edge_index.pt`. Subsequent runs (resuming training, hyperparameter sweeps) reuse this file — only the kNN search is cached, so changing `nearest_neighbours_*` *will* trigger a rebuild.
 
-Below is an example of training output:
-
 ______________________________________________________________________
 
 ### Enabling MLflow
@@ -201,7 +197,7 @@ run_ID: gnn4cd_asym
 output_dir: .
 
 d4p_downscaler:
-  name: d4p_downscaler_custom
+  name: downscaler_custom
   module: deep4production.core.downscalers.downscaler_gnn4cd
 
 input_data:
@@ -244,9 +240,7 @@ Run with:
 d4p-downscale ./gnn4cd_asym/inference.yaml
 ```
 
-Below is an example of inference output:
-
-The downscaler automatically applies the inverse `log1p` operator (`expm1`) before saving, so predictions are written in physical units (mm/day):
+Predictions are written in physical units (mm/day), the units of the training zarr.
 
 > 🔁 **Cross-domain inference.** Because the network only depends on local graph connectivity (not on a fixed `(H, W)` raster), the same trained `gnn4cd_asym_best.pt` can be evaluated on a different domain by pointing `graph.data_high` / `graph.data_low` at a different pair of zarrs. This is the GNN counterpart of the "drop-in retraining" cost that CNN-based downscalers usually pay.
 

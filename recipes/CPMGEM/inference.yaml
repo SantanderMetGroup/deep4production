@@ -56,6 +56,13 @@ d4p_downscaler:
       # t_min: 1.0e-3
 
 
+##### PHYSICAL BOUNDS (optional) #####
+# Per-variable clamp in physical space after the deoperator; null = one-sided.
+# pr needs none: the sqrt inverse already clips negatives to 0.
+# physical_bounds:
+#   hurs: [0, 100]
+
+
 ##### OUTPUT #####
 saving_info:
   file: CPMGEM_1981-1983.nc     # saved at id_dir/outputs/predictions/

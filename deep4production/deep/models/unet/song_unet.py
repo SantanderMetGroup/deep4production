@@ -327,6 +327,12 @@ class SongUNet(nn.Module):
             sin(2^k · 2π · x/W), cos(2^k · 2π · x/W).
         K = 1 matches CorrDiff (Mardani et al. 2023); higher K adds
         multi-scale spatial detail (NeRF-style).
+    widen_in_downsample : bool
+        False (default): the downsampling ResBlock keeps its width and the next
+        level's first ResBlock widens, as in NCSN++ / mlde / PhysicsNeMo.
+        True: the downsampling ResBlock itself widens to the next level's width
+        (legacy d4p layout, ~1.6M more parameters at nf=128). Checkpoints that
+        predate this flag are detected from their weights by ``load_model``.
     """
 
     def __init__(
@@ -345,6 +351,7 @@ class SongUNet(nn.Module):
         progressive_input: bool = True,
         cond_upsample: str = "fir",
         spatial_pe_freqs: int = 0,
+        widen_in_downsample: bool = False,
     ) -> None:
         super().__init__()
 
@@ -389,11 +396,12 @@ class SongUNet(nn.Module):
         )
         self.in_conv = nn.Conv2d(net_in_ch, nf, 3, padding=1)
 
-        # Encoder — per-resblock skips + post-downsample skip (matches mlde).
-        # Each encoder level contributes num_res_blocks "resblock" skips plus,
-        # for non-terminal levels, one "post-down" skip. Together with the
-        # initial post-in_conv skip this yields num_levels × (num_res_blocks+1)
-        # skips total, exactly consumed by the decoder.
+        # Encoder — per-resblock skips + post-downsample skip. Each encoder
+        # level contributes num_res_blocks "resblock" skips plus, for
+        # non-terminal levels, one "post-down" skip. Together with the initial
+        # post-in_conv skip this yields num_levels × (num_res_blocks+1) skips,
+        # exactly consumed by the decoder. skip_chs records their widths.
+        self.widen_in_downsample = widen_in_downsample
         self.enc_resnets = nn.ModuleList()
         self.enc_attns = nn.ModuleList()
         self.enc_downs = nn.ModuleList()
@@ -401,6 +409,7 @@ class SongUNet(nn.Module):
 
         in_ch = nf
         pyramid_ch = net_in_ch
+        skip_chs = [nf]
         for level in range(num_levels):
             out_ch = chs[level]
             use_attn = level in attn_at_levels
@@ -423,11 +432,12 @@ class SongUNet(nn.Module):
                     AttnBlock(out_ch, skip_rescale=skip_rescale) if use_attn else None
                 )
                 in_ch = out_ch
+                skip_chs.append(in_ch)
             self.enc_resnets.append(lvl_res)
             self.enc_attns.append(lvl_atn)
 
             if level < num_levels - 1:
-                next_ch = chs[level + 1]
+                next_ch = chs[level + 1] if widen_in_downsample else in_ch
                 self.enc_downs.append(
                     ResBlock(
                         act,
@@ -449,6 +459,7 @@ class SongUNet(nn.Module):
                 else:
                     self.prog_downs.append(None)
                 in_ch = next_ch
+                skip_chs.append(in_ch)
             else:
                 self.enc_downs.append(None)
                 self.prog_downs.append(None)
@@ -484,18 +495,16 @@ class SongUNet(nn.Module):
         self.dec_attns = nn.ModuleList()  # single AttnBlock or None, one per level
         self.dec_ups = nn.ModuleList()
 
-        # At each decoder level, all popped skips share the level's channel
-        # count (the "down"-skip from level l-1 was projected to chs[l] by the
-        # encoder's down-resblock). So block i's in_ch = h_ch + chs[level],
-        # where h_ch = ch (running) for block 0 and = chs[level] after.
+        # Block i's in_ch = running width + the width of the skip it pops. With
+        # widen_in_downsample=False the "down"-skip from level l-1 keeps
+        # chs[l-1], so it is narrower than the other skips of level l.
         for level in reversed(range(num_levels)):
             out_ch = chs[level]
-            skip_ch = chs[level]
             use_attn = level in attn_at_levels
             lvl_res = nn.ModuleList()
 
             for i in range(num_res_blocks + 1):
-                in_ch_blk = (ch if i == 0 else out_ch) + skip_ch
+                in_ch_blk = (ch if i == 0 else out_ch) + skip_chs.pop()
                 lvl_res.append(
                     ResBlock(
                         act,

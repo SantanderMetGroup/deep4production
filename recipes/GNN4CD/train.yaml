@@ -4,7 +4,7 @@
 # writes every generated artifact under id_dir/outputs/ (models/, aux_files/,
 # predictions/, tracker/). Both keys are REQUIRED.
 run_ID: GNN4CD
-output_dir: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example
+output_dir: path/to/your/project        # e.g. /gpfs/.../projects/CORDEX-BENCH
 overwrite: true # trains deep learning model from scratch even if a model already exists in output dir
 
 ##### Call subclasses of deep4production.classes with specific ones #####
@@ -12,38 +12,37 @@ d4p_trainer:
   name: trainer_custom
   module: deep4production.core.trainers.trainer_gnn4cd
   kwargs:
-    edge_index_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/GNN4CD/outputs/aux_files/edge_index.pt # File is created on the fly when the trainer is first run.
+    edge_index_path: path/to/your/project/GNN4CD/outputs/aux_files/edge_index.pt # File is created on the fly when the trainer is first run.
 
 ##### TRAINING DATA CONFIGURATION (uses pre-computed zarr files) #####
 data:
   load_in_memory: true # Load all data in memory for training (speeds up training if enough RAM is available)
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1967, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978]
-  validation_period: [1979, 1980]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
+  validation_period: [1967, 1975]
 
   predictors:
     paths:
-    - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+    - path_to_your_x_file_1.zarr
     variables:       # If null, uses all variables available in the zarrs.
     normalizer:
-      path_reference: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr
+      path_reference: path_to_your_x_file_1.zarr
       default: mean_std # Applies this type of standardization to all the variables in the predictor set
     transform_to_2D: false
     num_lagged: 1
 
   predictands:
     paths:
-    - /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr   # If null, uses all variables available in the zarrs.
+    - path_to_your_y_file_1.zarr   # If null, uses all variables available in the zarrs.
     variables:
     - pr
     transform_to_2D: false
-    operator:
-      pr: log1p
+    # No operator/normalizer: the Asym loss fits Gamma CDFs on raw precipitation.
 
 
 ##### DATA LOADER CONFIGURATION #####
 dataloader:
   batch_size: 1 # For GNN4CD, batch size is always 1 since the graph structure is static and contains all nodes.
-  shuffle: false
+  shuffle: true
   num_workers: 0
 
 
@@ -53,8 +52,8 @@ graph:
   module: deep4production.deep.models.gnn.GNN4CD
   # kwargs
   kwargs:
-    data_high: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the high-res nodes
-    data_low: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Used to grab the lat-lon coordinates of the low-res nodes
+    data_high: path_to_your_y_file_1.zarr # Used to grab the lat-lon coordinates of the high-res nodes
+    data_low: path_to_your_x_file_1.zarr # Used to grab the lat-lon coordinates of the low-res nodes
     # Paper default (Blasone et al. 2025): 8 distinct neighbours for high-high.
     # The self-neighbour is now excluded internally, so 8 here means 8 *distinct*
     # high neighbours per node; high-high edges are additionally made bidirectional.
@@ -67,15 +66,15 @@ graph:
 ##### TRAINING CONFIGURATION #####
 model_info:
   saving_params:
-    model_save_name: gnn4cd_asym
+    model_save_name: GNN4CD_asym
   loss_params:
     name: Asym
     module: deep4production.deep.loss
     kwargs:
-      ref_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/AI_ready_datasets/files/RCM_1961-1980.zarr
+      ref_path: path_to_your_y_file_1.zarr
       var: pr
       type: full
-      asym_path: /gpfs/projects/meteo/WORK/banoj/projects/CORDEX-BENCH/example/outputs/gnn4cd_asym/aux_files/
+      asym_path: path/to/your/project/GNN4CD/outputs/aux_files/
       asym_weight: 1
       cdf_pow: 2
       appendix:

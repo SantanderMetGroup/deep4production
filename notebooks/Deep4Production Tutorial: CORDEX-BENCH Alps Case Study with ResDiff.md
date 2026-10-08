@@ -85,7 +85,7 @@ d4p_trainer:
 data:
   load_in_memory: true
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
@@ -137,6 +137,7 @@ model_info:
       in_channels: 1             # C_y — number of predictand variables
       cond_low_channels: 15      # C_x — predictor channels (d4p-inspect)
       cond_high_channels: 0      # no high-res conditioning in the deterministic stage
+      widen_in_downsample: false
       nf: 128
       ch_mult: [1, 2, 2, 2]
       num_res_blocks: 4
@@ -166,17 +167,19 @@ d4p-train ./song_unet_det/train.yaml
 
 The best checkpoint is written to `./song_unet_det/outputs/models/SongUNet_det_best.pt`. **You will need this path for step 2.**
 
-Below is an example of training output:
-
 ### 6.2. Step 2 — Train the residual diffusion model
 
-The residual stage adds three things on top of the regressor recipe:
+The residual stage adds four things on top of the regressor recipe:
 
 1. **`d4p_pydataset`** — `pydataset_resdiff` runs the regressor on every (training and validation) date, computes `r = y − ŷ`, and caches the residual + the regression mean to a Zarr at `residuals.path` (suffixed with `_training.zarr` / `_validation.zarr`). On subsequent runs (e.g. resuming training) the cache is reused, so this one-time cost is only paid once.
 
 1. **`d4p_trainer`** — `trainer_resdiff` implements the EDM training loop: log-normal noise sampling, EDM preconditioning (handled inside `EDMPrecond`), and EDM-weighted DSM loss.
 
 1. **High-res conditioning (`cond_high_channels: 1`)** — the regressor's output `ŷ` is passed back to the diffusion U-Net as a *high-res* conditioning channel, in addition to the standard low-res predictor stream.
+
+1. **Residual standardization (`standardize_residuals: true`)** — each residual channel is standardized to zero mean and unit variance with the training-split statistics, so the EDM preconditioner works with `sigma_data: 1`. The statistics are stored in the checkpoint metadata and inverted by the downscaler.
+
+> ⚠️ The `predictands` block (variables, operator, normalizer) must be **identical** in the regressor and ResDiff recipes: the residual is computed as `norm_y(y) − ŷ`, with `ŷ` in the regressor's normalized space. Here both use `std` for `pr`; for temperature-like variables use `mean_std` in both.
 
 `./resdiff/train.yaml`:
 
@@ -206,6 +209,7 @@ d4p_pydataset:
     path_regressor: ./song_unet_det/outputs/models/SongUNet_det_best.pt
     add_pred_mean: true        # feed ŷ as cond_high
     add_context_lowres: true   # feed raw predictors as cond_low
+    standardize_residuals: true  # unit-variance residuals; must pair with sigma_data: 1
     residuals:
       path: ./resdiff/outputs/aux_files/residuals.zarr
       template: ./templates/pr_template.nc
@@ -214,7 +218,7 @@ d4p_pydataset:
 data:
   load_in_memory: true
   training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971,
-                    1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+                    1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
@@ -260,14 +264,14 @@ model_info:
     module: deep4production.deep.loss
     kwargs:
       ignore_nans: false
-      sigma_data: 0.5
+      sigma_data: 1.0            # standardized residuals → unit variance
 
   # EDM preconditioner wrapping the SongUNet backbone.
   model_params:
     name: build_edm_model
     module: deep4production.deep.models.diffusion.edm_precond
     kwargs:
-      sigma_data: 0.5             # must match loss.sigma_data
+      sigma_data: 1.0             # must match loss.sigma_data
       backbone:
         module: deep4production.deep.models.unet.song_unet
         name: SongUNet
@@ -275,6 +279,7 @@ model_info:
           in_channels: 1            # C_r — channels of the residual
           cond_low_channels: 15     # C_x — predictor channels
           cond_high_channels: 1     # C_yhat — regression mean as high-res context
+          widen_in_downsample: false
           nf: 128
           ch_mult: [1, 2, 2, 2]
           num_res_blocks: 4
@@ -321,8 +326,6 @@ d4p-train ./resdiff/train.yaml
 ```
 
 > 💡 **First-run cost.** On the very first run the trainer will iterate over every training/validation date, run the regressor, and write `residuals_training.zarr` + `residuals_validation.zarr`. This can take several minutes. Subsequent runs (e.g. when changing a hyperparameter or resuming training) reuse those Zarr files, so the cost is paid only once per dataset split.
-
-Below is an example of training output:
 
 ______________________________________________________________________
 
@@ -392,6 +395,11 @@ d4p_downscaler:
       S_max: .inf
       S_noise: 1.0
 
+##### PHYSICAL BOUNDS #####
+# Clamp in physical units after denormalization (null = one-sided).
+physical_bounds:
+  pr: [0, null]
+
 ##### OUTPUT #####
 saving_info:
   file: 1980.nc
@@ -411,8 +419,6 @@ Run with:
 ```bash
 d4p-downscale ./resdiff/inference.yaml
 ```
-
-Below is an example of inference output:
 
 > ⚡ **Why ResDiff is faster than CPMGEM at inference.** CPMGEM uses ~1000 reverse-SDE steps; the EDM Heun sampler typically needs only ~18, because the regressor already provides the smooth large-scale signal and only the small-scale residual structure needs to be sampled. The total cost per ensemble member is roughly `1 × cost(regressor) + 18 × cost(diffusion UNet)`.
 

@@ -18,11 +18,11 @@ data:
     #   units: "your_target_units"
   imputer:
     default:
-      name: nearest_spatial # See available options at: "deep4downscaling.utils.imputers"
+      name: nearest_spatial # See available options at: "deep4production.utils.imputers"
       num_nearest_neighbours: 4
       aggr_function: mean # Has to be a numpy function
     pr:
-      name: constant # See available options at: "deep4downscaling.utils.imputers"
+      name: constant # See available options at: "deep4production.utils.imputers"
       value: 0
 
 output_path: path_to_your_output_location.zarr

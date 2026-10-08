@@ -154,6 +154,7 @@ model_info:
       in_channels: 1             # C_y — number of predictand variables
       cond_low_channels: 15      # C_x — total predictor channels (d4p-inspect)
       cond_high_channels: 0      # no high-res conditioning in the deterministic setup
+      widen_in_downsample: false
       nf: 64                     # base channel width
       ch_mult: [1, 2, 2, 2]      # channel multipliers per encoder level
       num_res_blocks: 2          # ResBlocks per encoder/decoder level

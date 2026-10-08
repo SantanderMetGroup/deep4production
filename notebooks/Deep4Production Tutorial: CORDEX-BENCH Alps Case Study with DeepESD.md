@@ -97,8 +97,8 @@ Information from predictors, predictands and forcings sources is explained below
   - **Variables:** 15
     - `z_850`, `z_700`, `z_500`: geopotential at 850, 700, and 500 hPa
     - `t_850`, `t_700`, `t_500`: air temperature at 850, 700, and 500 hPa
-    - `q_850`, `q_700`, `q_500`: specific humidity at 700, 700, and 500 hPa
-    - `u_850`, `u_700`, `u_500`: zonal wind at 500, 700, and 500 hPa
+    - `q_850`, `q_700`, `q_500`: specific humidity at 850, 700, and 500 hPa
+    - `u_850`, `u_700`, `u_500`: zonal wind at 850, 700, and 500 hPa
     - `v_850`, `v_700`, `v_500`: meridional wind at 850, 700, and 500 hPa
 - **Predictands:**
   - **Dataset**: CNRM-CM5-ALADIN-63 Regional Climate Model
@@ -136,13 +136,13 @@ os.makedirs("./source_files/data_zenodo/", exist_ok=True)
 
 ##################################
 ###### This line is on bash ######
-!wget -P ./data_zenodo/ https://zenodo.org/records/15797226/files/ALPS_domain.zip?download=1
+!wget -P ./source_files/data_zenodo/ https://zenodo.org/records/15797226/files/ALPS_domain.zip?download=1
 ##################################
 
-shutil.move("./source_files/data_zenodo/ALPS_domain.zip?download=1", "./data_zenodo/ALPS_domain.zip")
+shutil.move("./source_files/data_zenodo/ALPS_domain.zip?download=1", "./source_files/data_zenodo/ALPS_domain.zip")
 
-with zipfile.ZipFile('./data_zenodo/ALPS_domain.zip', 'r') as zip_ref:
-        zip_ref.extractall('./data_zenodo/')
+with zipfile.ZipFile('./source_files/data_zenodo/ALPS_domain.zip', 'r') as zip_ref:
+        zip_ref.extractall('./source_files/data_zenodo/')
 
 os.remove("./source_files/data_zenodo/ALPS_domain.zip")
 ```
@@ -235,8 +235,7 @@ d4p-inspect ./AI_ready_datasets/files/UPSRCM_1961-1980.zarr # Predictors
 d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr # Predictands
 ```
 
-The output should look like this for the predictors:
-... and like this for the predictands:
+Check that the predictors report 15 variables on a 16 x 16 grid and the predictands `tasmax`, `pr` and `orog` on 128 x 128, with plausible min/max values and no missing dates over 1961-1980.
 ______________________________________________________________________
 
 ## 6. Train a Model with `d4p-train`
@@ -319,7 +318,7 @@ data:
   # to keep recently-touched chunks warm without materialising the whole
   # dataset. Omit (or set null) to disable caching.
   # zarr_cache_mb: 512
-  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+  training_period: [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
@@ -339,7 +338,7 @@ data:
       - ./AI_ready_datasets/files/RCM_1961-1980.zarr # If null, uses all variables available in the zarrs.
     variables:
       - pr
-    normalizer: null
+    normalizer: null # BerGamma NLL is defined on raw pr; with an MSE loss use std for pr, mean_std for tasmax
     transform_to_2D: True
 
   # forcings: # only accepts the following fields: "variables", "normalizer", and "operator"
@@ -377,8 +376,8 @@ model_info:
     module: deep4production.deep.models.cnn.DeepESD
     # kwargs model
     kwargs: # These kwargs are passed to the model's __init__ method. Check the model's code to see which kwargs it accepts.
-      x_shape: [15, 16, 16] # (C, H, W). Use `d4d-datasets-inspect your_zarr_file` to get this value
-      y_shape: [1, 128, 128] # (C, H, W). Use `d4d-datasets-inspect your_zarr_file` to get this value
+      x_shape: [15, 16, 16] # (C, H, W). Use `d4p-inspect your_zarr_file` to get this value
+      y_shape: [1, 128, 128] # (C, H, W). Use `d4p-inspect your_zarr_file` to get this value
       f_shape: [1, 128, 128]
       filters: [50, 25, 10]
       kernel_size: 3
@@ -395,8 +394,6 @@ Once the configuration file is defined, we train the model: `d4p-train`.
 ```bash
 d4p-train ./deepesd/train.yaml
 ```
-
-Below is an example of training output:
 ______________________________________________________________________
 
 ### Enabling MLflow in `deep4production`
@@ -573,11 +570,9 @@ Once the configuration file is defined, we perform inference: `d4p-downscale`.
 ```bash
 d4p-downscale ./deepesd/inference.yaml
 ```
+Once predicted, you can open the files easily with e.g., `xarray`. Without a template the predictions have dimensions `(member, time, point)`, with `lat`/`lon` taken from the checkpoint metadata. With a template (`saving_info.template: ./templates/pr_template.nc`) they take the template's grid and coordinates and its NaN mask.
 
-Below is an example of inference output:
-Once predicted, you can open the files easily with e.g., `xarray`. The prediction format assuming no template was provided during inference is the following:
-
-... and assuming a template was provided during inference at `saving_info.template: ./templates/pr_template.nc`:
+Two optional blocks post-process the predictions in physical units before writing: `physical_bounds` clamps variables (e.g. `pr: [0, null]`, `hurs: [0, 100]`) and `unit_conversion` converts them (e.g. `pr: {name: mm_day_to_flux}` to write kg m-2 s-1).
 ______________________________________________________________________
 
 ## 8. Visualization

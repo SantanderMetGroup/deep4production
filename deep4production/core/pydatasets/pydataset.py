@@ -11,6 +11,7 @@ from deep4production.utils.temporal import (
     get_dates_from_yaml,
     get_sample_map,
     get_pairs,
+    load_dates,
 )
 from deep4production.utils.zarr import open_zarr_store
 from deep4production.deep.preprocessing.normalizer import InputNormalizer
@@ -151,9 +152,10 @@ class pydataset(Dataset):
             )
 
         # --- Load in memory? ---
-        if load_in_memory:  # If dataset fits in memory, load all predictors to speed up
-            x_data = [np.array(x["data"]) for x in self.x]
-            y_data = [np.array(y["data"]) for y in self.y]
+        if load_in_memory:  # Only the dates the samples use (lags included), not the whole store
+            needed = {d for pair in self.pairs.values() for d in pair}
+            x_data, self.sample_map_x = load_dates(self.x, self.sample_map_x, needed)
+            y_data, self.sample_map_y = load_dates(self.y, self.sample_map_y, needed)
             self.data = {"x": x_data, "y": y_data}
             log.info("Data loaded into memory.")
         else:

@@ -365,8 +365,9 @@ class downscaler_custom(downscaler):
         M = self.ensemble_size
         n_batches = (T + batch_size - 1) // batch_size
 
-        # Per-member numpy buffers (each will end up as (T, C, G) once concatenated).
-        member_buffers = [[] for _ in range(M)]
+        # (M, T, C, G) output, allocated on the first batch and filled in place:
+        # list + concatenate + stack held ~3x the output at once on long runs.
+        out = None
 
         for b_idx in range(n_batches):
             i = b_idx * batch_size
@@ -468,10 +469,13 @@ class downscaler_custom(downscaler):
                 p_cpu = self._async_d2h(p_gpu.float())
                 if self._cuda:
                     torch.cuda.synchronize()
-                member_buffers[member].append(self._postprocess_numpy(p_cpu.numpy()))
-                del r_hat, p_gpu, p_cpu
+                arr = self._postprocess_numpy(p_cpu.numpy())
+                if out is None:
+                    out = np.empty((M, T) + arr.shape[1:], dtype=arr.dtype)
+                out[member, i : i + arr.shape[0]] = arr
+                del r_hat, p_gpu, p_cpu, arr
 
             del c_low, c_high
 
         # (M, T, C, G) — one stochastic realization per member.
-        return np.stack([np.concatenate(buf, axis=0) for buf in member_buffers])
+        return out

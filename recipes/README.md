@@ -34,6 +34,14 @@ Before training, raw NetCDF files must be converted to the d4p Zarr format using
 
 ______________________________________________________________________
 
+## Common conventions
+
+- **Predictand normalization.** `mean_std` for temperature-like variables and `std` (no mean removal) for precipitation. Exceptions: CPMGEM follows Addison et al. (2024), `sqrt` on pr and `minmax_neg1_1` on every target; Bernoulli-Gamma NLL and Asym fit their distributions on raw precipitation, so those recipes carry no predictand normalizer or operator.
+- **Inference post-processing** (all `inference.yaml`): `physical_bounds` clamps variables in physical units (e.g. `pr: [0, null]`, `hurs: [0, 100]`), `unit_conversion` converts at write time (e.g. `pr: {name: mm_day_to_flux}`), and `normalizer_x` / `normalizer_y` / `normalizer_f` replace the checkpoint's statistics (needed for multi-`sources` runs).
+- **Missing dates.** Dates a store declares in `missing_dates` (e.g. 29 February from noleap sources in anemoi stores) are dropped from training and inference automatically.
+
+______________________________________________________________________
+
 ## Model recipe directories
 
 Each entry below is one model directory containing `train.yaml` and `inference.yaml`.
@@ -42,7 +50,7 @@ Each entry below is one model directory containing `train.yaml` and `inference.y
 
 **Files:** `DEEPESD_MSE/train.yaml` · `DEEPESD_MSE/inference.yaml`
 
-Training and inference recipes for a DeepESD CNN trained with mean squared error loss. The simplest and fastest baseline for deterministic downscaling. [\[1\]](#ref-1)
+Training and inference recipes for a DeepESD CNN trained with mean squared error loss (example target: `tasmax`, `mean_std`-normalized). The simplest and fastest baseline for deterministic downscaling. [\[1\]](#ref-1)
 
 ______________________________________________________________________
 
@@ -70,11 +78,11 @@ Training and inference recipes for a deterministic SongUNet (NCSN++ backbone) wi
 
 ______________________________________________________________________
 
-### GNN4CD — Quantised MSE loss
+### GNN4CD — Asymmetric loss
 
 **Files:** `GNN4CD/train.yaml` · `GNN4CD/inference.yaml`
 
-Training and inference recipes for a graph neural network operating on a bipartite heterogeneous graph between low- and high-resolution grid nodes. Suited for irregular or unstructured grids. The graph must be pre-built once from the Zarr files using the `build_graph` helper and referenced in the recipe. [\[3\]](#ref-3)
+Training and inference recipes for a graph neural network operating on a bipartite heterogeneous graph between low- and high-resolution grid nodes. Suited for irregular or unstructured grids. The graph is built from the Zarr coordinates on the first run, cached at `outputs/aux_files/edge_index.pt`, and reused at inference via `graph.path`. [\[3\]](#ref-3)
 
 ______________________________________________________________________
 
@@ -82,7 +90,7 @@ ______________________________________________________________________
 
 **Files:** `RESDIFF/train.yaml` · `RESDIFF/inference.yaml`
 
-Training and inference recipes for a residual diffusion model inspired by CorrDiff from NVIDIA [\[5\]](#ref-5), though not an exact reimplementation. A separately trained deterministic regressor provides a mean prediction; the diffusion model (EDM preconditioner + SongUNet) learns the residual distribution. Requires a pre-trained regressor checkpoint. [\[2\]](#ref-2) [\[4\]](#ref-4)
+Training and inference recipes for a residual diffusion model inspired by CorrDiff from NVIDIA [\[5\]](#ref-5), though not an exact reimplementation. A separately trained deterministic regressor provides a mean prediction; the diffusion model (EDM preconditioner + SongUNet) learns the residual distribution. Requires a pre-trained deterministic regressor (an MSE SongUNet, e.g. `SONG_UNET_DET_ASYM` with `MseLoss`) whose `predictands` block — variables, operator and normalizer — is identical to the RESDIFF one, because the residual is computed in the regressor's normalized space. Keep `standardize_residuals: true` with `sigma_data: 1`: the residual is standardized per channel and the downscaler inverts it from the checkpoint metadata. [\[2\]](#ref-2) [\[4\]](#ref-4)
 
 ______________________________________________________________________
 

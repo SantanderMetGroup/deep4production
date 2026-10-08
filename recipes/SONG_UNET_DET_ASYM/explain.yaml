@@ -30,7 +30,7 @@ d4p_explainer:
 
 explain_params:
   method: gradient
-  target_var: tasmax             # required when the model predicts several variables
+  target_var: pr                 # the variable train.yaml predicts; required for multivariate models
   reduction: mean                # mean | sum
   input_space: normalized        # normalized | raw
   target_space: physical         # physical | model

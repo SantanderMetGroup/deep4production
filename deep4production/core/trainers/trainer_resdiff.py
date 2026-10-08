@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 ## Deep4production
 from deep4production.core.trainers.trainer import trainer
+from deep4production.core.pydatasets.pydataset_multi import MultiSourceDataset
+from deep4production.core.pydatasets.pydataset_resdiff import pool_residual_norm
 from deep4production.deep.models.unet.padding import build_padder
 from deep4production.deep.models.diffusion.patching import (
     build_train_patcher,
@@ -148,17 +150,6 @@ class trainer_custom(trainer):
         Returns:
             tuple: (train_dataset, valid_dataset)
         """
-        # This trainer builds its pydatasets itself and does not go through the
-        # base class's multi-source branch, so `data.sources` would be ignored —
-        # silently training on the first source alone. Refuse instead.
-        if self.sources:
-            raise NotImplementedError(
-                "❌ `data.sources` (multi-source pooling) is not supported by "
-                "trainer_resdiff: the residuals are precomputed per dataset "
-                "against a single regressor, in that regressor's normalized "
-                "space. Train the regressor multi-source, then run RESDIFF on "
-                "one source at a time."
-            )
         ## Create pydatasets
         kwargs_pydataset = {
             "predictors": self.data["predictors"],
@@ -177,27 +168,59 @@ class trainer_custom(trainer):
         kwargs_pydataset["normalizer_info_x"] = self.normalizer_info_x
         kwargs_pydataset["normalizer_info_y"] = self.normalizer_info_y
         kwargs_pydataset["normalizer_info_f"] = self.normalizer_info_f
+        # Multi-source (`data.sources`): one residual pydataset per source, each
+        # with its own normalizer stats (the regressor was trained that way) and
+        # its own residuals cache, pooled by the base class's builder.
         kwargs_pydataset.update({"dataset": "training"})
-        train_dataset = self.pydataset(
-            temporal_period=self.data["training_period"], **kwargs_pydataset
-        )
+        if self.sources:
+            train_dataset = self._build_multi_source(kwargs_pydataset, "training_period")
+        else:
+            train_dataset = self.pydataset(
+                temporal_period=self.data["training_period"], **kwargs_pydataset
+            )
         valid_dataset = None
         if self.data.get("validation_period", None) is not None:
             kwargs_pydataset.update({"dataset": "validation"})
-            valid_dataset = self.pydataset(
-                temporal_period=self.data["validation_period"], **kwargs_pydataset
-            )
+            if self.sources:
+                valid_dataset = self._build_multi_source(
+                    kwargs_pydataset, "validation_period"
+                )
+            else:
+                valid_dataset = self.pydataset(
+                    temporal_period=self.data["validation_period"], **kwargs_pydataset
+                )
         ### Update metadata and save it with the new information
         self.metadata_dict = self.cont_metadata(train_dataset)
-        # Persist residual standardization stats so downscaler_resdiff can invert
-        # the (r - mean) / std transform at inference. Stored only when actually
-        # standardizing, so legacy raw-residual runs keep clean metadata and the
-        # downscaler leaves their sampled residual untouched.
-        if getattr(train_dataset, "standardize_residuals", False):
-            self.metadata_dict["residual_norm"] = train_dataset.get_residual_norm()
+        # One residual standardization for every split and source: the training
+        # stats, pooled over sources. Validation used to standardize with its own
+        # store's stats; now it matches what the downscaler inverts.
+        train_parts = self._residual_parts(train_dataset)
+        if getattr(train_parts[0], "standardize_residuals", False):
+            mean, std = pool_residual_norm(train_parts)
+            for ds in train_parts + self._residual_parts(valid_dataset):
+                ds.set_residual_norm(mean, std)
+            # Persisted so downscaler_resdiff can invert (r - mean) / std at
+            # inference. Stored only when standardizing, so legacy raw-residual
+            # runs keep clean metadata.
+            self.metadata_dict["residual_norm"] = train_parts[0].get_residual_norm()
         # self.save_metadata(self.metadata_path)
         log.info("Pydatasets ready")
         return train_dataset, valid_dataset
+
+    # -------------------------------------------------------------------------
+    def _source_pydataset_kwargs(self, name):
+        """Each source writes its own residuals cache: RESIDUALS_<name>_<split>.zarr."""
+        return {"source_name": name}
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _residual_parts(dataset):
+        """The per-source residual pydatasets behind ``dataset`` (itself if single-source)."""
+        if dataset is None:
+            return []
+        if isinstance(dataset, MultiSourceDataset):
+            return list(dataset.datasets)
+        return [dataset]
 
     # -------------------------------------------------------------------------
     def sigma(self, P_mean, P_std, sigma_min, sigma_max, batch_size):
@@ -282,8 +305,9 @@ class trainer_custom(trainer):
         # is the regressor's prediction in normalized space — both were stored
         # to the residuals zarr already in normalized space by
         # pydataset_resdiff._forward_pass_regressor (variable names are
-        # suffixed *_residual / *_normalized respectively).
-        if c_low is not None and self.norm_x is not None:
+        # suffixed *_residual / *_normalized respectively). Multi-source runs
+        # already normalized c_low per source on the CPU.
+        if c_low is not None and self.norm_x is not None and not self._norm_on_cpu:
             c_low = self.norm_x(c_low)
 
         # --- Sample noise level and corrupt the clean target — kept in fp32 ---

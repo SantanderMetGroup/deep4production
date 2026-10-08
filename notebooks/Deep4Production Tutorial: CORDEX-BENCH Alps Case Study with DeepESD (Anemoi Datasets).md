@@ -207,6 +207,8 @@ d4p-inspect ./AI_ready_datasets/files/RCM_1961-1980.zarr     # Predictands
 
 The output is identical to the d4p-native format: variable names, spatial dimensions, temporal range, stored statistics, and missing-value counts. This confirms that the anemoi adapter exposes all the information that d4p needs.
 
+If the source calendar has no leap days (noleap), anemoi leaves 29 February as an all-NaN slot and lists it in the store's `missing_dates`; `d4p-inspect` reports them and d4p drops them from training and inference automatically.
+
 ______________________________________________________________________
 
 ## 6. Train a Model with `d4p-train`
@@ -224,7 +226,7 @@ overwrite: true
 ##### TRAINING DATA CONFIGURATION #####
 data:
   load_in_memory: true
-  training_period:  [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979, 1980]
+  training_period:  [1961, 1962, 1963, 1964, 1965, 1966, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1976, 1977, 1978, 1979]
   validation_period: [1967, 1975]
 
   predictors:
@@ -246,7 +248,7 @@ data:
     format: anemoi   # <-- tells d4p to open this Zarr via AnemoiZarrStore
     variables:
       - pr
-    normalizer: null
+    normalizer: null   # BerGamma NLL is defined on raw pr; with an MSE loss use std for pr, mean_std for tasmax
     transform_to_2D: True
 
   # forcings:          # orog not available as an anemoi Zarr (static field).

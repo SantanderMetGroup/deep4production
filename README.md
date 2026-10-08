@@ -8,8 +8,6 @@
 
 `deep4production` is a command-line framework designed to streamline the **end-to-end workflow for deep learning–based climate downscaling in production environments**. It provides tools to transform raw climate datasets into AI-ready formats, train deep learning models, and perform inference in a reproducible and scalable way.
 
-The framework relies on the **`deep4downscaling` library**, which provides the deep learning architectures and loss functions used during model training.
-
 ### Workflow Overview
 
 The typical workflow consists of four main steps:
@@ -33,7 +31,7 @@ The typical workflow consists of four main steps:
 
 1. **Train a deep learning model (`d4p-train`)**
 
-   Models from the `deep4downscaling` framework can be trained using the prepared datasets.
+   Models implemented in `deep4production` (CNNs, GNNs, U-Nets and diffusion models) are trained on the prepared datasets.
    Training configurations are defined through YAML configuration files.
 
    ```bash
@@ -151,15 +149,7 @@ For development purposes, install the library in editable mode so that changes i
 pip install -e .
 ```
 
-### 5. Install `deep4downscaling` (Not implemented yet: Skip this step)
-
-`deep4production` relies on the `deep4downscaling` framework, which provides code for established deep learning downscaling models and loss functions.
-
-```bash
-pip install git+https://github.com/SantanderMetGroup/deep4downscaling.git
-```
-
-### 6. Enable GPU support (Optional)
+### 5. Enable GPU support (Optional)
 
 If you plan to run deep learning models on GPUs, install the CUDA-enabled version of PyTorch. For example for CUDA 11.8
 

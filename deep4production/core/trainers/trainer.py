@@ -552,6 +552,7 @@ class trainer:
                     else {}
                 ),
                 "normalize_on_cpu": True,
+                **self._source_pydataset_kwargs(name),
             }
             kwargs["normalizer_info_x"] = kwargs["predictors"].get("normalizer")
             kwargs["normalizer_info_y"] = kwargs["predictands"].get("normalizer")
@@ -560,6 +561,11 @@ class trainer:
             datasets.append(self.pydataset(temporal_period=period, **kwargs))
             names.append(name)
         return MultiSourceDataset(datasets, names=names)
+
+    # -------------------------------------------------------------------------
+    def _source_pydataset_kwargs(self, name):
+        """Extra pydataset kwargs for one source; subclasses override (e.g. per-source caches)."""
+        return {}
 
     # -------------------------------------------------------------------------
     def get_pydatasets(self):

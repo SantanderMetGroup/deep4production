@@ -193,10 +193,14 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
 
 # ----------------------------------------------------------------------------
 def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
-    """Return the underlying module from a DDP wrapper (or the model itself)."""
-    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-        return model.module
-    return model
+    """Return the underlying module from torch.compile and/or DDP wrappers (or the model itself)."""
+    while True:
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model = model.module
+        elif hasattr(model, "_orig_mod"):  # torch.compile OptimizedModule
+            model = model._orig_mod
+        else:
+            return model
 
 
 # ----------------------------------------------------------------------------

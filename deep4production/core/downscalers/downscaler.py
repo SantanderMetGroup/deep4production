@@ -18,6 +18,7 @@ from deep4production.utils.temporal import (
     cordex_year_chunks,
     chunk_time_label,
     freq_token,
+    load_dates,
 )
 from deep4production.utils.zarr import open_zarr_store
 from deep4production.utils.units import d4dunits
@@ -167,8 +168,9 @@ class downscaler:
 
         # --- LOAD INPUT DATA IN MEMORY? ---
         load_in_memory = input_data.get("load_in_memory", True)
-        if load_in_memory:  # If dataset fits in memory, load input data to speed up
-            x_data = [np.array(x["data"]) for x in self.x]
+        if load_in_memory:  # Only the dates the samples use (lags included), not the whole store
+            needed = {d for pair in self.pairs.values() for d in pair}
+            x_data, self.sample_map = load_dates(self.x, self.sample_map, needed)
             self.data = {"x": x_data}
             log.info("Predictor data loaded into memory.")
         else:

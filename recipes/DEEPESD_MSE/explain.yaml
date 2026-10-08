@@ -33,7 +33,7 @@ d4p_explainer:
 # Forwarded as **kwargs to Explainer.explain().
 explain_params:
   method: gradient               # gradient | integrated-gradients (not implemented)
-  target_var: pr                 # predictand whose response is differentiated
+  target_var: tasmax             # predictand whose response is differentiated (train.yaml predicts tasmax)
   reduction: mean                # mean | sum  over the target region
   input_space: normalized        # normalized (unit-comparable) | raw (physical predictor units)
   target_space: physical         # physical (denormalised — comparable across models) | model

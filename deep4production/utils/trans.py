@@ -237,7 +237,9 @@ def compute_valid_mask(data: xr.Dataset) -> xr.Dataset:
         Mask with 1 for spatial locations with non-nans and 0 otherwise
     """
 
-    data_mask = data.isnull().astype("int").mean("time")
+    data_mask = data.isnull().astype("int")
+    if "time" in data_mask.dims:  # templates may be a single snapshot with time dropped
+        data_mask = data_mask.mean("time")
     data_mask = xr.where(data_mask == 0, 1, 0)
 
     return data_mask
@@ -551,8 +553,6 @@ def from_pred_to_xarray(
             if precomputed_mask is not None
             else compute_valid_mask(template)
         )
-        mask = mask.expand_dims(time=time)
-        mask = mask.ffill("time")
         mask_vars = list(mask.data_vars)
         # Loop over variables
         for c, var_name in enumerate(vars):
@@ -571,11 +571,20 @@ def from_pred_to_xarray(
                 src = mask_vars[0]
             else:
                 src = mask_vars[c] if c < len(mask_vars) else mask_vars[0]
-            ds_var = mask[[src]].rename({src: var_name}).copy()
-            ds_var[var_name].values = data_pred[:, c, :].astype("float32")
-            ds_list.append(ds_var)
+            # The mask only lends dims and coords: wrap the prediction directly
+            # instead of broadcasting an int mask over time and overwriting it,
+            # which cost ~2x the output size per variable on long runs.
+            spatial = mask[src]
+            ds_list.append(
+                xr.DataArray(
+                    data_pred[:, c].astype("float32", copy=False),
+                    dims=("time",) + spatial.dims,
+                    coords={**spatial.coords, "time": time},
+                    name=var_name,
+                )
+            )
         # Merge variables in a single object
-        ds = xr.merge(ds_list)
+        ds = xr.Dataset({da.name: da for da in ds_list})
     # ----------------------------------------------------------
     # CASE 2 — No template → Construct directly
     # ----------------------------------------------------------
